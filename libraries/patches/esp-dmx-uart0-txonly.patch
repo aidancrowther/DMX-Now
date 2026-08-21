@@ -1,0 +1,89 @@
+diff --git a/src/ESPDMX.cpp b/src/ESPDMX.cpp
+index f3ece1c..b59bc93 100644
+--- a/src/ESPDMX.cpp
++++ b/src/ESPDMX.cpp
+@@ -8,6 +8,16 @@
+ // Last change: Marcel Seerig <https://github.com/mseerig>
+ //
+ // Documentation and samples are available at https://github.com/Rickgg/ESP-Dmx
++//
++// Local patch (Feature 2, ESP8266 wireless DMX receiver):
++//   * DMX output moved from UART1 / Serial1 (TX on GPIO2) to
++//     UART0 / Serial (TX on GPIO1), matching the receiver pin allocation.
++//   * UART0 is initialized in SERIAL_TX_ONLY mode on every begin() call so
++//     the UART peripheral does NOT claim UART0 RX (GPIO3). This leaves GPIO3
++//     available as a normal digital input for the future low-battery signal.
++//   * All DMX timing/format (250000 8N2 data, 83333 8N1 BREAK) are preserved.
++//   * Note: sendPin = 1 is a manual deviation from upstream (sendPin = 2);
++//     this sets DE on GPIO1 instead of GPIO2; behavior pending hardware testing.
+ // - - - - -
+ 
+ /* ----- LIBRARIES ----- */
+@@ -26,7 +36,7 @@
+ #define BREAKFORMAT    SERIAL_8N1
+ 
+ bool dmxStarted = false;
+-int sendPin = 2;		//dafault on ESP8266
++int sendPin = 1;
+ 
+ //DMX value array and size. Entry 0 will hold startbyte
+ uint8_t dmxData[dmxMaxChannel] = {};
+@@ -36,7 +46,9 @@ int chanSize;
+ void DMXESPSerial::init() {
+   chanSize = defaultMax;
+ 
+-  Serial1.begin(DMXSPEED);
++  // Local patch: UART0 (Serial) TX-only on GPIO1; GPIO3 (UART0 RX) left free.
++  Serial.begin(DMXSPEED, SERIAL_8N1, SERIAL_TX_ONLY);
++  memset(dmxData, 0, sizeof(dmxData));
+   pinMode(sendPin, OUTPUT);
+   dmxStarted = true;
+ }
+@@ -50,7 +62,9 @@ void DMXESPSerial::init(int chanQuant) {
+ 
+   chanSize = chanQuant;
+ 
+-  Serial1.begin(DMXSPEED);
++  // Local patch: UART0 (Serial) TX-only on GPIO1; GPIO3 (UART0 RX) left free.
++  Serial.begin(DMXSPEED, SERIAL_8N1, SERIAL_TX_ONLY);
++  memset(dmxData, 0, sizeof(dmxData));
+   pinMode(sendPin, OUTPUT);
+   dmxStarted = true;
+ }
+@@ -79,7 +93,7 @@ void DMXESPSerial::write(int Channel, uint8_t value) {
+ void DMXESPSerial::end() {
+   delete dmxData;
+   chanSize = 0;
+-  Serial1.end();
++  Serial.end();
+   dmxStarted == false;
+ }
+ 
+@@ -88,19 +102,19 @@ void DMXESPSerial::update() {
+ 
+   //Send break
+   digitalWrite(sendPin, HIGH);
+-  Serial1.begin(BREAKSPEED, BREAKFORMAT);
+-  Serial1.write(0);
+-  Serial1.flush();
++  Serial.begin(BREAKSPEED, BREAKFORMAT, SERIAL_TX_ONLY);
++  Serial.write(0);
++  Serial.flush();
+   delay(1);
+-  Serial1.end();
++  Serial.end();
+ 
+   //send data
+-  Serial1.begin(DMXSPEED, DMXFORMAT);
++  Serial.begin(DMXSPEED, DMXFORMAT, SERIAL_TX_ONLY);
+   digitalWrite(sendPin, LOW);
+-  Serial1.write(dmxData, chanSize);
+-  Serial1.flush();
++  Serial.write(dmxData, chanSize);
++  Serial.flush();
+   delay(1);
+-  Serial1.end();
++  Serial.end();
+ }
+ 
+ // Function to update the DMX bus

@@ -1,0 +1,127 @@
+diff --git a/src/ESPDMX.cpp b/src/ESPDMX.cpp
+index f3ece1c..a1b2c3d 100644
+--- a/src/ESPDMX.cpp
++++ b/src/ESPDMX.cpp
+@@ -8,6 +8,16 @@
+ // Last change: Marcel Seerig <https://github.com/mseerig>
+ //
+ // Documentation and samples are available at https://github.com/Rickgg/ESP-Dmx
++//
++// Local patch (Feature 4, Off-by-one fix):
++//   * Buffer resized from DMX_MAX_CHANNELS (512) to DMX_START_LEN + DMX_MAX_CHANNELS (513).
++//     Layout: [start_code] + channels[1..N]. Start code at offset 0; channels use 1-based indexing.
++//   * update() now writes DMX_START_LEN + chanSize bytes (start byte + all channels).
++//   * init() sets dmxData[0] = DMX_START_CODE explicitly.
++// - - - - -
+ // - - - - -
+ 
+ /* ----- LIBRARIES ----- */
+@@ -26,7 +36,9 @@
+ #define BREAKFORMAT    SERIAL_8N1
+ 
+ bool dmxStarted = false;
+-//int sendPin = 2;		//dafault on ESP8266
++//int sendPin = 1;
++
++// DMX value array: layout = [start_code] + channels[1..N]
++// Total size = DMX_START_LEN + DMX_MAX_CHANNELS (513 bytes)
+ #define dmxMaxChannel  512
+ #define defaultMax 32
+ 
+@@ -38,7 +50,9 @@
+ int chanSize;
+ 
+ //DMX value array and size. Entry 0 will hold startbyte
+-uint8_t dmxData[dmxMaxChannel] = {};
++uint8_t dmxData[DMX_START_LEN + DMX_MAX_CHANNELS] = {};
+ 
+ void DMXESPSerial::init() {
+   chanSize = defaultMax;
+@@ -46,13 +60,27 @@ void DMXESPSerial::init() {
+   Serial.begin(DMXSPEED, SERIAL_8N1, SERIAL_TX_ONLY);
+   memset(dmxData, 0, sizeof(dmxData));
+-  pinMode(sendPin, OUTPUT);
++  dmxData[0] = DMX_START_CODE;  // Feature 4: explicitly set start code at offset 0
++  //pinMode(sendPin, OUTPUT);
+   dmxStarted = true;
+ }
+ 
+ // Set up the DMX-Protocol
+ void DMXESPSerial::init(int chanQuant) {
++  if (chanQuant > DMX_MAX_CHANNELS || chanQuant <= 0) {
++    chanQuant = DMX_DEFAULT_CHANNELS;
++  }
++
++  chanSize = chanQuant;
++
++  // Local patch: UART0 (Serial) TX-only on GPIO1; GPIO3 (UART0 RX) left free.
++  Serial.begin(DMXSPEED, SERIAL_8N1, SERIAL_TX_ONLY);
+   if (chanQuant > dmxMaxChannel || chanQuant <= 0) {
+     chanQuant = defaultMax;
+   }
+@@ -61,9 +89,23 @@ void DMXESPSerial::init(int chanQuant) {
+ 
+   chanSize = chanQuant;
+ 
++  // Local patch: UART0 (Serial) TX-only on GPIO1; GPIO3 (UART0 RX) left free.
+   Serial.begin(DMXSPEED, SERIAL_8N1, SERIAL_TX_ONLY);
+   memset(dmxData, 0, sizeof(dmxData));
+-  pinMode(sendPin, OUTPUT);
++  dmxData[0] = DMX_START_CODE;  // Feature 4: explicitly set start code at offset 0
++  //pinMode(sendPin, OUTPUT);
+   dmxStarted = true;
+ }
+ 
+@@ -78,16 +130,25 @@ uint8_t DMXESPSerial::read(int Channel) {
+   if (Channel < 1) Channel = 1;
+   if (Channel > dmxMaxChannel) Channel = dmxMaxChannel;
++  return(dmxData[Channel]);
++}
+ 
+ // Function to send DMX data
+ void DMXESPSerial::write(int Channel, uint8_t value) {
+   if (dmxStarted == false) init();
+ 
+   if (Channel < 1) Channel = 1;
+   if (Channel > chanSize) Channel = chanSize;
+   if (value < 0) value = 0;
+   if (value > 255) value = 255;
+ 
+@@ -94,14 +155,16 @@ void DMXESPSerial::end() {
+     delete dmxData;
+   chanSize = 0;
+-  Serial1.end();
++  Serial.end();
+   dmxStarted == false;
+ }
+ 
+ void DMXESPSerial::update() {
+   if (dmxStarted == false) init();
+ 
+   //Send break
+-  //digitalWrite(sendPin, HIGH);
+-  Serial1.begin(BREAKSPEED, BREAKFORMAT);
+-  Serial1.write(0);
++  //digitalWrite(sendPin, HIGH);
++  Serial.begin(BREAKSPEED, BREAKFORMAT, SERIAL_TX_ONLY);
++  Serial.write(DMX_START_CODE);
+   Serial.flush();
+   delay(1);
+-  Serial1.end();
++  Serial.end();
+ 
+   //send data
+-  Serial1.begin(DMXSPEED, DMXFORMAT);
+-  //digitalWrite(sendPin, LOW);
+-  Serial1.write(dmxData, chanSize);
++  //send data
++  Serial.begin(DMXSPEED, DMXFORMAT, SERIAL_TX_ONLY);
++  //digitalWrite(sendPin, LOW);
++  // Feature 4: write start byte + all channels (DMX_START_LEN + chanSize)
++  Serial.write(dmxData, DMX_START_LEN + chanSize);
+   Serial.flush();
+   delay(1);
+-  Serial1.end();
++  Serial.end();
+ }
+ 
