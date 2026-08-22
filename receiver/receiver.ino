@@ -1,106 +1,140 @@
-// Feature 3 (updated): Basic wired DMX output from ESP-01 through MAX3485.
+// Library replacement: ESP-Dmx → espDMX (basic usage).
 //
-// Purpose of this sketch is to prove the basic physical path:
+// Purpose of this sketch is to prove:
 //   ESP-01 GPIO1 (UART0 TX) -> MAX3485 DI -> DMX fixture
-// using the locally patched ESP-Dmx library (UART0/GPIO1, TX-only).
+// and verify the external MAX3485 DE transistor control.
 //
-// This feature does NOT implement:
-//   - QuickESPNow transmission/reception
-//   - wireless packet structures or buffering
-//   - ENTTEC parsing
-//   - telemetry
-//   - low-battery handling
+// GPIO2 drives MAX3485 DE through an inverting 2N2222:
 //
-// Feature 4 (Off-by-one fix + ESP8266 UART boundary workaround):
-//   - Channel-cycling test pattern uses explicit byte-by-byte writes
-//     to avoid triggering ESP8266 UART buffer corruption at offset 255.
-//   - Bulk buffer write via update() works fine for normal operation.
-//   - Total frame: 513 bytes ([start_code=0x00] + 512 channels) after Feature 4 fix.
+//   GPIO2 HIGH -> transistor ON  -> DE LOW  -> DMX output DISABLED
+//   GPIO2 LOW  -> transistor OFF -> DE HIGH -> DMX output ENABLED
 //
-// Note: UART flashes MUST begin at offset 0x0000. The ESP-Dmx library's update()
-// begins each frame with a BREAK sequence followed by data starting at offset 0x0000.
-// This is required by DMX512 specification; any other start offset corrupts the protocol.
+// Test behavior:
+//   - Moving 0xAA marker advances every 500 ms.
+//   - DMX output is enabled for 4 seconds.
+//   - DMX output is disabled for 1 second.
+//   - espDMX continues running during the disabled interval.
+//   - A DMX sniffer should therefore see the stream disappear for
+//     approximately one second, then resume with the marker having advanced.
 
-// Intended receiver pin allocation (fixed by README.md).
-static const int PIN_DMX_DATA    = 1; // GPIO1 / UART0 TX -> DMX data (MAX3485 DI)
-static const int PIN_DMX_ENABLE  = 2; // GPIO2           -> MAX3485 DE (via inverting 2N2222 stage)
-static const int PIN_BATTERY_LOW = 3; // GPIO3           -> future digital low-battery input
+static const int PIN_DMX_DATA    = 1; // GPIO1 / UART0 TX -> DMX data
+static const int PIN_DMX_ENABLE  = 2; // GPIO2 -> MAX3485 DE via inverting 2N2222
+static const int PIN_BATTERY_LOW = 3; // GPIO3 -> future low-battery input
 
-// Mandatory libraries (locally cloned under ./libraries):
-#include <QuickEspNow.h>   // QuickESPNow wireless transport (not initialized in this feature)
-#include <ESPDMX.h>        // ESP-Dmx DMX512 output (patched to UART0/GPIO1, TX-only; Feature 4 off-by-one fix applied)
+#include <QuickEspNow.h>
+#include <espDMX.h>
 
-// Global DMX object: state persists across setup() and loop() per user instruction.
-// Feature 4 fix: dmxData[0] = start code, dmxData[1..512] = channels. Total frame = 513 bytes.
-DMXESPSerial dmx;
+static const uint16_t DMX_UNIVERSE_CHANNELS = 512;
 
-// DMX universe constants (named over magic numbers for clarity).
-const int DMX_UNIVERSE_CHANNELS = 512;  // Channel count (1-based, channels 1..512)
+static const unsigned long PATTERN_INTERVAL_MS = 500;
 
-// Channel-cycling test pattern: distinct marker value to identify channel cutoff during hardware testing.
-// Layout: [start_code=0x00] + cycling markers at currentTestChannel + remaining channels at 0x00
-const uint8_t DMX_PATTERN_MARKER = 0xAA;  // Marker value for active channel (distinct from 0x55-0x77)
+// MAX3485 enable/disable test timing.
+static const unsigned long DMX_ENABLED_TIME_MS  = 4000;
+static const unsigned long DMX_DISABLED_TIME_MS = 1000;
 
-// State tracking for non-blocking timing.
-unsigned long lastPatternChangeTime = 0;
-int currentTestChannel = 1;             // Channel index being marked (1-based, persists in global dmx object)
+// One moving 0xAA marker.
+// Channel 512 is permanently held at 0x01 to force a full 512-slot universe.
+static uint8_t testPattern[DMX_UNIVERSE_CHANNELS];
 
-// Helper to write the channel-cycling test pattern using explicit byte-by-byte writes.
-// This avoids triggering ESP8266 UART buffer corruption that occurs when writing to
-// offset 255 via bulk Serial.write() calls. Instead, we set each channel individually.
-void writeChannelCyclingPattern() {
-  // Zero all channels first:
-  for (int ch = 1; ch <= DMX_UNIVERSE_CHANNELS; ++ch) {
-    dmx.write(ch, 0x00);
-  }
-  // Mark the current channel with distinct pattern value.
-  dmx.write(currentTestChannel, DMX_PATTERN_MARKER);
+static unsigned long lastPatternChangeTime = 0;
+static unsigned long lastEnableStateChangeTime = 0;
+
+// Start at zero so the first increment selects DMX channel 1.
+static uint16_t currentTestChannel = 0;
+
+// Track the physical MAX3485 output state.
+static bool dmxOutputEnabled = false;
+
+static void setDmxOutputEnabled(bool enabled) {
+  dmxOutputEnabled = enabled;
+
+  // External transistor inverts the logic:
+  //
+  // GPIO LOW  -> transistor OFF -> DE HIGH -> enabled
+  // GPIO HIGH -> transistor ON  -> DE LOW  -> disabled
+  digitalWrite(PIN_DMX_ENABLE, enabled ? LOW : HIGH);
 }
 
 void setup() {
-  // Initialize GPIO2 as output and set HIGH to keep MAX3485 disabled during initialization.
+  // IMPORTANT:
+  // GPIO2 must be HIGH during ESP8266 boot.
+  // The external base resistor is 100K so the transistor circuit
+  // does not prevent normal ESP-01 startup.
+
   pinMode(PIN_DMX_ENABLE, OUTPUT);
-  digitalWrite(PIN_DMX_ENABLE, HIGH);  // MAX3485 DE LOW -> transmitter disabled
 
-  // Initialize ESP-Dmx with full 512-channel support (Feature 4: buffer = 513 bytes).
-  // The patched library uses UART0/GPIO1 in TX-only mode.
-  dmx.init(DMX_UNIVERSE_CHANNELS);
+  // Keep MAX3485 disabled while everything initializes.
+  setDmxOutputEnabled(false);
 
-  // Write initial channel-cycling test pattern (persists in global dmx object state).
-  writeChannelCyclingPattern();
+  dmxA.begin();
 
-  // Ensure first valid DMX state is ready by calling update() once.
-  // This sends an initial DMX frame with: start_code (0x00) + all 512 channels.
-  // Total transmitted: 513 bytes (Feature 4 fix).
-  dmx.update();
+  // Clear the whole universe.
+  for (uint16_t ch = 0; ch < DMX_UNIVERSE_CHANNELS; ++ch) {
+    testPattern[ch] = 0x00;
+  }
 
-  // Now that ESP-Dmx is initialized and a valid universe is being transmitted,
-  // enable the MAX3485 by setting GPIO2 LOW.
-  digitalWrite(PIN_DMX_ENABLE, LOW);  // MAX3485 DE HIGH -> transmitter enabled
+  // Keep channel 512 non-zero to force a full 512-slot universe.
+  testPattern[511] = 0x01;
+
+  // Load initial universe into espDMX.
+  dmxA.setChans(testPattern, DMX_UNIVERSE_CHANNELS, 1);
+
+  // Enable the physical MAX3485 output.
+  setDmxOutputEnabled(true);
+
+  lastPatternChangeTime = millis();
+  lastEnableStateChangeTime = millis();
 }
 
 void loop() {
-  // Non-blocking timing for channel-cycling test pattern (0.5s between changes).
-  unsigned long currentTime = millis();
-  if (currentTime - lastPatternChangeTime >= 500) {  // 0.5 seconds
-    // Advance to next channel marker.
+  const unsigned long currentTime = millis();
+
+  //
+  // DMX DATA TEST PATTERN
+  //
+  if (currentTime - lastPatternChangeTime >= PATTERN_INTERVAL_MS) {
+    lastPatternChangeTime = currentTime;
+
+    // Advance moving marker.
     currentTestChannel++;
-    
-    // Wrap around after reaching end of universe.
-    if (currentTestChannel > DMX_UNIVERSE_CHANNELS) {
+
+    // Channels 1-511 are available for the moving marker.
+    // Channel 512 is reserved as the permanent 0x01 marker.
+    if (currentTestChannel >= DMX_UNIVERSE_CHANNELS) {
       currentTestChannel = 1;
     }
-    
-    // Write new pattern (state persists in global dmx object).
-    writeChannelCyclingPattern();
-    
-    // Record timing.
-    lastPatternChangeTime = currentTime;
-    
-    // Continue outputting DMX frames via update().
+
+    // Clear channels 1-511.
+    for (uint16_t ch = 0; ch < 511; ++ch) {
+      testPattern[ch] = 0x00;
+    }
+
+    // Moving marker.
+    testPattern[currentTestChannel - 1] = 0xAA;
+
+    // Keep channel 512 permanently non-zero.
+    testPattern[511] = 0x01;
+
+    // Update espDMX.
+    //
+    // This happens even while the MAX3485 is disabled, allowing us
+    // to verify that the ESP/espDMX continues operating normally
+    // while the physical RS-485 output is disconnected.
+    dmxA.setChans(testPattern, DMX_UNIVERSE_CHANNELS, 1);
   }
-  
-  // Continuously output DMX frames via ESP-Dmx's update() method.
-  // This handles BREAK + frame at 250k baud with proper timing.
-  dmx.update();
+
+  //
+  // MAX3485 DRIVER-ENABLE TEST
+  //
+  if (dmxOutputEnabled) {
+    if (currentTime - lastEnableStateChangeTime >= DMX_ENABLED_TIME_MS) {
+      setDmxOutputEnabled(false);
+      lastEnableStateChangeTime = currentTime;
+    }
+  } else {
+    if (currentTime - lastEnableStateChangeTime >= DMX_DISABLED_TIME_MS) {
+      setDmxOutputEnabled(true);
+      lastEnableStateChangeTime = currentTime;
+    }
+  }
 }
