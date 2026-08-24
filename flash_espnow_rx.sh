@@ -16,6 +16,7 @@ FLASH=false
 
 # Paths
 LIBRARY_DIR="${SCRIPT_DIR}/libraries/QuickESPNow"
+PROTOCOL_LIB="${SCRIPT_DIR}/libraries/WirelessDMX"
 SKETCH_DIR="${SCRIPT_DIR}/tests/espnow_universe_rx"
 BINARY="${SKETCH_DIR}/build/esp8266.esp8266.generic/espnow_universe_rx.ino.bin"
 
@@ -71,6 +72,7 @@ COMPILE_CMD=(
     compile
     -b "esp8266:esp8266:generic"
     --library "$LIBRARY_DIR"
+    --library "$PROTOCOL_LIB"
     "$SKETCH_DIR"
     -e
 )

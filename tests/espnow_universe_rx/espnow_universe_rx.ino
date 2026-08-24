@@ -22,8 +22,8 @@
 #include <QuickEspNow.h>
 
 /* Single canonical protocol definition shared with the transmitter
- * (WirelessDMX in the project's top-level libraries/ folder). */
-#include "../../../libraries/WirelessDMX/src/wireless_protocol.h"
+ * (WirelessDMX library, pinned by the build via --library). */
+#include <wireless_protocol.h>
 
 /* --------------------------------------------------------------------------
  * RX callback: validate each fragment independently, print diagnostics

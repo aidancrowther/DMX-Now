@@ -14,8 +14,8 @@
 #include <QuickEspNow.h>
 
 /* Single canonical protocol definition shared with the receiver
- * (WirelessDMX in the project's top-level libraries/ folder). */
-#include "../../../libraries/WirelessDMX/src/wireless_protocol.h"
+ * (WirelessDMX library, pinned by the build via --library). */
+#include <wireless_protocol.h>
 
 /* Static universe buffer (the latest generated snapshot). */
 static uint8_t g_universe[DMX_UNIVERSE_SIZE];

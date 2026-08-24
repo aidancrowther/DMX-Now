@@ -598,7 +598,12 @@ Inspect the locally checked-out QuickESPNow and espDMX source whenever their beh
 
 ## Dependency Revisions
 
-Both dependencies are cloned directly from their GitHub repositories into `./libraries/`.
+Only **QuickESPNow** and **espDMX** are third-party dependencies, cloned directly
+from their GitHub repositories into `./libraries/`.
+
+The wireless protocol definition (`WirelessDMX`) is a **project-owned local
+library** (`./libraries/WirelessDMX/`) — see Feature 5. It is not a git
+dependency.
 
 ```
 QuickESPNow
@@ -670,6 +675,16 @@ Libraries are pinned to the local project copies via `--library`, so the
 compiler must not resolve them from `~/Arduino/libraries` (which contains a
 newer, incompatible `QuickESPNow` 2.4.0).
 
+Shared protocol header:
+
+The wireless protocol is defined once in the project-owned library
+`./libraries/WirelessDMX/`. The flash scripts pin it alongside QuickESPNow via
+`--library`, so the sketches include it by name:
+
+```
+#include <wireless_protocol.h>
+```
+
 ### Receiver
 
 Verified 2026-08-21 against `esp8266:esp8266` core 3.1.2, arduino-cli 1.4.1.
@@ -701,9 +716,25 @@ This script compiles and flashes to `/dev/ttyUSB0`. Adjust the port as needed.
 
 ### Transmitter
 
+The Feature 5 wireless transmitter test lives at `./tests/espnow_universe_tx/`
+(the production `./transmitter/` sketch with ENTTEC input is a later feature).
+
+Verified 2026-08-24 against `esp8266:esp8266` core 3.1.2, arduino-cli 1.4.1,
+via `./flash_espnow_tx.sh` (compile-only, no `-f`):
+
 ```
-TBD
+arduino-cli compile \
+  -b esp8266:esp8266:generic \
+  --library ./libraries/QuickESPNow \
+  --library ./libraries/WirelessDMX \
+  ./tests/espnow_universe_tx
 ```
+
+The receiver test (`./tests/espnow_universe_rx/`) builds the same way via
+`./flash_espnow_rx.sh`. Both pin the shared protocol header
+`./libraries/WirelessDMX/` via `--library` and include it as
+`#include <wireless_protocol.h>`. Flash with the `-f` flag when a serial
+port is attached.
 
 ## Development Status
 
@@ -774,6 +805,54 @@ Library state: espDMX works unmodified (commit 02eb697f...). No patches required
 
 Note: `libraries/ESP-Dmx/` (Rickgg fork) and `libraries/patches/*.patch` belong to the earlier abandoned approach; they are not used by this receiver build.
 
+### Feature 5: Wireless DMX universe (fragmented broadcast)
+
+Status: COMPLETE (hardware-verified 2026-08-24 ✓)
+
+This is the first real wireless DMX data path: the transmitter broadcasts a
+512-channel universe as 3 QuickESPNow fragments and the receiver validates each
+fragment. Test sketches live under `./tests/`:
+
+* `tests/espnow_universe_tx/` — Feature 5 transmitter (broadcast)
+* `tests/espnow_universe_rx/` — Feature 5 receiver (per-fragment validation)
+* `tests/espnow_basic_tx/` / `tests/espnow_basic_rx/` — Feature 4 (basic link) sanity tests
+
+Wire protocol (canonical, single source of truth):
+
+* Defined once in the project-owned library `./libraries/WirelessDMX/`
+  (`src/wireless_protocol.h`). Both TX and RX include it; no per-program copies.
+* `DmxFragmentPacket` is `__attribute__((packed))` and exactly 14 bytes
+  (guarded by `static_assert(sizeof == DMX_HEADER_SIZE)`). A 14-byte header is
+  followed by up to 236 bytes of channel payload (250-byte ESP-NOW max).
+* 512-channel universe → 3 fragments: `offset 0/236/472`, lengths 236/236/40.
+
+Root cause of the original "TX broadcasts but RX rejects" failure:
+
+* `DmxFragmentPacket` was not packed, so the 4-byte-aligned `frameSequence`
+  field inserted 3 padding bytes and shifted `payloadLength` from byte 13 to
+  byte 16. The transmitter then wrote the DMX payload at byte 14
+  (`+DMX_HEADER_SIZE`), clobbering `dataOffset`/`payloadLength`. The receiver
+  read the corrupted `payloadLength = 2`, computed `14 + 2 = 16`, and rejected
+  every packet (`RX FRAG size mismatch len=250 declared=16`). The two sides had
+  also drifted into separate header copies, which masked the mismatch at compile
+  time. Packing the struct (and consolidating to one header) resolved it.
+
+Completed:
+
+* transmitter sends all 3 fragments per universe and increments the frame
+  sequence each frame; each fragment is broadcast at its true size and the
+  QuickESPNow TX queue is drained (via `onDataSent`) before the next frame.
+* receiver validates size/magic/version/type/payload-length/fragment bounds and
+  verifies the first and last payload byte of each fragment against the
+  deterministic test pattern `g_universe[i] = (i + seq) & 0xFF`.
+* both sketches compile against `esp8266:esp8266:generic` and the failure above
+  is resolved — receiver now accepts the transmitted fragments (hardware-verified).
+
+Not done (intentionally out of scope — Feature 6):
+
+* no universe reconstruction / double buffering yet (receiver validates
+  fragments independently; it does not assemble a complete universe).
+
 ### Future Features
 
 Expected approximate sequence:
@@ -781,8 +860,8 @@ Expected approximate sequence:
 1. Project setup and dependency verification ✓
 2. Patch espDMX library to match hardware requirements (if needed) — *resolved (not required)*
 3. Hardware verification of espDMX output (channels ≥255, full 512-channel transmission) — *verified 2026-08-21*
-4. Basic QuickESPNow transmitter/receiver communication
-5. Wireless packet format and fragmentation
+4. Basic QuickESPNow transmitter/receiver communication ✓
+5. Wireless packet format and fragmentation ✓ (Feature 5, verified 2026-08-24)
 6. Receiver universe reconstruction/double buffering
 7. Configurable transmitter wireless refresh
 8. ENTTEC serial input/parser
