@@ -888,3 +888,53 @@ successful compilation != successful hardware validation
 ```
 
 Hardware-dependent behavior must be tested on real ESP8266/MAX3485/DMX hardware before being considered complete.
+## Feature 6: Receiver Reconstruction + Double Buffering
+
+This feature adds receiver-side reconstruction of the complete 512-byte universe from QuickESPNow broadcast fragments, with safe double buffering via two distinct buffers.
+
+### Architecture (no FreeRTOS)
+- Plain Arduino `setup()` / `loop()` with a small deterministic state machine.
+- The QuickESPNow receive callback runs in a ROM timer context and is kept MINIMAL: it only copies the received packet into a bounded static handoff ring (SPSC).
+- `loop()` drains the ring, validates fragments, updates staging, runs the full 512-byte integrity check, and promotes by swapping pointers (no 512-byte copy).
+- Only the ring head/tail are shared between callback and loop; they are guarded by the ESP8266 core's own context-safe critical section (`xt_rsil(15)` / `xt_wsr_ps`).
+
+### Buffers and Promotion
+- Two 512-byte buffers: `stagingUniverse` (frame being assembled, may be incomplete) and `activeUniverse` (most recent complete, integrity-validated frame).
+- Promotion occurs by pointer swap; after the swap the buffer that was active becomes the reusable staging buffer.
+- Initial state: both buffers zeroed; `hasActiveWirelessFrame = false`.
+
+### Fragment Tracking
+- A 512-bit coverage bitmap tracks which bytes of the staging universe have been covered by received fragments.
+- A 32-bit unique-count + receive mask ensures duplicate fragments are not double-counted.
+- Metadata consistency is verified against the current staging sequence (same fragment count, same universe ID).
+
+### Sequence Handling (wrap-safe)
+- `seqIsNewer(a,b)` uses `(int32_t)(a - b) > 0` to treat rollover (`0xFFFFFFFF -> 0`) as forward progression.
+- A newer fragment supersedes an incomplete staging frame; an older fragment is marked STALE.
+
+### Timeouts
+- `STAGING_TIMEOUT_MS = 2000`: abandon a partially assembled frame after this much silence.
+- `TRANSMITTER_RESET_RECOVERY_MS = 3000`: permit re-baselining to an older sequence only after the link has been quiet for this long (transmitter restarted).
+
+### Integrity Validation (test-only)
+- The complete reconstructed staging universe is validated against the Feature 5 pattern: `universe[i] == (i + seq) & 0xFF`.
+- Only if all 512 bytes match is the frame promoted to active. Corrupt-but-complete frames increment an integrity-failure counter and do NOT promote.
+
+### Diagnostic Counters (local only, no telemetry)
+- Packets received, valid fragments accepted, malformed fragments, duplicate fragments, stale fragments, incomplete frames abandoned, complete universes accepted, integrity failures, ring overflows, re-baselined events, last RSSI.
+
+### Compile Verification
+Both sketches compile successfully via the existing scripts (compile-only, no flash):
+  ```bash
+  ./flash_espnow_tx.sh   # compile only
+  ./flash_espnow_rx.sh   # compile only
+  ```
+Use `./flash_espnow_tx.sh -f` and `./flash_espnow_rx.sh -f` to compile and flash.
+
+### Feature 6 Testing Plan
+A comprehensive testing plan exists at `tests/FEATURE6_TEST_PLAN.md`. It documents 12 tests covering: normal frame reception, dropped fragments, duplicate/reorder handling, late/stale fragments, corrupted payloads, malformed metadata, mid-stream startup, transmitter reset recovery, sequence rollover, and multiple receivers.
+
+### RAM/Flash Usage (Receiver)
+- RAM: 32,224 / 80,192 bytes (40%)
+- Flash: 245,008 / 1,048,576 bytes (23%)
+
