@@ -1,0 +1,35 @@
+TX GENERATE: starting new frame
+TX FRAME seq=22 fragments=2
+TX FRAG seq=22 frag=1/3 offset=0 len=236
+TX FRAG queued seq=22 frag=1 total=250
+TX FRAG seq=22 frag=2/3 offset=236 len=236
+TX FRAG queued seq=22 frag=2 total=250
+TX FRAME complete seq=23, next seq=24
+TX GENERATE: starting new frame
+TX FRAME seq=23 fragments=2
+TX FRAG seq=23 frag=1/3 offset=0 len=236
+TX FRAG queued seq=23 frag=1 total=250
+TX FRAG seq=23 frag=2/3 offset=236 len=236
+TX FRAG queued seq=23 frag=2 total=250
+TX FRAME complete seq=24, next seq=25
+TX GENERATE: starting new frame
+TX FRAME seq=24 fragments=2
+TX FRAG seq=24 frag=1/3 offset=0 len=236
+TX FRAG queued seq=24 frag=1 total=250
+TX FRAG seq=24 frag=2/3 offset=236 len=236
+TX FRAG queued seq=24 frag=2 total=250
+TX FRAME complete seq=25, next seq=26
+TX GENERATE: starting new frame
+TX FRAME seq=25 fragments=2
+TX FRAG seq=25 frag=1/3 offset=0 len=236
+TX FRAG queued seq=25 frag=1 total=250
+TX FRAG seq=25 frag=2/3 offset=236 len=236
+TX FRAG queued seq=25 frag=2 total=250
+TX FRAME complete seq=26, next seq=27
+TX GENERATE: starting new frame
+TX FRAME seq=26 fragments=2
+TX FRAG seq=26 frag=1/3 offset=0 len=236
+TX FRAG queued seq=26 frag=1 total=250
+TX FRAG seq=26 frag=2/3 offset=236 len=236
+TX FRAG queued seq=26 frag=2 total=250
+TX FRAME complete seq=27, next seq=28

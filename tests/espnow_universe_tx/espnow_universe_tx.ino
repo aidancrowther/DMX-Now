@@ -31,6 +31,7 @@
  *   #define TEST_CORRUPT_BYTE             0   // (optional) which payload byte (0-based)
  *   #define TEST_FORCE_SEQUENCE_START     42  // start the frame sequence at 42
  *   #define TEST_SEQUENCE_WRAP                     // start at 0xFFFFFFFE (rollover)
+ *   #define TEST_DELAYED_FRAGMENT                    // transmit one fragment ~2.5 s late (stale test)
  *
  * After testing, remove the #define (restore this block to empty) and
  * re-run ./flash_espnow_tx.sh. Do NOT leave a fault mode enabled.
@@ -59,6 +60,7 @@ static volatile uint8_t g_sendConfirmations = 0;
  *   TEST_CORRUPT_BYTE              (optional) which payload byte (0-based)
  *   TEST_FORCE_SEQUENCE_START      start the frame sequence at this value
  *   TEST_SEQUENCE_WRAP             start at 0xFFFFFFFE to exercise rollover
+ *   TEST_DELAYED_FRAGMENT          transmit one fragment of each frame ~2.5 s late (stale fragment)
  * -------------------------------------------------------------------------- */
 
 /* Per-frame send slot list: ordered fragment indices to transmit.
@@ -228,7 +230,15 @@ void setup(void) {
  * Non-blocking frame state machine:
  *   IDLE -> GENERATE -> SEND(all fragments) -> DRAIN(queue empty) -> IDLE
  * -------------------------------------------------------------------------- */
-enum TxState { TX_IDLE, TX_GENERATING, TX_SENDING, TX_DRAIN };
+enum TxState {
+    TX_IDLE,
+    TX_GENERATING,
+    TX_SENDING,
+    TX_DRAIN
+#if defined(TEST_DELAYED_FRAGMENT)
+    , TX_LATE
+#endif
+};
 static TxState txState = TX_IDLE;
 static unsigned long lastFrameGenerationTime = 0;
 static unsigned long stateEnteredTime = 0;
@@ -236,6 +246,17 @@ static uint8_t currentFragment = 0;
 
 /* Safety bound so a stuck queue cannot wedge the state machine. */
 const unsigned long TX_DRAIN_TIMEOUT_MS = 200UL;
+
+/* TEST HOOK (Feature 6, Test 6): late-fragment state. */
+#if defined(TEST_DELAYED_FRAGMENT)
+static bool     lateSent = false;
+static uint32_t lateSeq  = 0;
+/* Hold the late fragment until this long after the frame completed.
+ * Chosen > the receiver's STAGING_TIMEOUT_MS (2000 ms) yet < its
+ * TRANSMITTER_RESET_RECOVERY_MS (3000 ms), so the receiver classifies
+ * the late fragment as STALE (live link) rather than as a re-baseline. */
+static const unsigned long TEST_DELAYED_FRAGMENT_DELAY_MS = 2500UL;
+#endif
 
 void loop(void) {
     const unsigned long now = millis();
@@ -275,11 +296,40 @@ void loop(void) {
                 (now - stateEnteredTime >= TX_DRAIN_TIMEOUT_MS)) {
                 /* Frame fully transmitted; advance to the next one. */
                 g_frameSequence++;
-                txState = TX_IDLE;
                 lastFrameGenerationTime = now;
+#if defined(TEST_DELAYED_FRAGMENT)
+                /* TEST HOOK (Test 6): schedule one late fragment of the
+                 * frame we just completed. The receiver must flag it
+                 * STALE (older-or-equal than active, link still live). */
+                lateSeq = g_frameSequence - 1;
+                lateSent = false;
+                txState = TX_LATE;
+                stateEnteredTime = now;
+                Serial.println("TX LATE: scheduling delayed fragment");
+#else
+                txState = TX_IDLE;
                 Serial.printf("TX FRAME complete seq=%u, next seq=%u\n",
                               g_frameSequence, g_frameSequence + 1);
+#endif
             }
             break;
+#if defined(TEST_DELAYED_FRAGMENT)
+        case TX_LATE:
+            if (!lateSent) {
+                /* Hold, then transmit one fragment of the previous frame. */
+                if ((now - stateEnteredTime) >= TEST_DELAYED_FRAGMENT_DELAY_MS) {
+                    g_sendConfirmations = 0; /* count only the late send */
+                    submitFragment(lateSeq, 0);
+                    lateSent = true;
+                    stateEnteredTime = now;
+                    Serial.println("TX LATE: transmitted delayed fragment of previous frame");
+                }
+            } else if (g_sendConfirmations >= 1 ||
+                       (now - stateEnteredTime) >= TX_DRAIN_TIMEOUT_MS) {
+                txState = TX_IDLE;
+                Serial.println("TX LATE: complete, resuming normal frames");
+            }
+            break;
+#endif
     }
 }

@@ -931,8 +931,25 @@ Both sketches compile successfully via the existing scripts (compile-only, no fl
   ```
 Use `./flash_espnow_tx.sh -f` and `./flash_espnow_rx.sh -f` to compile and flash.
 
+### Test Hooks (Feature 6 fault injection, all DEFAULT OFF)
+Test hooks are compile-time defines passed to the flash scripts with `--define` (added
+to `build.extra_flags`); hook code is compiled out when the define is absent:
+  ```bash
+  ./flash_espnow_tx.sh --define -DTEST_DROP_FRAGMENT_INDEX=1
+  ./flash_espnow_tx.sh --define -DTEST_DUPLICATE_FRAGMENT_INDEX=1
+  ./flash_espnow_tx.sh --define -DTEST_REORDER_FRAGMENTS
+  ./flash_espnow_tx.sh --define -DTEST_CORRUPT_FRAGMENT_INDEX=1
+  ./flash_espnow_tx.sh --define -DTEST_DELAYED_FRAGMENT
+  ./flash_espnow_tx.sh --define -DTEST_SEQUENCE_WRAP
+  ./flash_espnow_rx.sh --define -DTEST_INJECT_MALFORMED
+  ```
+  - `TEST_DELAYED_FRAGMENT` (TX, Test 6): after each frame, holds ~2.5 s then re-sends one
+    fragment of the already-active frame, so the receiver must classify it STALE.
+  - `TEST_INJECT_MALFORMED` (RX, Test 8): at startup feeds one structurally-malformed
+    packet through the receiver's own validation path (no RF required).
+
 ### Feature 6 Testing Plan
-A comprehensive testing plan exists at `tests/FEATURE6_TEST_PLAN.md`. It documents 12 tests covering: normal frame reception, dropped fragments, duplicate/reorder handling, late/stale fragments, corrupted payloads, malformed metadata, mid-stream startup, transmitter reset recovery, sequence rollover, and multiple receivers.
+A comprehensive testing plan exists at `tests/FEATURE6_TEST_PLAN.md`. It documents 12 tests — normal frame reception, dropped fragments (middle/final), duplicate, reorder, late/stale fragment, corrupted payload, malformed metadata, mid-stream startup, transmitter reset re-baseline, uint32 sequence rollover, and multiple receivers. Each test lists the exact `--define` build setting(s) and the expected RX serial output/counter deltas (see the Test Hooks section above for the hook list).
 
 ### RAM/Flash Usage (Receiver)
 - RAM: 32,224 / 80,192 bytes (40%)

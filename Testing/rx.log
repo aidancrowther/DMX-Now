@@ -1,0 +1,35 @@
+RX COMPLETE seq=43 fragments=3 integrity=PASS complete=594 dup=0 stale=296 abandon=136 rssi=-17
+active[0]=0x2B [235]=0x16 [236]=0x17 [471]=0x02 [472]=0x03 [511]=0x2A
+RX ABANDON seq=44 received=2/3 (superseded)
+RX COMPLETE seq=45 fragments=3 integrity=PASS complete=595 dup=0 stale=296 abandon=137 rssi=-18
+active[0]=0x2D [235]=0x18 [236]=0x19 [471]=0x04 [472]=0x05 [511]=0x2C
+RX COMPLETE seq=46 fragments=3 integrity=PASS complete=596 dup=0 stale=296 abandon=137 rssi=-18
+active[0]=0x2E [235]=0x19 [236]=0x1A [471]=0x05 [472]=0x06 [511]=0x2D
+RX COMPLETE seq=47 fragments=3 integrity=PASS complete=597 dup=0 stale=296 abandon=137 rssi=-18
+active[0]=0x2F [235]=0x1A [236]=0x1B [471]=0x06 [472]=0x07 [511]=0x2E
+RX STATS pkts=2635 valid=2339 malformed=0 dup=0 stale=296 abandon=137(+timeout 2) complete=597 integrityFail=90 ringOvfl=0 rebase=38
+  active seq=47  lastComplete=81 ms ago
+RX COMPLETE seq=48 fragments=3 integrity=PASS complete=598 dup=0 stale=296 abandon=137 rssi=-19
+active[0]=0x30 [235]=0x1B [236]=0x1C [471]=0x07 [472]=0x08 [511]=0x2F
+RX COMPLETE seq=49 fragments=3 integrity=PASS complete=599 dup=0 stale=296 abandon=137 rssi=-19
+active[0]=0x31 [235]=0x1C [236]=0x1D [471]=0x08 [472]=0x09 [511]=0x30
+RX COMPLETE seq=50 fragments=3 integrity=PASS complete=600 dup=0 stale=296 abandon=137 rssi=-17
+active[0]=0x32 [235]=0x1D [236]=0x1E [471]=0x09 [472]=0x0A [511]=0x31
+RX COMPLETE seq=51 fragments=3 integrity=PASS complete=601 dup=0 stale=296 abandon=137 rssi=-18
+active[0]=0x33 [235]=0x1E [236]=0x1F [471]=0x0A [472]=0x0B [511]=0x32
+RX STATS pkts=2647 valid=2351 malformed=0 dup=0 stale=296 abandon=137(+timeout 2) complete=601 integrityFail=90 ringOvfl=0 rebase=38
+  active seq=51  lastComplete=961 ms ago
+RX COMPLETE seq=52 fragments=3 integrity=PASS complete=602 dup=0 stale=296 abandon=137 rssi=-17
+active[0]=0x34 [235]=0x1F [236]=0x20 [471]=0x0B [472]=0x0C [511]=0x33
+RX COMPLETE seq=53 fragments=3 integrity=PASS complete=603 dup=0 stale=296 abandon=137 rssi=-17
+active[0]=0x35 [235]=0x20 [236]=0x21 [471]=0x0C [472]=0x0D [511]=0x34
+RX COMPLETE seq=54 fragments=3 integrity=PASS complete=604 dup=0 stale=296 abandon=137 rssi=-17
+active[0]=0x36 [235]=0x21 [236]=0x22 [471]=0x0D [472]=0x0E [511]=0x35
+RX COMPLETE seq=55 fragments=3 integrity=PASS complete=605 dup=0 stale=296 abandon=137 rssi=-19
+active[0]=0x37 [235]=0x22 [236]=0x23 [471]=0x0E [472]=0x0F [511]=0x36
+RX COMPLETE seq=56 fragments=3 integrity=PASS complete=606 dup=0 stale=296 abandon=137 rssi=-18
+active[0]=0x38 [235]=0x23 [236]=0x24 [471]=0x0F [472]=0x10 [511]=0x37
+RX STATS pkts=2662 valid=2366 malformed=0 dup=0 stale=296 abandon=137(+timeout 2) complete=606 integrityFail=90 ringOvfl=0 rebase=38
+  active seq=56  lastComplete=801 ms ago
+RX COMPLETE seq=57 fragments=3 integrity=PASS complete=607 dup=0 stale=296 abandon=137 rssi=-18
+active[0]=0x39 [235]=0x24 [236]=0x25 [471]=0x10 [472]=0x11 [511]=0x38

@@ -1,0 +1,28 @@
+RX STALE seq=23 current=35
+RX STALE seq=23 current=35
+RX STALE seq=23 current=35
+RX REBASELINE permit seq=24 (link quiet >= 3000 ms)
+RX INTEGRITY FAIL seq=24 index=236 expected=0x04 actual=0xFB
+RX STATS pkts=1815 valid=1552 malformed=0 dup=0 stale=263 abandon=135(+timeout 2) complete=402 integrityFail=24 ringOvfl=0 rebase=30
+  active seq=35  lastComplete=48661 ms ago
+RX STALE seq=25 current=35
+RX STALE seq=25 current=35
+RX STALE seq=25 current=35
+RX STALE seq=26 current=35
+RX STALE seq=26 current=35
+RX STALE seq=26 current=35
+RX REBASELINE permit seq=27 (link quiet >= 3000 ms)
+RX INTEGRITY FAIL seq=27 index=236 expected=0x07 actual=0xF8
+RX STALE seq=28 current=35
+RX STALE seq=28 current=35
+RX STALE seq=28 current=35
+RX STALE seq=29 current=35
+RX STALE seq=29 current=35
+RX STALE seq=29 current=35
+RX STATS pkts=1830 valid=1555 malformed=0 dup=0 stale=275 abandon=135(+timeout 2) complete=402 integrityFail=25 ringOvfl=0 rebase=31
+  active seq=35  lastComplete=53661 ms ago
+RX REBASELINE permit seq=30 (link quiet >= 3000 ms)
+RX INTEGRITY FAIL seq=30 index=236 expected=0x0A actual=0xF5
+RX STALE seq=31 current=35
+RX STALE seq=31 current=35
+RX STALE seq=31 current=35

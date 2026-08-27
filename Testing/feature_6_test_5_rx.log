@@ -1,0 +1,14 @@
+RX COMPLETE seq=78 fragments=3 integrity=PASS complete=306 dup=0 stale=180 abandon=134 rssi=-16
+active[0]=0x4E [235]=0x39 [236]=0x3A [471]=0x25 [472]=0x26 [511]=0x4D
+RX COMPLETE seq=79 fragments=3 integrity=PASS complete=307 dup=0 stale=180 abandon=134 rssi=-15
+active[0]=0x4F [235]=0x3A [236]=0x3B [471]=0x26 [472]=0x27 [511]=0x4E
+RX COMPLETE seq=80 fragments=3 integrity=PASS complete=308 dup=0 stale=180 abandon=134 rssi=-15
+active[0]=0x50 [235]=0x3B [236]=0x3C [471]=0x27 [472]=0x28 [511]=0x4F
+RX COMPLETE seq=81 fragments=3 integrity=PASS complete=309 dup=0 stale=180 abandon=134 rssi=-15
+active[0]=0x51 [235]=0x3C [236]=0x3D [471]=0x28 [472]=0x29 [511]=0x50
+RX STATS pkts=1424 valid=1244 malformed=0 dup=0 stale=180 abandon=134(+timeout 2) complete=309 integrityFail=15 ringOvfl=0 rebase=20
+  active seq=81  lastComplete=550 ms ago
+RX COMPLETE seq=82 fragments=3 integrity=PASS complete=310 dup=0 stale=180 abandon=134 rssi=-13
+active[0]=0x52 [235]=0x3D [236]=0x3E [471]=0x29 [472]=0x2A [511]=0x51
+RX COMPLETE seq=83 fragments=3 integrity=PASS complete=311 dup=0 stale=180 abandon=134 rssi=-15
+active[0]=0x53 [235]=0x3E [236]=0x3F [471]=0x2A [472]=0x2B [511]=0x52
