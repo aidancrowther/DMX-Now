@@ -932,7 +932,7 @@ Expected approximate sequence:
 3. Hardware verification of espDMX output (channels ≥255, full 512-channel transmission) — *verified 2026-08-21*
 4. Basic QuickESPNow transmitter/receiver communication ✓
 5. Wireless packet format and fragmentation ✓ (Feature 5, verified 2026-08-24)
-6. Receiver universe reconstruction/double buffering ✓ (Feature 6, test verified 2026-08-27)
+6. Receiver universe reconstruction/double buffering ✓ (Feature 6, verified 2026-08-27)
 7. Configurable transmitter wireless refresh
 8. ENTTEC serial input/parser
 9. Low-battery GPIO monitoring
