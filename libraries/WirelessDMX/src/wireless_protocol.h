@@ -54,7 +54,14 @@
  * Channel and refresh rate (test defaults; configurable)
  * -------------------------------------------------------------------------- */
 #define ESPNOW_CHANNEL         1UL
+
+/* Wireless universe refresh rate. Configurable per build (Feature 7):
+ * pass -DWIRELESS_REFRESH_HZ=N to the compiler (e.g. via the flash scripts'
+ * --define option) to override the conservative 1 Hz default. Only the
+ * transmitter paces off this value; receivers do not depend on it. */
+#ifndef WIRELESS_REFRESH_HZ
 #define WIRELESS_REFRESH_HZ    1U
+#endif
 static constexpr unsigned long WIRELESS_REFRESH_INTERVAL_MS = 1000UL / WIRELESS_REFRESH_HZ;
 
 /* --------------------------------------------------------------------------

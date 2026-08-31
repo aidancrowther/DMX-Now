@@ -923,6 +923,41 @@ A comprehensive testing plan exists at `tests/FEATURE6_TEST_PLAN.md`. It documen
 - RAM: 32,224 / 80,192 bytes (40%)
 - Flash: 245,008 / 1,048,576 bytes (23%)
 
+### Feature 7: Configurable Transmitter Refresh + Reliable-Rate Test Harness
+
+Status: IN PROGRESS — configurability + measurement harness compile-verified (2026-08-31); hardware sweep pending
+
+Makes the transmitter's wireless refresh rate configurable and adds a measurement
+harness to find roughly what refresh rate the system sustains reliably.
+
+Completed:
+
+* `WIRELESS_REFRESH_HZ` in `libraries/WirelessDMX/src/wireless_protocol.h` is now
+  `#ifndef`-guarded (default 1). Only the transmitter paces off it. Set the rate
+  per build: `./flash_espnow_tx.sh -f --define -DWIRELESS_REFRESH_HZ=N`.
+  Verified compiling at 1 Hz (default) and 30 Hz.
+* MEGA DMX monitor `tests/dmx_refresh_monitor/dmx_refresh_monitor.ino`: sits on the
+  integrated receiver's DMX output (DMXSerial RX on USART1/pin 19 via
+  `-DDMX_USE_PORT1`), counts genuinely-new universes (on `packetReady()`, a one-shot
+  latch per **complete** frame, filtered to new sequences so espDMX's ~44 Hz identical
+  retransmits do not count), infers loss from frame-sequence gaps
+  (channel 1 = `seq & 0xFF`), validates the full 512-channel pattern, and emits a
+  metric line every second on the USB Serial (115200). Compile-verified
+  (arduino:avr:mega, 6720 B program / 1031 B RAM); `-DDMX_USE_PORT1` confirmed on
+  the `DMXSerial.cpp` library compile line (verbose build).
+* `./flash_dmx_monitor.sh` — build/flash for the MEGA (passes the global
+  `DMX_USE_PORT1` flag; `arduino-cli upload` for AVR).
+* `tests/FEATURE7_TEST_PLAN.md` — method, sweep (1..30 Hz), metric definitions,
+  pass/fail bar, how to read each column.
+* `Testing/feature7_capture.py` — host helper: logs the per-second lines and
+  summarizes rate / loss / gaps / pattern errors per rate point.
+* `Testing/FEATURE7_RESULTS.md` — results table template.
+
+Not done (intentionally pending — requires the hardware bench):
+
+* The physical refresh-rate sweep (flash TX at each rate, capture MEGA metrics,
+  fill in `Testing/FEATURE7_RESULTS.md`).
+
 ### Future Features
 
 Expected approximate sequence:
@@ -933,7 +968,7 @@ Expected approximate sequence:
 4. Basic QuickESPNow transmitter/receiver communication ✓
 5. Wireless packet format and fragmentation ✓ (Feature 5, verified 2026-08-24)
 6. Receiver universe reconstruction/double buffering ✓ (Feature 6, verified 2026-08-27)
-7. Configurable transmitter wireless refresh
+7. Configurable transmitter wireless refresh ✓ (configurability + MEGA monitor harness, 2026-08-31; hardware rate sweep pending)
 8. ENTTEC serial input/parser
 9. Low-battery GPIO monitoring
 10. Receiver telemetry

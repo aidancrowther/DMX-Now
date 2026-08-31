@@ -1,0 +1,62 @@
+=== DMX refresh monitor (MEGA) ===
+DMX input : USART1 (pin 19 RX)  [DMX_USE_PORT1]
+Telemetry : USB Serial (pins 0/1) @ 115200
+Pattern   : channel c = (seq8 + c - 1) & 0xFF
+READY
+t=2 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=91ms last_seq8=184 no_data=9ms
+t=3 updates=12 rate=12.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=91ms last_seq8=196 no_data=18ms
+t=4 updates=10 rate=10.00Hz lost=1 gaps=1 loss=9.1% pat_err=0 max_gap=180ms last_seq8=207 no_data=3ms
+t=5 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=91ms last_seq8=218 no_data=12ms
+t=6 updates=10 rate=10.00Hz lost=1 gaps=1 loss=9.1% pat_err=0 max_gap=180ms last_seq8=229 no_data=20ms
+t=7 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=91ms last_seq8=240 no_data=7ms
+t=8 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=91ms last_seq8=251 no_data=15ms
+t=9 updates=12 rate=12.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=91ms last_seq8=7 no_data=3ms
+t=10 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=112ms last_seq8=18 no_data=9ms
+t=11 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=91ms last_seq8=29 no_data=18ms
+t=12 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=113ms last_seq8=40 no_data=4ms
+t=13 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=91ms last_seq8=51 no_data=13ms
+t=14 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=91ms last_seq8=62 no_data=22ms
+t=15 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=91ms last_seq8=73 no_data=7ms
+t=16 updates=11 rate=11.00Hz lost=1 gaps=1 loss=8.3% pat_err=0 max_gap=180ms last_seq8=85 no_data=16ms
+t=17 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=91ms last_seq8=96 no_data=2ms
+t=18 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=91ms last_seq8=107 no_data=11ms
+t=19 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=135ms last_seq8=118 no_data=20ms
+t=20 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=113ms last_seq8=129 no_data=6ms
+t=21 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=91ms last_seq8=140 no_data=14ms
+t=22 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=92ms last_seq8=151 no_data=0ms
+t=23 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=1 max_gap=112ms last_seq8=162 no_data=9ms
+t=24 updates=10 rate=10.00Hz lost=1 gaps=1 loss=9.1% pat_err=0 max_gap=180ms last_seq8=173 no_data=17ms
+t=25 updates=12 rate=12.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=91ms last_seq8=185 no_data=5ms
+t=26 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=91ms last_seq8=196 no_data=11ms
+t=27 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=112ms last_seq8=207 no_data=20ms
+t=28 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=91ms last_seq8=218 no_data=6ms
+t=29 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=91ms last_seq8=229 no_data=15ms
+t=30 updates=10 rate=10.00Hz lost=1 gaps=1 loss=9.1% pat_err=0 max_gap=181ms last_seq8=240 no_data=1ms
+t=31 updates=12 rate=12.00Hz lost=0 gaps=0 loss=0.0% pat_err=1 max_gap=110ms last_seq8=252 no_data=10ms
+t=32 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=91ms last_seq8=7 no_data=18ms
+t=33 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=91ms last_seq8=18 no_data=4ms
+t=34 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=91ms last_seq8=29 no_data=13ms
+t=35 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=91ms last_seq8=40 no_data=22ms
+t=36 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=91ms last_seq8=51 no_data=8ms
+t=37 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=91ms last_seq8=62 no_data=16ms
+t=38 updates=12 rate=12.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=92ms last_seq8=74 no_data=2ms
+t=39 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=113ms last_seq8=85 no_data=11ms
+t=40 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=91ms last_seq8=96 no_data=19ms
+t=41 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=91ms last_seq8=107 no_data=7ms
+t=42 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=91ms last_seq8=118 no_data=14ms
+t=43 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=91ms last_seq8=129 no_data=0ms
+t=44 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=113ms last_seq8=140 no_data=8ms
+t=45 updates=12 rate=12.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=91ms last_seq8=152 no_data=17ms
+t=46 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=91ms last_seq8=163 no_data=3ms
+t=47 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=91ms last_seq8=174 no_data=12ms
+t=48 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=91ms last_seq8=185 no_data=20ms
+t=49 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=91ms last_seq8=196 no_data=6ms
+t=50 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=91ms last_seq8=207 no_data=15ms
+t=51 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=91ms last_seq8=218 no_data=1ms
+t=52 updates=12 rate=12.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=92ms last_seq8=230 no_data=10ms
+t=53 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=91ms last_seq8=241 no_data=18ms
+t=54 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=113ms last_seq8=252 no_data=4ms
+t=55 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=113ms last_seq8=7 no_data=13ms
+t=56 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=136ms last_seq8=18 no_data=21ms
+t=57 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=91ms last_seq8=29 no_data=9ms
+t=58 updates=11 rate=11.00Hz lost=0 gaps=0 loss=0.0% pat_err=0 max_gap=90ms last_seq8=40 no_data=16ms
