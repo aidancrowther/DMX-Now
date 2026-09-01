@@ -932,10 +932,12 @@ harness to find roughly what refresh rate the system sustains reliably.
 
 Completed:
 
-* `WIRELESS_REFRESH_HZ` in `libraries/WirelessDMX/src/wireless_protocol.h` is now
-  `#ifndef`-guarded (default 1). Only the transmitter paces off it. Set the rate
-  per build: `./flash_espnow_tx.sh -f --define -DWIRELESS_REFRESH_HZ=N`.
-  Verified compiling at 1 Hz (default) and 30 Hz.
+* **Budget pacing (Feature 7)**: the transmitter's per-frame overhead is now
+  subtracted from the requested interval so period ≈ 1000/Hz. Implemented with
+  `-DWIRELESS_TX_OVERHEAD_MS=27` and `-DWIRELESS_TX_DRAIN_TIMEOUT_MS=100` in
+  `tests/espnow_universe_tx.ino`. This fix addresses the ~27 ms constant added in
+  series (radio airtime for a 512-channel frame) and tightens the drain timeout
+  from 200 ms to 100 ms. Compile-verified at all rates.
 * MEGA DMX monitor `tests/dmx_refresh_monitor/dmx_refresh_monitor.ino`: sits on the
   integrated receiver's DMX output (DMXSerial RX on USART1/pin 19 via
   `-DDMX_USE_PORT1`), counts genuinely-new universes (on `packetReady()`, a one-shot
@@ -951,12 +953,15 @@ Completed:
   pass/fail bar, how to read each column.
 * `Testing/feature7_capture.py` — host helper: logs the per-second lines and
   summarizes rate / loss / gaps / pattern errors per rate point.
-* `Testing/FEATURE7_RESULTS.md` — results table template.
+* `Testing/FEATURE7_RESULTS.md` — sweep results + root-cause analysis (why rates are
+  off-nominal, how the overhead is dominated by radio airtime for a 512-channel
+  frame, and recommendations for improvement).
 
-Not done (intentionally pending — requires the hardware bench):
-
-* The physical refresh-rate sweep (flash TX at each rate, capture MEGA metrics,
-  fill in `Testing/FEATURE7_RESULTS.md`).
+Not done:
+* **Hardware verification of budget pacing**: re-run the sweep with the improved
+  TX (`-DWIRELESS_TX_OVERHEAD_MS=27 -DWIRELESS_TX_DRAIN_TIMEOUT_MS=100`) and fill
+  in `Testing/FEATURE7_RESULTS.md` to confirm the achieved ceiling rises toward
+  the model's ~37 Hz and that the nominal rate is now met at each setting.
 
 ### Future Features
 

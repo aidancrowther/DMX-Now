@@ -244,8 +244,22 @@ static unsigned long lastFrameGenerationTime = 0;
 static unsigned long stateEnteredTime = 0;
 static uint8_t currentFragment = 0;
 
-/* Safety bound so a stuck queue cannot wedge the state machine. */
-const unsigned long TX_DRAIN_TIMEOUT_MS = 200UL;
+/* TX per-frame overhead (measured ~27 ms for a 512-channel frame: radio airtime + drain).
+ * When defined, we use it as a budget subtraction so period ≈ 1000/Hz rather than
+ * interval + overhead. Omit -DWIRELESS_TX_OVERHEAD_MS=N to restore the original behavior. */
+#ifndef WIRELESS_TX_OVERHEAD_MS
+#define WIRELESS_TX_OVERHEAD_MS 27UL      /* measured median from the sweep */
+#endif
+
+/* Safety bound so a stuck queue cannot wedge the state machine. Tightened to ~100 ms,
+ * and configurable via -DWIRELESS_TX_DRAIN_TIMEOUT_MS if needed. */
+#ifndef WIRELESS_TX_DRAIN_TIMEOUT_MS
+#define WIRELESS_TX_DRAIN_TIMEOUT_MS 100UL /* down from 200 ms; still covers the drain case */
+#endif
+
+/* Effective interval = requested interval minus overhead (budget pacing).
+ * For 1 Hz: ~973 ms, for 10 Hz: ~67 ms, etc. */
+static constexpr unsigned long TX_INTERVAL_MS = (WIRELESS_REFRESH_INTERVAL_MS - WIRELESS_TX_OVERHEAD_MS);
 
 /* TEST HOOK (Feature 6, Test 6): late-fragment state. */
 #if defined(TEST_DELAYED_FRAGMENT)
@@ -263,7 +277,7 @@ void loop(void) {
 
     switch (txState) {
         case TX_IDLE:
-            if (now - lastFrameGenerationTime >= WIRELESS_REFRESH_INTERVAL_MS) {
+            if (now - lastFrameGenerationTime >= TX_INTERVAL_MS) {
                 txState = TX_GENERATING;
                 stateEnteredTime = now;
                 Serial.println("TX GENERATE: starting new frame");
@@ -293,7 +307,7 @@ void loop(void) {
 
         case TX_DRAIN:
             if (g_sendConfirmations >= txSlotCount ||
-                (now - stateEnteredTime >= TX_DRAIN_TIMEOUT_MS)) {
+                (now - stateEnteredTime >= WIRELESS_TX_DRAIN_TIMEOUT_MS)) {
                 /* Frame fully transmitted; advance to the next one. */
                 g_frameSequence++;
                 lastFrameGenerationTime = now;
@@ -325,7 +339,7 @@ void loop(void) {
                     Serial.println("TX LATE: transmitted delayed fragment of previous frame");
                 }
             } else if (g_sendConfirmations >= 1 ||
-                       (now - stateEnteredTime) >= TX_DRAIN_TIMEOUT_MS) {
+                       (now - stateEnteredTime) >= WIRELESS_TX_DRAIN_TIMEOUT_MS)) {
                 txState = TX_IDLE;
                 Serial.println("TX LATE: complete, resuming normal frames");
             }
