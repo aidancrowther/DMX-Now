@@ -531,6 +531,27 @@ uses the verified deterministic test universe (`universe[i] = (i + sequence) &
 0xFF`) and reports received telemetry as `RX TELEMETRY ...` lines at 115200 baud.
 It is intentionally separate from the later ENTTEC serial-input feature.
 
+Normal transmitter runtime packet/frame diagnostics are disabled so serial
+output cannot constrain the wireless refresh loop. Define
+`TRANSMITTER_VERBOSE_LOGGING` only when interactive TX diagnostics are needed;
+the optional logs should not be used for refresh-rate measurements.
+
+Receiver telemetry Serial reporting is controlled independently by
+`TRANSMITTER_TELEMETRY_LOGGING` and defaults to enabled for hardware testing.
+Build with `-DTRANSMITTER_TELEMETRY_LOGGING=0` to suppress `RX TELEMETRY ...`
+lines while continuing to receive, validate, and drain telemetry packets:
+
+```bash
+./flash_transmitter.sh --define=-DTRANSMITTER_TELEMETRY_LOGGING=0
+```
+
+`completeUniverses` is a 32-bit counter inside the 47-byte telemetry packet,
+sent once per approximately 4–5 second telemetry report (not per DMX fragment).
+At 1 Hz, a 7-hour run is 25,200 universes; even at 40 Hz it is 1,008,000,
+well below 4,294,967,295. The receiver saturates this counter instead of
+wrapping it. Its 4-byte contribution is negligible relative to the three
+DMX fragments and does not materially affect airtime.
+
 ## Receiver Identification
 
 Receivers should derive a persistent identifier from the ESP8266 MAC address, chip ID, or another built-in unique value.

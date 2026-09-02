@@ -176,6 +176,10 @@ static uint32_t saturatingU32(unsigned long value) {
     return (value > 0xFFFFFFFFUL) ? 0xFFFFFFFFUL : (uint32_t)value;
 }
 
+static void incrementCounter(unsigned long& counter) {
+    if (counter < 0xFFFFFFFFUL) counter++;
+}
+
 static unsigned long telemetryDelayMs(void) {
     return TELEMETRY_PERIOD_MS + (TELEMETRY_JITTER_MS ?
            (unsigned long)random(TELEMETRY_JITTER_MS + 1UL) : 0UL);
@@ -358,7 +362,7 @@ static void stagingBegin(uint32_t seq, uint8_t fragCount) {
 
 static void stagingAbandonIncomplete(void) {
     if (stagingActive) {
-        abandonedIncomplete++;
+        if (abandonedIncomplete < 0xFFFFFFFFUL) abandonedIncomplete++;
     }
     stagingActive = false;
     stagingReceivedMask = 0;
@@ -397,7 +401,7 @@ static void promoteActive(uint32_t seq) {
     hasActiveWirelessFrame = true;
     lastActiveSequence     = seq;
     lastCompletionTimeMs   = millis();
-    completeUniverses++;
+    incrementCounter(completeUniverses);
 
     /* Load the newly active universe into the physical DMX output. */
     dmxA.setChans(activeUniverse, DMX_UNIVERSE_SIZE, 1);
@@ -662,7 +666,7 @@ void loop(void) {
     /* 3. Staging timeout: abandon a frame that stopped receiving fragments. */
     if (stagingActive &&
         (millis() - stagingLastActivityMs) >= STAGING_TIMEOUT_MS) {
-        abandonedTimeout++;
+        if (abandonedTimeout < 0xFFFFFFFFUL) abandonedTimeout++;
         stagingActive       = false;
         stagingReceivedMask = 0;
         stagingUniqueCount  = 0;

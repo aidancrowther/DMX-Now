@@ -18,6 +18,22 @@
  * (WirelessDMX library, pinned by the build via --library). */
 #include <wireless_protocol.h>
 
+/* Runtime TX diagnostics are disabled by default so UART activity cannot
+ * consume loop time or distort refresh-rate measurements. Define
+ * TRANSMITTER_VERBOSE_LOGGING for development diagnostics. */
+#ifdef TRANSMITTER_VERBOSE_LOGGING
+#define TX_LOG(...) Serial.printf(__VA_ARGS__)
+#else
+#define TX_LOG(...) do { } while (0)
+#endif
+
+/* Receiver telemetry remains enabled by default for hardware verification.
+ * Set -DTRANSMITTER_TELEMETRY_LOGGING=0 for silent production/sweep output;
+ * telemetry reception and packet validation continue regardless. */
+#ifndef TRANSMITTER_TELEMETRY_LOGGING
+#define TRANSMITTER_TELEMETRY_LOGGING 1
+#endif
+
 /* --------------------------------------------------------------------------
  * TEST HOOK CONFIG (Feature 6) — ALL DEFAULT OFF.
  * To run a fault-injection test, uncomment (or add) exactly ONE mode below,
@@ -98,6 +114,7 @@ static bool popTelemetry(ReceiverTelemetryPacket& packet, int8_t& rssi) {
 }
 
 static void reportTelemetry(void) {
+#if TRANSMITTER_TELEMETRY_LOGGING
     ReceiverTelemetryPacket packet;
     int8_t rssi;
     while (popTelemetry(packet, rssi)) {
@@ -115,6 +132,12 @@ static void reportTelemetry(void) {
                       rssi, packet.firmwareVersion, packet.protocolVersion,
                       (unsigned long)packet.telemetrySequence);
     }
+#else
+    /* Drain the queue even when reporting is disabled. */
+    ReceiverTelemetryPacket packet;
+    int8_t rssi;
+    while (popTelemetry(packet, rssi)) { }
+#endif
 }
 
 /* --------------------------------------------------------------------------
@@ -216,19 +239,13 @@ static void submitFragment(uint32_t seq, uint8_t fragIdx) {
         if (corruptAt >= payloadLength) corruptAt = 0;
         const uint16_t uIdx = static_cast<uint16_t>(offset + corruptAt);
         pPayload[corruptAt] = static_cast<uint8_t>(g_universe[uIdx] ^ 0xFF);
-        Serial.printf("TX CORRUPT seq=%u frag=%d byte=%u -> 0x%02X\n",
-                      seq, fragIdx, corruptAt, pPayload[corruptAt]);
     }
 #endif
-
-    Serial.printf("TX FRAG seq=%u frag=%d/%d offset=%u len=%u\n",
-                  seq, fragIdx + 1, DMX_FRAGMENTS_PER_UNIVERSE, offset, payloadLength);
 
     /* Broadcast at the fragment's true size (not always the max). */
     const uint16_t totalSize = static_cast<uint16_t>(DMX_HEADER_SIZE + payloadLength);
     quickEspNow.sendBcast(packetBuffer, totalSize);
 
-    Serial.printf("TX FRAG queued seq=%u frag=%d total=%u\n", seq, fragIdx + 1, totalSize);
 }
 
 void setup(void) {
@@ -359,7 +376,7 @@ void loop(void) {
             if (now - lastFrameGenerationTime >= TX_INTERVAL_MS) {
                 txState = TX_GENERATING;
                 stateEnteredTime = now;
-                Serial.println("TX GENERATE: starting new frame");
+            TX_LOG("TX GENERATE: starting new frame\n");
             }
             break;
 
@@ -367,7 +384,7 @@ void loop(void) {
             generateTestUniverse(g_frameSequence);
             currentFragment = 0;
             g_sendConfirmations = 0;   /* reset before the sends so all are counted */
-            Serial.printf("TX FRAME seq=%u fragments=%u\n",
+            TX_LOG("TX FRAME seq=%u fragments=%u\n",
                           g_frameSequence, txSlotCount);
             txState = TX_SENDING;
             stateEnteredTime = now;
@@ -398,10 +415,10 @@ void loop(void) {
                 lateSent = false;
                 txState = TX_LATE;
                 stateEnteredTime = now;
-                Serial.println("TX LATE: scheduling delayed fragment");
+                TX_LOG("TX LATE: scheduling delayed fragment\n");
 #else
                 txState = TX_IDLE;
-                Serial.printf("TX FRAME complete seq=%u, next seq=%u\n",
+                TX_LOG("TX FRAME complete seq=%u, next seq=%u\n",
                               g_frameSequence, g_frameSequence + 1);
 #endif
             }
@@ -415,12 +432,12 @@ void loop(void) {
                     submitFragment(lateSeq, 0);
                     lateSent = true;
                     stateEnteredTime = now;
-                    Serial.println("TX LATE: transmitted delayed fragment of previous frame");
+                    TX_LOG("TX LATE: transmitted delayed fragment of previous frame\n");
                 }
             } else if (g_sendConfirmations >= 1 ||
                        (now - stateEnteredTime) >= WIRELESS_TX_DRAIN_TIMEOUT_MS)) {
                 txState = TX_IDLE;
-                Serial.println("TX LATE: complete, resuming normal frames");
+                TX_LOG("TX LATE: complete, resuming normal frames\n");
             }
             break;
 #endif
