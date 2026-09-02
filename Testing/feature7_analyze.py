@@ -88,11 +88,17 @@ def steady(rows, warmup=3):
 
 def main():
     base = os.path.dirname(os.path.abspath(__file__))
-    files = sorted(glob.glob(os.path.join(base, "feature7_*hz.log")))
-    # order by numeric rate
+    # Try to infer the requested rate from the filename (supports both feature7_Nhz.log and feature7_improved_Nhz.log).
     def rate_of(p):
-        m = re.search(r"feature7_(\d+)hz", os.path.basename(p))
-        return int(m.group(1)) if m else 0
+        bn = os.path.basename(p)
+        m = re.search(r"feature7_(improved_)?(\d+)hz", bn)
+        if not m:
+            # Fallback: use the first number found (for legacy .log files).
+            n = re.search(r"\b(\d+)hz\b", bn)
+            return int(n.group(1)) if n else 0
+        return int(m.group(2))
+
+    files = sorted(glob.glob(os.path.join(base, "feature7_*hz.log")))
     files.sort(key=rate_of)
 
     print("%-6s %-9s %-9s %-9s %-8s %-7s %-8s %-9s %-9s" % (

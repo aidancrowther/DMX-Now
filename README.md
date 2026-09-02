@@ -980,6 +980,7 @@ Expected approximate sequence:
 11. Status/management interface
 12. Reliability and throughput testing
 13. Hardware-specific cleanup and fail-safe refinement
+14. Implement a high priority transmission flag
 
 This ordering may change as hardware testing reveals constraints.
 

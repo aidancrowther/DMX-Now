@@ -1,0 +1,110 @@
+{
+  "started_utc": "2026-09-02T13:22:00.285954+00:00",
+  "tx_port": "/dev/ttyUSB0",
+  "monitor_port": "/dev/ttyUSB1",
+  "rates": [
+    5,
+    10,
+    15,
+    20,
+    22,
+    25,
+    27,
+    30,
+    32,
+    35,
+    37,
+    40
+  ],
+  "settle_seconds": 10,
+  "measure_seconds": 60,
+  "overhead_ms": 27,
+  "drain_timeout_ms": 100,
+  "receiver_modified": false,
+  "results": [
+    {
+      "hz": 5,
+      "log": "01_05hz.log",
+      "started_utc": "2026-09-02T13:22:00.286174+00:00",
+      "flash_returncode": 0,
+      "capture_ok": true
+    },
+    {
+      "hz": 10,
+      "log": "02_10hz.log",
+      "started_utc": "2026-09-02T13:23:44.565191+00:00",
+      "flash_returncode": 0,
+      "capture_ok": true
+    },
+    {
+      "hz": 15,
+      "log": "03_15hz.log",
+      "started_utc": "2026-09-02T13:25:28.267305+00:00",
+      "flash_returncode": 0,
+      "capture_ok": true
+    },
+    {
+      "hz": 20,
+      "log": "04_20hz.log",
+      "started_utc": "2026-09-02T13:27:11.809336+00:00",
+      "flash_returncode": 0,
+      "capture_ok": true
+    },
+    {
+      "hz": 22,
+      "log": "05_22hz.log",
+      "started_utc": "2026-09-02T13:28:56.043297+00:00",
+      "flash_returncode": 0,
+      "capture_ok": true
+    },
+    {
+      "hz": 25,
+      "log": "06_25hz.log",
+      "started_utc": "2026-09-02T13:30:41.171228+00:00",
+      "flash_returncode": 0,
+      "capture_ok": true
+    },
+    {
+      "hz": 27,
+      "log": "07_27hz.log",
+      "started_utc": "2026-09-02T13:32:26.145273+00:00",
+      "flash_returncode": 0,
+      "capture_ok": true
+    },
+    {
+      "hz": 30,
+      "log": "08_30hz.log",
+      "started_utc": "2026-09-02T13:34:11.368465+00:00",
+      "flash_returncode": 0,
+      "capture_ok": true
+    },
+    {
+      "hz": 32,
+      "log": "09_32hz.log",
+      "started_utc": "2026-09-02T13:35:56.263196+00:00",
+      "flash_returncode": 0,
+      "capture_ok": true
+    },
+    {
+      "hz": 35,
+      "log": "10_35hz.log",
+      "started_utc": "2026-09-02T13:37:41.950430+00:00",
+      "flash_returncode": 0,
+      "capture_ok": true
+    },
+    {
+      "hz": 37,
+      "log": "11_37hz.log",
+      "started_utc": "2026-09-02T13:39:25.168900+00:00",
+      "flash_returncode": 0,
+      "capture_ok": true
+    },
+    {
+      "hz": 40,
+      "log": "12_40hz.log",
+      "started_utc": "2026-09-02T13:41:08.237210+00:00",
+      "flash_returncode": 0,
+      "capture_ok": true
+    }
+  ]
+}

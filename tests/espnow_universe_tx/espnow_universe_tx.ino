@@ -258,8 +258,13 @@ static uint8_t currentFragment = 0;
 #endif
 
 /* Effective interval = requested interval minus overhead (budget pacing).
- * For 1 Hz: ~973 ms, for 10 Hz: ~67 ms, etc. */
-static constexpr unsigned long TX_INTERVAL_MS = (WIRELESS_REFRESH_INTERVAL_MS - WIRELESS_TX_OVERHEAD_MS);
+ * Clamp at zero: unsigned subtraction must not wrap at/above the estimated
+ * overhead ceiling. At that point the state machine runs as fast as the
+ * completed-fragment drain permits, rather than waiting for a huge interval. */
+static constexpr unsigned long TX_INTERVAL_MS =
+    (WIRELESS_REFRESH_INTERVAL_MS > WIRELESS_TX_OVERHEAD_MS)
+        ? (WIRELESS_REFRESH_INTERVAL_MS - WIRELESS_TX_OVERHEAD_MS)
+        : 0UL;
 
 /* TEST HOOK (Feature 6, Test 6): late-fragment state. */
 #if defined(TEST_DELAYED_FRAGMENT)
