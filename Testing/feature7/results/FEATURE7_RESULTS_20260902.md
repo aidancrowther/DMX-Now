@@ -4,9 +4,10 @@
 **Authoritative Pico run:** `Testing/feature7/runs/20260902_154822/`  
 **Pico smoke run:** `Testing/feature7/runs/20260902_154700/`  
 **MEGA comparison run:** `Testing/feature7/runs/20260902_132200/`  
+**Fresh post-logging-cleanup MEGA run:** `Testing/feature7/runs/20260902_174631/`
 **Hardware:** ESP-NOW TX `/dev/ttyUSB0`; Pico monitor `/dev/ttyACM0`; MEGA comparison monitor `/dev/ttyUSB1`  
 **Configuration:** `WIRELESS_TX_OVERHEAD_MS=27`, `WIRELESS_TX_DRAIN_TIMEOUT_MS=100`; 10 s settle + 60 s measurement per point  
-**Receiver:** not flashed or modified
+**Receiver:** integrated receiver used for the fresh MEGA run; no receiver source changes were made for Feature 7
 
 ## Executive conclusion
 
@@ -81,7 +82,17 @@ grounded smoke and full sweep listed above.
 The TX-only safety fix clamps the effective pacing interval at zero when the
 requested period is no greater than the estimated 27 ms transmission overhead,
 preventing unsigned underflow. The receiver source, receiver libraries, and
-receiver firmware were not modified.
+receiver firmware were not modified for Feature 7.
+
+The fresh post-logging-cleanup MEGA sweep was run after the transmitter packet/frame
+diagnostics were disabled by default. The analyzer was reflashed before the run;
+all 12 transmitter flashes and 12 captures succeeded. The results reproduced the
+same conservative 20 Hz reliable ceiling, so the earlier ceiling was not solely
+caused by transmitter Serial logging. The logging change remains important because
+it removes avoidable UART buffer blocking from normal timing-sensitive operation.
+
+Receiver Feature 9 battery monitoring and Feature 10 telemetry were subsequently
+hardware-verified separately, including telemetry operation with multiple receivers.
 
 ## Reproduction
 

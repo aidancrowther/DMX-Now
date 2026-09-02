@@ -304,9 +304,11 @@ LOW continuously for ~5 seconds
 These timings are configurable in the receiver build with `BATTERY_LOW_ASSERT_MS`
 and `BATTERY_LOW_CLEAR_MS`, whose defaults are 2000 ms and 5000 ms respectively.
 
-The debounced `batteryLow` flag is retained for receiver telemetry. It does not
-alter the DMX universe; the receiver continues outputting the latest complete
-wireless universe.
+The debounced `batteryLow` flag is retained for receiver telemetry. For the
+Feature 9 hardware test build, asserting the flag causes the receiver to output
+a universe of `0xFF` on all 512 channels; clearing it restores the latest
+complete wireless universe. This test indication is intentionally implemented
+without receiver Serial output because UART0 is owned by DMX.
 
 ## Wireless Architecture
 
@@ -800,12 +802,12 @@ Completed:
   copies pinned via `--library` (see Build Information)
 * exact build command documented (see Build Information)
 
-Not done (intentionally out of scope):
+Not done (intentionally out of scope for Feature 1):
 
 * no ESP-NOW transmission or reception implemented
 * no pin configuration or callbacks wired up
 * no wireless packet structures, fragmentation, or buffering
-* no low-battery monitoring or telemetry
+* no ENTTEC serial input/parser
 
 ### Library replacement: ESP-Dmx → espDMX (basic usage)
 
@@ -821,13 +823,11 @@ Completed:
 * GPIO pin allocation unchanged (GPIO1 DMX data, GPIO2 DE control, GPIO3 battery low input).
 * No patches applied to espDMX — the library compiles and works unmodified against core 3.1.2 on hardware.
 
-Not done (intentionally out of scope):
+Not done (intentionally out of scope for the original basic espDMX integration):
 
 * no QuickESPNow wireless communication implemented
 * no wireless packet structures, fragmentation, or buffering
 * no ENTTEC serial input/parser
-* no low-battery GPIO monitoring
-* no receiver telemetry
 * no status/management interface
 
 ### espDMX hardware verification
@@ -1016,7 +1016,50 @@ Hardware validation:
   universe validation because of pattern errors.
 * The MEGA comparison run passed through 22 Hz. The monitor boundary difference
   is documented rather than treated as proof of a board-specific system limit.
-* No receiver source, receiver library, or receiver firmware was modified.
+* The fresh post-logging-cleanup MEGA sweep (`Testing/feature7/runs/20260902_174631/`)
+  was completed on TX `/dev/ttyUSB0` with the analyzer on `/dev/ttyUSB1`; the
+  analyzer was reflashed first and all 12/12 rate captures succeeded. The
+  results reproduce a conservative reliable ceiling of 20 Hz.
+
+### Feature 9: Low-Battery GPIO Monitoring
+
+Status: COMPLETE (hardware-verified 2026-09-02 ✓)
+
+Completed:
+
+* Receiver monitors the external active-HIGH low-battery comparator on GPIO3 / UART RX.
+* The input is debounced in the receiver main loop using configurable
+  `BATTERY_LOW_ASSERT_MS` (default 2000 ms) and `BATTERY_LOW_CLEAR_MS` (default
+  5000 ms) hysteresis periods.
+* The internal `batteryLow` flag is included in receiver telemetry.
+* For hardware verification, the receiver outputs `0xFF` on all 512 DMX
+  channels while the debounced flag is asserted, then restores the latest
+  complete wireless universe after the flag clears.
+* No receiver Serial diagnostics are used because UART0 is dedicated to DMX output.
+
+### Feature 10: Receiver Telemetry
+
+Status: COMPLETE (hardware-verified with multiple receivers 2026-09-02 ✓)
+
+Completed:
+
+* Receivers broadcast compact packed telemetry approximately every 4–5 seconds,
+  with deterministic startup phase, jitter, and bounded retry backoff.
+* The transmitter receives and validates telemetry from multiple receivers and
+  reports receiver ID, MAC, uptime, battery state, sequence/counter data, RSSI,
+  firmware, and protocol information.
+* Telemetry is handled through a bounded callback-to-loop ring and does not
+  perform Serial I/O in the wireless callback.
+* `TRANSMITTER_TELEMETRY_LOGGING` independently controls telemetry display and
+  defaults to enabled. Set it to `0` to keep telemetry processing active while
+  suppressing `RX TELEMETRY ...` output.
+* The `completeUniverses` counter is a saturating 32-bit value. Its four-byte
+  field is sent only once per telemetry report and is safe for the expected
+  5–7 hour runtime.
+
+Hardware verification confirmed telemetry operation with multiple receivers.
+The implementation is intentionally complete before the future status/management
+interface and ENTTEC input features.
 
 Follow-up (not required for Feature 7 completion):
 
@@ -1035,8 +1078,8 @@ Expected approximate sequence:
 6. Receiver universe reconstruction/double buffering ✓ (Feature 6, verified 2026-08-27)
 7. Configurable transmitter wireless refresh + reliable-rate test harness ✓ (hardware-validated 2026-09-02; conservative reliable ceiling 20 Hz)
 8. ENTTEC serial input/parser
-9. Low-battery GPIO monitoring
-10. Receiver telemetry (receiver and transmitter implemented; hardware verification pending)
+9. Low-battery GPIO monitoring ✓ (hardware-verified 2026-09-02)
+10. Receiver telemetry ✓ (multi-receiver hardware-verified 2026-09-02)
 11. Status/management interface
 12. Reliability and throughput testing
 13. Hardware-specific cleanup and fail-safe refinement
