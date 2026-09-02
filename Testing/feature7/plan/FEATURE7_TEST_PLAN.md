@@ -3,9 +3,9 @@
 ## Purpose
 
 Measure the highest practical wireless refresh rate through the integrated
-receiver without allowing the MEGA's reporting serial output to perturb DMX
-reception. The MEGA uses `DMXSerial.packetReady()` as the complete DMX-frame
-boundary and remains silent during recording.
+receiver without allowing monitor reporting output to perturb DMX reception.
+The MEGA uses `DMXSerial.packetReady()` and the Pico uses PIO/DMA capture as
+their complete DMX-frame boundaries; both remain silent during recording.
 
 ## Hardware and safety
 
@@ -13,6 +13,7 @@ boundary and remains silent during recording.
 |---|---|---|
 | ESP-01 TX test sketch | `/dev/ttyUSB0` | compile and flash for each rate |
 | Arduino MEGA monitor | `/dev/ttyUSB1` | flash only with `--flash-monitor` |
+| Raspberry Pi Pico monitor | `/dev/ttyACM0` | optional replacement monitor; flash only with `--flash-monitor` |
 | Integrated ESP-01 receiver | not connected | never flashed or modified |
 
 The runner refuses missing ports and stores all new logs under
@@ -64,6 +65,19 @@ To perform a compile-only monitor check first:
 
 Use `--continue-on-error` to collect later points after a failed flash or
 capture. Use `--rates 10,20,30 --seconds 120` for a shorter/longer confirmation.
+
+The Pico monitor can run the same sweep using its native USB telemetry and
+PIO/DMA DMX input on GPIO 1. Connect the Pico ground to the DMX source ground
+before treating any capture as valid:
+
+```bash
+python3 Testing/feature7/tools/run_sweep.py \
+  --monitor-type pico --monitor-port /dev/ttyACM0 --flash-monitor
+```
+
+The Pico emits the same `RESULT` schema as the MEGA. Its metrics are directly
+comparable, but a separate run directory must be used because the two monitors
+have different frame-boundary implementations.
 
 ## Acceptance criteria
 

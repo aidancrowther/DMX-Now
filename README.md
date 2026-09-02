@@ -283,8 +283,8 @@ The trim pot is manually calibrated to the desired low-battery threshold, initia
 GPIO behavior:
 
 ```
-GPIO3 HIGH = battery OK
-GPIO3 LOW  = battery LOW
+GPIO3 HIGH = battery LOW
+GPIO3 LOW  = battery OK
 ```
 
 Hardware hysteresis is intentionally omitted.
@@ -294,14 +294,19 @@ Software should filter the signal instead.
 Suggested initial filtering:
 
 ```
-LOW continuously for ~2 seconds
+HIGH continuously for ~2 seconds
     -> batteryLow = true
 
-HIGH continuously for ~5 seconds
+LOW continuously for ~5 seconds
     -> batteryLow = false
 ```
 
-These timings should eventually be configurable.
+These timings are configurable in the receiver build with `BATTERY_LOW_ASSERT_MS`
+and `BATTERY_LOW_CLEAR_MS`, whose defaults are 2000 ms and 5000 ms respectively.
+
+The debounced `batteryLow` flag is retained for receiver telemetry. It does not
+alter the DMX universe; the receiver continues outputting the latest complete
+wireless universe.
 
 ## Wireless Architecture
 
@@ -491,7 +496,7 @@ The initial requirement is primarily to accept full-universe DMX updates from ex
 
 ## Receiver Telemetry
 
-Receivers will eventually send low-rate telemetry back to the transmitter.
+Receivers send low-rate telemetry back to the transmitter.
 
 Telemetry is separate from the realtime DMX broadcast.
 
@@ -511,7 +516,20 @@ Expected telemetry includes:
 
 Telemetry should occur approximately every 3-5 seconds with timing offsets/jitter so all receivers do not transmit simultaneously.
 
+Feature 10 receiver implementation uses a compact packed telemetry packet sent
+as an ESP-NOW broadcast. Each receiver derives a deterministic initial phase
+from its ESP8266 chip ID, adds per-cycle jitter, and uses bounded retry backoff
+when the QuickESPNow transmit queue is busy. This is decentralized collision
+avoidance; it reduces synchronized transmissions but does not claim guaranteed
+delivery. Telemetry is sent only from the receiver main loop and never blocks
+the wireless receive callback.
+
 Telemetry must remain lower priority than realtime DMX reception.
+
+The production transmitter sketch at `./transmitter/transmitter.ino` currently
+uses the verified deterministic test universe (`universe[i] = (i + sequence) &
+0xFF`) and reports received telemetry as `RX TELEMETRY ...` lines at 115200 baud.
+It is intentionally separate from the later ENTTEC serial-input feature.
 
 ## Receiver Identification
 
@@ -716,8 +734,10 @@ This script compiles and flashes to `/dev/ttyUSB0`. Adjust the port as needed.
 
 ### Transmitter
 
-The Feature 5 wireless transmitter test lives at `./tests/espnow_universe_tx/`
-(the production `./transmitter/` sketch with ENTTEC input is a later feature).
+The Feature 5 wireless transmitter test lives at `./tests/espnow_universe_tx/`.
+The receiver-only telemetry integration is exercised by the production
+`./transmitter/transmitter.ino` sketch, which currently preserves that same
+deterministic universe generator while adding telemetry reporting.
 
 Verified 2026-08-24 against `esp8266:esp8266` core 3.1.2, arduino-cli 1.4.1,
 via `./flash_espnow_tx.sh` (compile-only, no `-f`):
@@ -925,7 +945,7 @@ A comprehensive testing plan exists at `tests/FEATURE6_TEST_PLAN.md`. It documen
 
 ### Feature 7: Configurable Transmitter Refresh + Reliable-Rate Test Harness
 
-Status: IN PROGRESS — configurability + measurement harness compile-verified (2026-08-31); hardware sweep pending
+Status: COMPLETE (hardware-validated 2026-09-02 ✓)
 
 Makes the transmitter's wireless refresh rate configurable and adds a measurement
 harness to find roughly what refresh rate the system sustains reliably.
@@ -949,19 +969,38 @@ Completed:
   the `DMXSerial.cpp` library compile line (verbose build).
 * `./flash_dmx_monitor.sh` — build/flash for the MEGA (passes the global
   `DMX_USE_PORT1` flag; `arduino-cli upload` for AVR).
-* `tests/FEATURE7_TEST_PLAN.md` — method, sweep (1..30 Hz), metric definitions,
-  pass/fail bar, how to read each column.
-* `Testing/feature7_capture.py` — host helper: logs the per-second lines and
-  summarizes rate / loss / gaps / pattern errors per rate point.
-* `Testing/FEATURE7_RESULTS.md` — sweep results + root-cause analysis (why rates are
-  off-nominal, how the overhead is dominated by radio airtime for a 512-channel
-  frame, and recommendations for improvement).
+* `tests/pico_dmx_refresh_monitor/pico_dmx_refresh_monitor.ino` — optional
+  Raspberry Pi Pico PIO/DMA monitor on GPIO 1 with native USB telemetry.
+* `flash_pico_dmx_monitor.sh` — build/flash helper for the Pico monitor.
+* `Testing/feature7/tools/run_sweep.py` — host runner that flashes the TX for
+  each requested rate, captures monitor results, and writes a manifest.
+* `Testing/feature7/tools/analyze.py` — parses result lines and applies the
+  reliability criteria.
+* `Testing/feature7/plan/FEATURE7_TEST_PLAN.md` — method, sweep rates, metric
+  definitions, pass/fail bar, grounding requirement, and reproduction commands.
+* `Testing/feature7/results/FEATURE7_RESULTS_20260902.md` — grounded hardware
+  results, MEGA comparison, analysis, and recommendations.
 
-Not done:
-* **Hardware verification of budget pacing**: re-run the sweep with the improved
-  TX (`-DWIRELESS_TX_OVERHEAD_MS=27 -DWIRELESS_TX_DRAIN_TIMEOUT_MS=100`) and fill
-  in `Testing/FEATURE7_RESULTS.md` to confirm the achieved ceiling rises toward
-  the model's ~37 Hz and that the nominal rate is now met at each setting.
+Hardware validation:
+
+* The final Pico PIO/DMA monitor was flashed and validated with the DMX source
+  and Pico sharing ground.
+* The 10 Hz smoke test recorded 99 updates at 9.90 Hz with 0 inferred loss and
+  0 pattern errors.
+* The full 5/10/15/20/22/25/27/30/32/35/37/40 Hz sweep completed successfully.
+* Using the strict criteria of ≤5% inferred loss, zero pattern errors, and no
+  sustained outage, the grounded Pico run supports a conservative reliable
+  ceiling of **20 Hz**. The 22 Hz point is a transition case requiring repeat
+  testing; 30–40 Hz reaches approximately 31–32 Hz throughput but fails full
+  universe validation because of pattern errors.
+* The MEGA comparison run passed through 22 Hz. The monitor boundary difference
+  is documented rather than treated as proof of a board-specific system limit.
+* No receiver source, receiver library, or receiver firmware was modified.
+
+Follow-up (not required for Feature 7 completion):
+
+* Repeat the 20/22/25 Hz boundary points across multiple runs if a production
+  ceiling above 20 Hz is required.
 
 ### Future Features
 
@@ -973,10 +1012,10 @@ Expected approximate sequence:
 4. Basic QuickESPNow transmitter/receiver communication ✓
 5. Wireless packet format and fragmentation ✓ (Feature 5, verified 2026-08-24)
 6. Receiver universe reconstruction/double buffering ✓ (Feature 6, verified 2026-08-27)
-7. Configurable transmitter wireless refresh ✓ (configurability + MEGA monitor harness, 2026-08-31; hardware rate sweep pending)
+7. Configurable transmitter wireless refresh + reliable-rate test harness ✓ (hardware-validated 2026-09-02; conservative reliable ceiling 20 Hz)
 8. ENTTEC serial input/parser
 9. Low-battery GPIO monitoring
-10. Receiver telemetry
+10. Receiver telemetry (receiver and transmitter implemented; hardware verification pending)
 11. Status/management interface
 12. Reliability and throughput testing
 13. Hardware-specific cleanup and fail-safe refinement

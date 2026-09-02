@@ -47,6 +47,7 @@
 #define DMX_PACKET_MAGIC       0x444DU   /* "DM" in ASCII, for validation */
 #define DMX_PROTO_VERSION      1U        /* Current protocol version */
 #define DMX_PACKET_TYPE        1U        /* Packet type: 1 = DMX fragment */
+#define TELEMETRY_PACKET_TYPE  2U        /* Packet type: 2 = receiver telemetry */
 #define DMX_UNIVERSE_ID        1U        /* Single universe for now; extendable later */
 #define DMX_UNIVERSE_SIZE      512U      /* 512 DMX channels */
 
@@ -94,6 +95,28 @@ struct __attribute__((packed)) DmxFragmentPacket {
     uint8_t  payloadLength;   /* bytes of channel payload that follow the header */
 };
 
+/* Receiver telemetry is deliberately separate from the DMX fragment format.
+ * It is broadcast at a low rate so a future transmitter can collect status
+ * from multiple receivers without requiring per-receiver pairing first. */
+struct __attribute__((packed)) ReceiverTelemetryPacket {
+    uint16_t magic;
+    uint8_t  protocolVersion;
+    uint8_t  packetType;
+    uint8_t  universeId;
+    uint32_t receiverId;             /* ESP8266 chip ID */
+    uint8_t  macAddress[6];
+    uint32_t uptimeSeconds;
+    uint8_t  batteryLow;
+    uint32_t lastActiveSequence;
+    uint32_t completeUniverses;
+    uint32_t incompleteUniverses;
+    uint32_t malformedPackets;
+    uint32_t timeSinceLastUniverseMs;
+    int8_t   lastRssi;
+    uint16_t firmwareVersion;
+    uint32_t telemetrySequence;
+};
+
 /* --------------------------------------------------------------------------
  * Compile-time guards against the Feature 5 bug class: the header must be
  * exactly 14 bytes (packed, no padding) and fit inside one ESP-NOW packet.
@@ -102,6 +125,8 @@ static_assert(sizeof(DmxFragmentPacket) == DMX_HEADER_SIZE,
               "DmxFragmentPacket must be exactly 14 bytes (packed, no padding)");
 static_assert(sizeof(DmxFragmentPacket) <= ESP_NOW_MAX_DATA_LEN,
               "DmxFragmentPacket header must fit within ESP_NOW_MAX_DATA_LEN");
+static_assert(sizeof(ReceiverTelemetryPacket) <= ESP_NOW_MAX_DATA_LEN,
+              "ReceiverTelemetryPacket must fit within ESP_NOW_MAX_DATA_LEN");
 
 /* --------------------------------------------------------------------------
  * Helper: payload length a fragment at `offset` should carry (last gets remainder)

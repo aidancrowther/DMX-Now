@@ -1,107 +1,91 @@
-# Feature 7 Results — Automated Refresh-Rate Sweep
+# Feature 7 Results — Grounded Refresh-Rate Verification
 
-**Run:** `Testing/feature7/runs/20260902_132200/`  
 **Date:** 2026-09-02  
-**Hardware:** ESP-NOW TX `/dev/ttyUSB0`, MEGA monitor `/dev/ttyUSB1`, integrated receiver unchanged  
-**Configuration:** `WIRELESS_TX_OVERHEAD_MS=27`, `WIRELESS_TX_DRAIN_TIMEOUT_MS=100`  
-**Per point:** 10 s settling + 60 s silent measurement  
+**Authoritative Pico run:** `Testing/feature7/runs/20260902_154822/`  
+**Pico smoke run:** `Testing/feature7/runs/20260902_154700/`  
+**MEGA comparison run:** `Testing/feature7/runs/20260902_132200/`  
+**Hardware:** ESP-NOW TX `/dev/ttyUSB0`; Pico monitor `/dev/ttyACM0`; MEGA comparison monitor `/dev/ttyUSB1`  
+**Configuration:** `WIRELESS_TX_OVERHEAD_MS=27`, `WIRELESS_TX_DRAIN_TIMEOUT_MS=100`; 10 s settle + 60 s measurement per point  
+**Receiver:** not flashed or modified
 
 ## Executive conclusion
 
-The highest tested setting meeting the defined reliability criteria is **22 Hz
-requested**, delivering **23.93 Hz** with **0.30% inferred sequence loss** and
-**zero pattern errors**. This is the recommended reliable ceiling from this
-sweep.
+With the Pico DMX input ground connected, the final PIO/DMA monitor completed a
+valid full sweep. The highest requested setting meeting the acceptance rule was
+**20 Hz** on the Pico run: **19.67 Hz delivered**, **0.50% inferred sequence
+loss**, and **zero pattern errors**.
 
-The transport reaches a practical delivered-rate plateau of approximately
-**31–32 Hz** at requested settings from 30–40 Hz. However, pattern errors become
-frequent at 27 Hz and above, so that plateau must not be described as reliable
-full-universe delivery.
+The **22 Hz boundary requires caution**. The Pico run produced 76 pattern errors
+and is therefore not accepted as reliable, while the earlier MEGA run passed
+22 Hz. The conservative system recommendation is **20 Hz until 22 Hz is
+repeated with additional trials**. The transport delivered approximately
+**31–32 Hz** at requested settings from 30–40 Hz, but those frames were not
+reliably valid full universes.
 
-The 25 Hz point is the transition region: it delivered 24.73 Hz with only one
-pattern error in 60 seconds. Under the strict zero-pattern-error criterion it
-is not accepted; it is a candidate for repeat testing if a less conservative
-operating point is desired.
-
-## Results
+## Authoritative grounded Pico results
 
 | requested Hz | delivered Hz | updates | inferred lost | loss % | pattern errors | max gap ms | verdict |
 |---:|---:|---:|---:|---:|---:|---:|:---|
-| 5 | 5.02 | 301 | 1 | 0.30 | 0 | 383 | RELIABLE |
-| 10 | 10.00 | 600 | 2 | 0.30 | 0 | 203 | RELIABLE |
-| 15 | 15.25 | 915 | 8 | 0.90 | 0 | 158 | RELIABLE |
-| 20 | 19.78 | 1187 | 11 | 0.90 | 0 | 114 | RELIABLE |
-| 22 | 23.93 | 1436 | 5 | 0.30 | 0 | 90 | **RELIABLE CEILING** |
-| 25 | 24.73 | 1484 | 6 | 0.40 | 1 | 91 | NOT RELIABLE |
-| 27 | 24.50 | 1470 | 3 | 0.20 | 55 | NOT RELIABLE |
-| 30 | 31.42 | 1885 | 8 | 0.40 | 662 | 90 | NOT RELIABLE |
-| 32 | 32.05 | 1923 | 3 | 0.20 | 766 | 90 | NOT RELIABLE |
-| 35 | 31.97 | 1918 | 16 | 0.80 | 698 | 90 | NOT RELIABLE |
-| 37 | 31.60 | 1896 | 21 | 1.10 | 695 | 90 | NOT RELIABLE |
-| 40 | 31.77 | 1906 | 17 | 0.90 | 711 | 69 | NOT RELIABLE |
+| 5 | 5.02 | 301 | 0 | 0.00 | 0 | 227 | RELIABLE |
+| 10 | 9.88 | 593 | 4 | 0.70 | 0 | 205 | RELIABLE |
+| 15 | 15.52 | 931 | 5 | 0.50 | 0 | 136 | RELIABLE |
+| 20 | 19.67 | 1180 | 6 | 0.50 | 0 | 114 | **RELIABLE CEILING** |
+| 22 | 23.12 | 1387 | 12 | 0.90 | 76 | 91 | NOT RELIABLE |
+| 25 | 16.72 | 1003 | 40 | 3.80 | 40 | 681 | NOT RELIABLE |
+| 27 | 23.28 | 1397 | 4 | 0.30 | 54 | 114 | NOT RELIABLE |
+| 30 | 31.28 | 1877 | 2 | 0.10 | 676 | 137 | NOT RELIABLE |
+| 32 | 31.60 | 1896 | 5 | 0.30 | 699 | 91 | NOT RELIABLE |
+| 35 | 31.67 | 1900 | 6 | 0.30 | 714 | 91 | NOT RELIABLE |
+| 37 | 31.83 | 1910 | 5 | 0.30 | 697 | 69 | NOT RELIABLE |
+| 40 | 31.63 | 1898 | 8 | 0.40 | 722 | 91 | NOT RELIABLE |
+
+The final 10 Hz grounded smoke run (`20260902_154700`) recorded 99 updates at
+9.90 Hz, zero inferred loss, zero pattern errors, and a 136 ms maximum gap.
+
+## MEGA comparison
+
+The MEGA baseline passed 5–22 Hz with zero pattern errors and identified 22 Hz
+as its reliable ceiling in that run. Both monitors agree on the important
+system-level shape: rates track the request at low rates, corruption begins in
+the low-to-mid-20 Hz transition region, and 30–40 Hz reaches a roughly 31–32 Hz
+throughput plateau but fails full-universe validation.
+
+The exact boundary differs between one-run monitor captures (Pico: 20 Hz
+accepted; MEGA: 22 Hz accepted), so this is not evidence that the Pico or MEGA
+changes the wireless system limit. Repeat 20/22/25 Hz trials before selecting a
+production ceiling above 20 Hz.
 
 ## Acceptance rule
 
-A point is reliable when inferred sequence loss is ≤5%, pattern errors are zero,
-and there is no sustained multi-period outage. Pattern errors are treated as a
-hard failure because the monitor validates all 512 channels of each new payload;
-a frame with an error is not accepted as a valid complete universe.
+A point is reliable when inferred sequence loss is at most 5%, pattern errors are
+zero, and there is no sustained multi-period outage. Pattern errors are a hard
+failure because the monitor validates all 512 channels of each new payload; a
+changed-sequence frame with a bad channel is not a valid complete universe.
 
-## Analysis
+## Monitor and grounding notes
 
-* **5–22 Hz:** delivered rate follows the requested rate closely. Loss remains
-  below 1% and all 512-channel pattern checks pass. The 20/22 Hz difference is
-  consistent with pacing/measurement quantization, not a rate collapse.
-* **25 Hz:** first observed pattern error. This is the boundary region and should
-  be repeated if operating near the ceiling is important.
-* **27 Hz:** only 24.50 Hz delivered despite the higher request, indicating the
-  beginning of contention/throughput limitation; 55 pattern errors confirm that
-  complete universes are no longer consistently reconstructed.
-* **30–40 Hz:** delivered rate is approximately 31–32 Hz rather than tracking the
-  request. Pattern errors rise to 662–766 per 60-second run while sequence-loss
-  percentages remain comparatively small. This distinction matters: the receiver
-  is often producing a changed sequence, but the full payload is not always
-  valid.
-* `max_gap` is generally around one or two physical DMX periods at high rates,
-  not evidence of a sustained link outage.
+The final Pico monitor uses the installed `Pico-DMX` library's PIO plus DMA
+capture on GPIO 1. The DMA completion callback accounts for the completed
+513-byte frame before the library re-arms the DMA buffer, avoiding foreground
+read/write races. Telemetry uses native USB CDC. The runner supports
+`--monitor-type pico` and tolerates Pico USB sessions that do not replay a boot
+banner when the port opens.
 
-## Monitor validation and interference investigation
+The first Pico sweeps were invalidated because the Pico and DMX source did not
+share ground. All Pico-tagged runs from those attempts were deleted before the
+authoritative grounded run. The remaining Pico artifacts are only the valid
+grounded smoke and full sweep listed above.
 
-The MEGA was changed to a command-driven silent recorder. It receives DMX through
-the DMXSerial UART ISR, accepts `START <settle> <measure>`, emits no USB output
-during the measurement, and reports one result afterward. The final monitor uses
-`packetReady()` for complete physical-frame detection, immediately copies the
-513-byte DMXSerial buffer, then performs validation on the copy. This avoids
-reading the mutable library buffer while the next physical frame is arriving.
+## TX/receiver scope
 
-A two-part full-frame hash was tested as an alternative to channel-1 duplicate
-filtering. It caused 48–52 pattern errors in short 10 Hz smoke tests, compared
-with zero errors after the snapshot change. It was rejected as too expensive for
-the single-buffer ATmega2560 monitor. The `DmxSniff` example was also rejected
-for this measurement because it uses `dataUpdated()`, which can fire for each
-changed channel byte rather than once per complete frame.
-
-The final 10 Hz smoke run recorded 101 updates in 9 measured seconds, 0 loss, and
-0 pattern errors. The full 60-second sweep likewise had zero pattern errors
-through 22 Hz, supporting that the final monitor path is not introducing the
-observed high-rate errors.
-
-## TX/receiver decision
-
-The TX-only safety fix retained for this run clamps the budget interval at zero
-when `1000 / WIRELESS_REFRESH_HZ <= WIRELESS_TX_OVERHEAD_MS`, preventing unsigned
-underflow at high requested rates. The 27 ms overhead and 100 ms drain timeout
-were unchanged for the comparison sweep.
-
-No receiver source or firmware was modified. The high-rate signature is
-consistent with the existing receiver/reconstruction path becoming unable to
-produce valid full universes under the burst load, but this report does not
-claim a receiver fix is required without a controlled repeat. Any receiver-side
-queue/buffering or promotion change requires explicit approval before work begins.
+The TX-only safety fix clamps the effective pacing interval at zero when the
+requested period is no greater than the estimated 27 ms transmission overhead,
+preventing unsigned underflow. The receiver source, receiver libraries, and
+receiver firmware were not modified.
 
 ## Reproduction
 
 ```bash
-python3 Testing/feature7/tools/analyze.py Testing/feature7/runs/20260902_132200
-python3 Testing/feature7/tools/analyze.py --json Testing/feature7/runs/20260902_132200
+python3 Testing/feature7/tools/analyze.py Testing/feature7/runs/20260902_154822
+python3 Testing/feature7/tools/analyze.py --json Testing/feature7/runs/20260902_154822
 ```

@@ -1,0 +1,428 @@
+/**
+ * Integrated Wireless DMX transmitter: deterministic universe broadcast plus
+ * receiver telemetry reporting.
+ * Broadcasts deterministic 512-byte universes via QuickESPNow broadcast.
+ *
+ * Each universe is split into DMX_FRAGMENTS_PER_UNIVERSE (3) fragments.
+ * A frame is fully "sent" once all 3 fragments have been transmitted and the
+ * QuickESPNow TX queue has drained (confirmed via the onDataSent callback).
+ * The frame sequence increments after each complete frame so the receiver can
+ * observe a varying (but still deterministic) payload pattern.
+ */
+
+#include <Arduino.h>
+#include <ESP8266WiFi.h>
+#include <QuickEspNow.h>
+
+/* Single canonical protocol definition shared with the receiver
+ * (WirelessDMX library, pinned by the build via --library). */
+#include <wireless_protocol.h>
+
+/* --------------------------------------------------------------------------
+ * TEST HOOK CONFIG (Feature 6) — ALL DEFAULT OFF.
+ * To run a fault-injection test, uncomment (or add) exactly ONE mode below,
+ * then build/flash with the existing script (./flash_espnow_tx.sh, add -f to
+ * flash). With this block EMPTY the transmitter is the known-good Feature 5
+ * behavior (slots {0,1,2}, no corruption, sequence starts at 0).
+ *
+ *   #define TEST_DROP_FRAGMENT_INDEX      1   // omit fragment 1 (middle) each frame
+ *   #define TEST_DUPLICATE_FRAGMENT_INDEX 1   // send fragment 1 twice each frame
+ *   #define TEST_REORDER_FRAGMENTS                 // transmit order 2,0,1
+ *   #define TEST_CORRUPT_FRAGMENT_INDEX   1   // corrupt one payload byte of fragment 1
+ *   #define TEST_CORRUPT_BYTE             0   // (optional) which payload byte (0-based)
+ *   #define TEST_FORCE_SEQUENCE_START     42  // start the frame sequence at 42
+ *   #define TEST_SEQUENCE_WRAP                     // start at 0xFFFFFFFE (rollover)
+ *   #define TEST_DELAYED_FRAGMENT                    // transmit one fragment ~2.5 s late (stale test)
+ *
+ * After testing, remove the #define (restore this block to empty) and
+ * re-run ./flash_espnow_tx.sh. Do NOT leave a fault mode enabled.
+ * -------------------------------------------------------------------------- */
+
+/* Static universe buffer (the latest generated snapshot). */
+static uint8_t g_universe[DMX_UNIVERSE_SIZE];
+
+/* Sequence number for the current frame (incremented after a full frame). */
+static uint32_t g_frameSequence = 0;
+
+/* Fragment-send confirmations received for the in-flight frame (0..fragCount). */
+static volatile uint8_t g_sendConfirmations = 0;
+
+static const uint8_t TELEMETRY_RING_SIZE = 4;
+struct TelemetrySlot {
+    uint8_t payload[ESPNOW_MAX_MESSAGE_LENGTH];
+    uint8_t len;
+    int8_t rssi;
+};
+static TelemetrySlot telemetryRing[TELEMETRY_RING_SIZE];
+static volatile uint8_t telemetryHead = 0;
+static volatile uint8_t telemetryTail = 0;
+static unsigned long telemetryPacketsDropped = 0;
+
+static void onTelemetryReceived(uint8_t* address, uint8_t* data, uint8_t len,
+                                signed int rssi, bool broadcast) {
+    (void)address;
+    (void)broadcast;
+    if (len != sizeof(ReceiverTelemetryPacket)) return;
+    ReceiverTelemetryPacket packet;
+    memcpy(&packet, data, sizeof(packet));
+    if (packet.magic != DMX_PACKET_MAGIC ||
+        packet.protocolVersion != DMX_PROTO_VERSION ||
+        packet.packetType != TELEMETRY_PACKET_TYPE) return;
+
+    const uint8_t next = (uint8_t)((telemetryHead + 1) % TELEMETRY_RING_SIZE);
+    const uint32_t savedPS = xt_rsil(15);
+    if (next != telemetryTail) {
+        memcpy(telemetryRing[telemetryHead].payload, data, len);
+        telemetryRing[telemetryHead].len = len;
+        telemetryRing[telemetryHead].rssi = (int8_t)rssi;
+        telemetryHead = next;
+    } else if (telemetryPacketsDropped < 0xFFFFFFFFUL) {
+        telemetryPacketsDropped++;
+    }
+    xt_wsr_ps(savedPS);
+}
+
+static bool popTelemetry(ReceiverTelemetryPacket& packet, int8_t& rssi) {
+    if (telemetryHead == telemetryTail) return false;
+    const uint32_t savedPS = xt_rsil(15);
+    if (telemetryHead == telemetryTail) {
+        xt_wsr_ps(savedPS);
+        return false;
+    }
+    const uint8_t slot = telemetryTail;
+    memcpy(&packet, telemetryRing[slot].payload, sizeof(packet));
+    rssi = telemetryRing[slot].rssi;
+    telemetryTail = (uint8_t)((telemetryTail + 1) % TELEMETRY_RING_SIZE);
+    xt_wsr_ps(savedPS);
+    return true;
+}
+
+static void reportTelemetry(void) {
+    ReceiverTelemetryPacket packet;
+    int8_t rssi;
+    while (popTelemetry(packet, rssi)) {
+        Serial.printf("RX TELEMETRY id=%08lX mac=%02X:%02X:%02X:%02X:%02X:%02X uptime=%lus battery=%s last_seq=%lu complete=%lu incomplete=%lu malformed=%lu since=%lums rssi=%d fw=%u proto=%u t_seq=%lu\n",
+                      (unsigned long)packet.receiverId,
+                      packet.macAddress[0], packet.macAddress[1], packet.macAddress[2],
+                      packet.macAddress[3], packet.macAddress[4], packet.macAddress[5],
+                      (unsigned long)packet.uptimeSeconds,
+                      packet.batteryLow ? "LOW" : "OK",
+                      (unsigned long)packet.lastActiveSequence,
+                      (unsigned long)packet.completeUniverses,
+                      (unsigned long)packet.incompleteUniverses,
+                      (unsigned long)packet.malformedPackets,
+                      (unsigned long)packet.timeSinceLastUniverseMs,
+                      rssi, packet.firmwareVersion, packet.protocolVersion,
+                      (unsigned long)packet.telemetrySequence);
+    }
+}
+
+/* --------------------------------------------------------------------------
+ * Feature 6 TEST HOOKS (all compile-time, DEFAULT OFF).
+ * Enabling any of these changes only the TX test behavior so the receiver's
+ * reconstruction / double buffering can be exercised robustly. With NONE
+ * defined the transmitter is the known-good Feature 5 behavior: slots {0,1,2},
+ * count 3, no corruption, sequence starts at 0.
+ *
+ *   TEST_DROP_FRAGMENT_INDEX       omit this fragment (0/1/2) each frame
+ *   TEST_DUPLICATE_FRAGMENT_INDEX  send this fragment twice each frame
+ *   TEST_REORDER_FRAGMENTS         transmit in order 2,0,1
+ *   TEST_CORRUPT_FRAGMENT_INDEX    corrupt one payload byte of this fragment
+ *   TEST_CORRUPT_BYTE              (optional) which payload byte (0-based)
+ *   TEST_FORCE_SEQUENCE_START      start the frame sequence at this value
+ *   TEST_SEQUENCE_WRAP             start at 0xFFFFFFFE to exercise rollover
+ *   TEST_DELAYED_FRAGMENT          transmit one fragment of each frame ~2.5 s late (stale fragment)
+ * -------------------------------------------------------------------------- */
+
+/* Per-frame send slot list: ordered fragment indices to transmit.
+ * Default (no hooks) = {0,1,2}, count 3. A duplicate appends a 4th slot. */
+static uint8_t txSlotList[DMX_FRAGMENTS_PER_UNIVERSE + 1];
+static uint8_t txSlotCount = DMX_FRAGMENTS_PER_UNIVERSE;
+
+/* Generate the deterministic test universe: g_universe[i] = (i + seq) & 0xFF. */
+void generateTestUniverse(uint32_t seq) {
+    for (uint16_t i = 0; i < DMX_UNIVERSE_SIZE; ++i) {
+        g_universe[i] = static_cast<uint8_t>((static_cast<uint32_t>(i) + seq) & 0xFF);
+    }
+}
+
+/* Build the per-frame send slot list from the (compile-time) test hooks.
+ * Default (no hooks) = fragments 0,1,2 in order. A drop removes a slot; a
+ * duplicate appends a 4th slot; reorder changes the order. */
+static void buildTxSlotList(void) {
+    uint8_t order[DMX_FRAGMENTS_PER_UNIVERSE];
+    uint8_t n = 0;
+#if defined(TEST_REORDER_FRAGMENTS)
+    order[n++] = 2; order[n++] = 0; order[n++] = 1;
+#else
+    for (uint8_t i = 0; i < DMX_FRAGMENTS_PER_UNIVERSE; i++) order[n++] = i;
+#endif
+
+    uint8_t m = 0;
+    for (uint8_t k = 0; k < n; k++) {
+        const uint8_t idx = order[k];
+#if defined(TEST_DROP_FRAGMENT_INDEX)
+        if (idx == TEST_DROP_FRAGMENT_INDEX) continue;
+#endif
+        txSlotList[m++] = idx;
+    }
+#if defined(TEST_DUPLICATE_FRAGMENT_INDEX)
+    txSlotList[m++] = TEST_DUPLICATE_FRAGMENT_INDEX;
+#endif
+    txSlotCount = m;
+}
+
+/*
+ * Build one fragment (14-byte packed header + channel payload) and broadcast
+ * it at its true size (14 + payloadLength). The library copies the buffer
+ * into the TX queue, so reusing a single stack buffer for all fragments is safe.
+ */
+static void submitFragment(uint32_t seq, uint8_t fragIdx) {
+    const uint16_t offset = static_cast<uint16_t>(fragIdx) * DMX_PAYLOAD_SIZE;
+    const uint8_t payloadLength = dmx_fragment_payload_length(offset, DMX_UNIVERSE_SIZE);
+
+    /* Fixed-size buffer for the full (header + max payload) packet. */
+    uint8_t packetBuffer[DMX_TOTAL_PACKET_SIZE];
+
+    DmxFragmentPacket pkt;
+    pkt.magic           = DMX_PACKET_MAGIC;
+    pkt.protocolVersion = DMX_PROTO_VERSION;
+    pkt.packetType      = DMX_PACKET_TYPE;
+    pkt.universeId      = DMX_UNIVERSE_ID;
+    pkt.frameSequence   = seq;
+    pkt.fragmentIndex   = fragIdx;
+    pkt.fragmentCount   = DMX_FRAGMENTS_PER_UNIVERSE;
+    pkt.dataOffset      = offset;
+    pkt.payloadLength   = payloadLength;
+
+    /* Serialize the packed 14-byte header. */
+    memcpy(packetBuffer, &pkt, sizeof(pkt));
+
+    /* Copy this fragment's channel payload immediately after the header. */
+    uint8_t* pPayload = packetBuffer + DMX_HEADER_SIZE;
+    for (uint16_t i = 0; i < payloadLength; ++i) {
+        const uint16_t universeIndex = static_cast<uint16_t>(offset) + i;
+        pPayload[i] = (universeIndex < DMX_UNIVERSE_SIZE) ? g_universe[universeIndex] : 0;
+    }
+
+#if defined(TEST_CORRUPT_FRAGMENT_INDEX)
+    /* TEST-ONLY: corrupt one payload byte of the targeted fragment. Metadata
+     * stays valid; the receiver's full 512-byte integrity check must fail. */
+    if (fragIdx == TEST_CORRUPT_FRAGMENT_INDEX) {
+        uint8_t corruptAt = 0;
+#ifdef TEST_CORRUPT_BYTE
+        corruptAt = TEST_CORRUPT_BYTE;
+#endif
+        if (corruptAt >= payloadLength) corruptAt = 0;
+        const uint16_t uIdx = static_cast<uint16_t>(offset + corruptAt);
+        pPayload[corruptAt] = static_cast<uint8_t>(g_universe[uIdx] ^ 0xFF);
+        Serial.printf("TX CORRUPT seq=%u frag=%d byte=%u -> 0x%02X\n",
+                      seq, fragIdx, corruptAt, pPayload[corruptAt]);
+    }
+#endif
+
+    Serial.printf("TX FRAG seq=%u frag=%d/%d offset=%u len=%u\n",
+                  seq, fragIdx + 1, DMX_FRAGMENTS_PER_UNIVERSE, offset, payloadLength);
+
+    /* Broadcast at the fragment's true size (not always the max). */
+    const uint16_t totalSize = static_cast<uint16_t>(DMX_HEADER_SIZE + payloadLength);
+    quickEspNow.sendBcast(packetBuffer, totalSize);
+
+    Serial.printf("TX FRAG queued seq=%u frag=%d total=%u\n", seq, fragIdx + 1, totalSize);
+}
+
+void setup(void) {
+    Serial.begin(115200);
+    Serial.println();
+    Serial.print("Wireless DMX TX starting");
+    Serial.print(", channel=");
+    Serial.println(ESPNOW_CHANNEL);
+
+    WiFi.mode(WIFI_STA);
+    WiFi.disconnect(false);
+
+    if (!quickEspNow.begin(ESPNOW_CHANNEL, WIFI_IF_STA, false)) {
+        Serial.println("Failed to initialize QuickESPNow");
+        while (true) delay(10);
+    }
+
+    /* Count per-fragment send confirmations. Kept free of Serial: it may run
+     * from the QuickESPNow ETSTimer task. */
+    quickEspNow.onDataSent([](uint8_t* dstMac, uint8_t status) {
+        (void)dstMac;
+        (void)status;
+        if (g_sendConfirmations < 255) {
+            g_sendConfirmations++;
+        }
+    });
+    quickEspNow.onDataRcvd(onTelemetryReceived);
+
+    {
+        uint8_t macBuffer[6];
+        WiFi.macAddress(macBuffer);
+        char macStr[18];
+        snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+                 macBuffer[0], macBuffer[1], macBuffer[2],
+                 macBuffer[3], macBuffer[4], macBuffer[5]);
+        Serial.print("Own MAC: ");
+        Serial.println(macStr);
+    }
+
+    /* TEST HOOKS: initialize the frame sequence (default 0). */
+#if defined(TEST_SEQUENCE_WRAP)
+    g_frameSequence = 0xFFFFFFFEUL;
+#elif defined(TEST_FORCE_SEQUENCE_START)
+    g_frameSequence = TEST_FORCE_SEQUENCE_START;
+#endif
+
+    /* TEST HOOKS: build the per-frame send slot list (default {0,1,2}). */
+    buildTxSlotList();
+
+    delay(500);
+
+    Serial.println();
+    Serial.printf("TX ready seq=%u\n", g_frameSequence);
+    Serial.printf("refresh=%uHz\n", WIRELESS_REFRESH_HZ);
+    Serial.printf("header=%d payload=%d total=%d frags=%d\n",
+                  static_cast<int>(DMX_HEADER_SIZE),
+                  static_cast<int>(DMX_PAYLOAD_SIZE),
+                  static_cast<int>(DMX_TOTAL_PACKET_SIZE),
+                  static_cast<int>(DMX_FRAGMENTS_PER_UNIVERSE));
+    Serial.printf("slots=%d", txSlotCount);
+    for (uint8_t i = 0; i < txSlotCount; i++) {
+        Serial.printf(" %u", txSlotList[i]);
+    }
+    Serial.println();
+    if (txSlotCount != DMX_FRAGMENTS_PER_UNIVERSE) {
+        Serial.println("NOTE: TEST hook active (slot list differs from default {0,1,2})");
+    }
+}
+
+/* --------------------------------------------------------------------------
+ * Non-blocking frame state machine:
+ *   IDLE -> GENERATE -> SEND(all fragments) -> DRAIN(queue empty) -> IDLE
+ * -------------------------------------------------------------------------- */
+enum TxState {
+    TX_IDLE,
+    TX_GENERATING,
+    TX_SENDING,
+    TX_DRAIN
+#if defined(TEST_DELAYED_FRAGMENT)
+    , TX_LATE
+#endif
+};
+static TxState txState = TX_IDLE;
+static unsigned long lastFrameGenerationTime = 0;
+static unsigned long stateEnteredTime = 0;
+static uint8_t currentFragment = 0;
+
+/* TX per-frame overhead (measured ~27 ms for a 512-channel frame: radio airtime + drain).
+ * When defined, we use it as a budget subtraction so period ≈ 1000/Hz rather than
+ * interval + overhead. Omit -DWIRELESS_TX_OVERHEAD_MS=N to restore the original behavior. */
+#ifndef WIRELESS_TX_OVERHEAD_MS
+#define WIRELESS_TX_OVERHEAD_MS 27UL      /* measured median from the sweep */
+#endif
+
+/* Safety bound so a stuck queue cannot wedge the state machine. Tightened to ~100 ms,
+ * and configurable via -DWIRELESS_TX_DRAIN_TIMEOUT_MS if needed. */
+#ifndef WIRELESS_TX_DRAIN_TIMEOUT_MS
+#define WIRELESS_TX_DRAIN_TIMEOUT_MS 100UL /* down from 200 ms; still covers the drain case */
+#endif
+
+/* Effective interval = requested interval minus overhead (budget pacing).
+ * Clamp at zero: unsigned subtraction must not wrap at/above the estimated
+ * overhead ceiling. At that point the state machine runs as fast as the
+ * completed-fragment drain permits, rather than waiting for a huge interval. */
+static constexpr unsigned long TX_INTERVAL_MS =
+    (WIRELESS_REFRESH_INTERVAL_MS > WIRELESS_TX_OVERHEAD_MS)
+        ? (WIRELESS_REFRESH_INTERVAL_MS - WIRELESS_TX_OVERHEAD_MS)
+        : 0UL;
+
+/* TEST HOOK (Feature 6, Test 6): late-fragment state. */
+#if defined(TEST_DELAYED_FRAGMENT)
+static bool     lateSent = false;
+static uint32_t lateSeq  = 0;
+/* Hold the late fragment until this long after the frame completed.
+ * Chosen > the receiver's STAGING_TIMEOUT_MS (2000 ms) yet < its
+ * TRANSMITTER_RESET_RECOVERY_MS (3000 ms), so the receiver classifies
+ * the late fragment as STALE (live link) rather than as a re-baseline. */
+static const unsigned long TEST_DELAYED_FRAGMENT_DELAY_MS = 2500UL;
+#endif
+
+void loop(void) {
+    const unsigned long now = millis();
+
+    reportTelemetry();
+
+    switch (txState) {
+        case TX_IDLE:
+            if (now - lastFrameGenerationTime >= TX_INTERVAL_MS) {
+                txState = TX_GENERATING;
+                stateEnteredTime = now;
+                Serial.println("TX GENERATE: starting new frame");
+            }
+            break;
+
+        case TX_GENERATING:
+            generateTestUniverse(g_frameSequence);
+            currentFragment = 0;
+            g_sendConfirmations = 0;   /* reset before the sends so all are counted */
+            Serial.printf("TX FRAME seq=%u fragments=%u\n",
+                          g_frameSequence, txSlotCount);
+            txState = TX_SENDING;
+            stateEnteredTime = now;
+            break;
+
+        case TX_SENDING:
+            if (currentFragment < txSlotCount) {
+                submitFragment(g_frameSequence, txSlotList[currentFragment]);
+                currentFragment++;
+            } else {
+                /* All fragments queued - wait for the queue to drain. */
+                txState = TX_DRAIN;
+                stateEnteredTime = now;
+            }
+            break;
+
+        case TX_DRAIN:
+            if (g_sendConfirmations >= txSlotCount ||
+                (now - stateEnteredTime >= WIRELESS_TX_DRAIN_TIMEOUT_MS)) {
+                /* Frame fully transmitted; advance to the next one. */
+                g_frameSequence++;
+                lastFrameGenerationTime = now;
+#if defined(TEST_DELAYED_FRAGMENT)
+                /* TEST HOOK (Test 6): schedule one late fragment of the
+                 * frame we just completed. The receiver must flag it
+                 * STALE (older-or-equal than active, link still live). */
+                lateSeq = g_frameSequence - 1;
+                lateSent = false;
+                txState = TX_LATE;
+                stateEnteredTime = now;
+                Serial.println("TX LATE: scheduling delayed fragment");
+#else
+                txState = TX_IDLE;
+                Serial.printf("TX FRAME complete seq=%u, next seq=%u\n",
+                              g_frameSequence, g_frameSequence + 1);
+#endif
+            }
+            break;
+#if defined(TEST_DELAYED_FRAGMENT)
+        case TX_LATE:
+            if (!lateSent) {
+                /* Hold, then transmit one fragment of the previous frame. */
+                if ((now - stateEnteredTime) >= TEST_DELAYED_FRAGMENT_DELAY_MS) {
+                    g_sendConfirmations = 0; /* count only the late send */
+                    submitFragment(lateSeq, 0);
+                    lateSent = true;
+                    stateEnteredTime = now;
+                    Serial.println("TX LATE: transmitted delayed fragment of previous frame");
+                }
+            } else if (g_sendConfirmations >= 1 ||
+                       (now - stateEnteredTime) >= WIRELESS_TX_DRAIN_TIMEOUT_MS)) {
+                txState = TX_IDLE;
+                Serial.println("TX LATE: complete, resuming normal frames");
+            }
+            break;
+#endif
+    }
+}

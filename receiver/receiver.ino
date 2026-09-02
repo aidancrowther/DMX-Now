@@ -15,6 +15,8 @@
  *     -> on COMPLETE + integrity pass: pointer-swap promote to active
  *     -> dmxA.setChans(active)   (espDMX copies into its own buffer)
  *     -> espDMX self-refreshes the last active universe continuously.
+ *   - Low-rate ReceiverTelemetryPacket broadcast with deterministic phase and
+ *     bounded retry backoff so multiple receivers do not transmit together.
  *
  * MAX3485 driver enable (GPIO2 via inverting 2N2222):
  *   GPIO2 HIGH -> transistor ON  -> DE LOW  -> DMX output DISABLED
@@ -40,7 +42,7 @@
  * -------------------------------------------------------------------------- */
 static const int PIN_DMX_DATA    = 1; // GPIO1 / UART0 TX -> DMX data / MAX3485 DI
 static const int PIN_DMX_ENABLE  = 2; // GPIO2 -> MAX3485 DE via inverting 2N2222
-static const int PIN_BATTERY_LOW = 3; // GPIO3 -> future low-battery input
+static const int PIN_BATTERY_LOW = 3; // GPIO3 -> HIGH when battery is low
 
 /* --------------------------------------------------------------------------
  * Reconstruction configuration
@@ -53,6 +55,28 @@ static const unsigned long STAGING_TIMEOUT_MS = 2000UL;
  * restarted). Chosen as 3x the 1 Hz refresh period so a live link never
  * falsely re-baselines. Wrap-safe via millis(). */
 static const unsigned long TRANSMITTER_RESET_RECOVERY_MS = 3000UL;
+
+/* Telemetry is intentionally low priority and approximately 4-5 seconds apart.
+ * The per-receiver phase and per-cycle jitter spread simultaneous receivers. */
+#ifndef TELEMETRY_PERIOD_MS
+#define TELEMETRY_PERIOD_MS 4000UL
+#endif
+#ifndef TELEMETRY_JITTER_MS
+#define TELEMETRY_JITTER_MS 1000UL
+#endif
+#ifndef TELEMETRY_RETRY_BACKOFF_MS
+#define TELEMETRY_RETRY_BACKOFF_MS 250UL
+#endif
+#define TELEMETRY_FIRMWARE_VERSION 1U
+
+/* Battery comparator filtering.  Override either value with a compiler
+ * definition when a different hardware debounce period is required. */
+#ifndef BATTERY_LOW_ASSERT_MS
+#define BATTERY_LOW_ASSERT_MS 2000UL
+#endif
+#ifndef BATTERY_LOW_CLEAR_MS
+#define BATTERY_LOW_CLEAR_MS 5000UL
+#endif
 
 /* Bounded callback->loop handoff ring. One more than QuickESPNow's own RX
  * queue depth (ESPNOW_QUEUE_SIZE = 3), so a tight 3-fragment burst is never
@@ -102,6 +126,29 @@ static unsigned long lastCompletionTimeMs  = 0;
 static unsigned long lastAcceptedFragmentTimeMs = 0; /* drives reset recovery */
 static int8_t   lastRssi = 0;
 
+/* Battery monitor state — owned exclusively by loop(). */
+static bool batteryLow = false;
+static bool batteryInputHigh = false;
+static unsigned long batteryInputChangedMs = 0;
+
+static void updateBatteryLow(void) {
+    const bool inputHigh = (digitalRead(PIN_BATTERY_LOW) == HIGH);
+    const unsigned long now = millis();
+
+    if (inputHigh != batteryInputHigh) {
+        batteryInputHigh = inputHigh;
+        batteryInputChangedMs = now;
+    }
+
+    const unsigned long requiredMs = inputHigh ? BATTERY_LOW_ASSERT_MS
+                                               : BATTERY_LOW_CLEAR_MS;
+    if ((now - batteryInputChangedMs) < requiredMs) return;
+
+    if (batteryLow != inputHigh) {
+        batteryLow = inputHigh;
+    }
+}
+
 /* --------------------------------------------------------------------------
  * Diagnostic counters — local only, no telemetry (usable for future telemetry).
  * -------------------------------------------------------------------------- */
@@ -116,6 +163,77 @@ static unsigned long completeUniverses      = 0;
 static unsigned long integrityFailures      = 0;
 static unsigned long rxRingOverflow         = 0;
 static unsigned long resetRebaselined       = 0;
+
+/* Telemetry scheduling and identity.  These values are collected in loop()
+ * context; no telemetry work is performed by the receive callback. */
+static uint32_t receiverId = 0;
+static uint8_t receiverMac[6];
+static uint32_t telemetrySequence = 0;
+static unsigned long nextTelemetryMs = 0;
+static uint16_t telemetryRetryCount = 0;
+
+static uint32_t saturatingU32(unsigned long value) {
+    return (value > 0xFFFFFFFFUL) ? 0xFFFFFFFFUL : (uint32_t)value;
+}
+
+static unsigned long telemetryDelayMs(void) {
+    return TELEMETRY_PERIOD_MS + (TELEMETRY_JITTER_MS ?
+           (unsigned long)random(TELEMETRY_JITTER_MS + 1UL) : 0UL);
+}
+
+static void scheduleTelemetry(unsigned long now, bool initial) {
+    /* Startup uses a deterministic slot within the jitter window. Later cycles
+     * use a fresh random jitter, keeping each interval within 4-5 seconds by
+     * default rather than adding phase and jitter together. */
+    const unsigned long offset = initial
+        ? (TELEMETRY_JITTER_MS ? receiverId % (TELEMETRY_JITTER_MS + 1UL) : 0UL)
+        : (telemetryDelayMs() - TELEMETRY_PERIOD_MS);
+    nextTelemetryMs = now + TELEMETRY_PERIOD_MS + offset;
+}
+
+static void transmitTelemetry(void) {
+    ReceiverTelemetryPacket packet;
+    packet.magic = DMX_PACKET_MAGIC;
+    packet.protocolVersion = DMX_PROTO_VERSION;
+    packet.packetType = TELEMETRY_PACKET_TYPE;
+    packet.universeId = DMX_UNIVERSE_ID;
+    packet.receiverId = receiverId;
+    memcpy(packet.macAddress, receiverMac, sizeof(receiverMac));
+    packet.uptimeSeconds = (uint32_t)(millis() / 1000UL);
+    packet.batteryLow = batteryLow ? 1U : 0U;
+    packet.lastActiveSequence = lastActiveSequence;
+    packet.completeUniverses = saturatingU32(completeUniverses);
+    packet.incompleteUniverses = saturatingU32(
+        abandonedIncomplete > (0xFFFFFFFFUL - abandonedTimeout)
+            ? 0xFFFFFFFFUL
+            : abandonedIncomplete + abandonedTimeout);
+    packet.malformedPackets = saturatingU32(malformedFragments);
+    packet.timeSinceLastUniverseMs = hasActiveWirelessFrame
+        ? saturatingU32(millis() - lastCompletionTimeMs) : 0xFFFFFFFFUL;
+    packet.lastRssi = lastRssi;
+    packet.firmwareVersion = TELEMETRY_FIRMWARE_VERSION;
+    packet.telemetrySequence = telemetrySequence++;
+
+    if (!quickEspNow.readyToSendData()) {
+        telemetryRetryCount++;
+        nextTelemetryMs = millis() + TELEMETRY_RETRY_BACKOFF_MS;
+        return;
+    }
+
+    const comms_send_error_t result = quickEspNow.sendBcast(
+        reinterpret_cast<const uint8_t*>(&packet), sizeof(packet));
+    if (result == COMMS_SEND_OK) {
+        telemetryRetryCount = 0;
+        scheduleTelemetry(millis(), false);
+    } else {
+        telemetryRetryCount++;
+        /* Bounded deterministic retry spacing avoids a busy-loop when the
+         * ESP-NOW queue is full or another sender is occupying the radio. */
+        const unsigned long backoff = TELEMETRY_RETRY_BACKOFF_MS *
+            (telemetryRetryCount > 8 ? 8 : telemetryRetryCount);
+        nextTelemetryMs = millis() + backoff;
+    }
+}
 
 /* --------------------------------------------------------------------------
  * Helpers
@@ -357,6 +475,10 @@ static void acceptFragment(const uint8_t* pkt, uint32_t seq,
  * assembles into staging, flags stale/duplicate, supersedes, or re-baselines.
  * -------------------------------------------------------------------------- */
 static void processPacket(const uint8_t* pkt, uint8_t len, int8_t rssi) {
+    /* Telemetry is intended for the transmitter; do not classify it as a
+     * malformed DMX fragment when receivers hear one another. */
+    if (len >= 4 && pkt[3] == TELEMETRY_PACKET_TYPE) return;
+
     DmxFragmentPacket hdr;
     memcpy(&hdr, pkt, sizeof(hdr));
 
@@ -469,6 +591,14 @@ void setup(void) {
     /* GPIO2 must be HIGH during ESP8266 boot; the external base resistor is
      * 100K so the transistor circuit does not prevent normal ESP-01 startup. */
     pinMode(PIN_DMX_ENABLE, OUTPUT);
+    pinMode(PIN_BATTERY_LOW, INPUT);
+
+    receiverId = ESP.getChipId();
+    WiFi.macAddress(receiverMac);
+    randomSeed(receiverId ^ micros());
+
+    batteryInputHigh = (digitalRead(PIN_BATTERY_LOW) == HIGH);
+    batteryInputChangedMs = millis();
 
     /* Keep MAX3485 disabled while everything initializes. */
     setDmxOutputEnabled(false);
@@ -503,12 +633,15 @@ void setup(void) {
     setDmxOutputEnabled(true);
 
     delay(200);
+
+    scheduleTelemetry(millis(), true);
 }
 
 /* --------------------------------------------------------------------------
  * Main loop — SOLE owner of the reconstruction state machine.
  *   1. Drain the bounded handoff ring (each pending fragment -> processPacket).
  *   2. Enforce the staging timeout (abandon a partially assembled frame).
+ *   3. Send low-priority telemetry when its collision-avoiding slot is due.
  *   (No periodic stats printing — no Serial on this target.)
  * -------------------------------------------------------------------------- */
 static uint8_t rxWorkBuf[RX_SLOT_MAX];
@@ -517,13 +650,16 @@ void loop(void) {
     uint8_t len;
     int8_t  rssi;
 
-    /* 1. Drain every pending fragment (bounded by RX_RING_SIZE). */
+    /* 1. Debounce the active-HIGH battery comparator input. */
+    updateBatteryLow();
+
+    /* 2. Drain every pending fragment (bounded by RX_RING_SIZE). */
     while (popPendingFrag(rxWorkBuf, len, rssi)) {
         packetsReceived++;
         processPacket(rxWorkBuf, len, rssi);
     }
 
-    /* 2. Staging timeout: abandon a frame that stopped receiving fragments. */
+    /* 3. Staging timeout: abandon a frame that stopped receiving fragments. */
     if (stagingActive &&
         (millis() - stagingLastActivityMs) >= STAGING_TIMEOUT_MS) {
         abandonedTimeout++;
@@ -531,5 +667,9 @@ void loop(void) {
         stagingReceivedMask = 0;
         stagingUniqueCount  = 0;
         coverageClear();
+    }
+
+    if ((long)(millis() - nextTelemetryMs) >= 0) {
+        transmitTelemetry();
     }
 }

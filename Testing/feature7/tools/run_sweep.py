@@ -12,6 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 FLASH_TX = ROOT / "flash_espnow_tx.sh"
 FLASH_MONITOR = ROOT / "flash_dmx_monitor.sh"
+FLASH_PICO_MONITOR = ROOT / "flash_pico_dmx_monitor.sh"
 ANALYZER = Path(__file__).with_name("analyze.py")
 
 
@@ -36,20 +37,19 @@ def capture(port, settle, seconds, output):
     with serial.Serial(port, 115200, timeout=0.2) as ser:
         ser.reset_input_buffer()
         data = bytearray()
-        # Opening the MEGA port commonly asserts reset. Wait for READY before
-        # sending START so the command cannot be lost during boot.
+        # Opening the MEGA port commonly asserts reset. Wait briefly for READY
+        # when it is available, but do not require it: native Pico USB CDC
+        # often remains attached to an already-running sketch and does not
+        # replay its boot banner when the host opens the port.
         boot_deadline = time.monotonic() + 8
         while time.monotonic() < boot_deadline and b"READY" not in data:
             chunk = ser.read(256)
             if chunk:
                 data.extend(chunk)
-        if b"READY" not in data:
-            output.write_bytes(data)
-            return False
 
-        # Synchronize after boot. USB-serial adapters can lose the first
-        # host write while the MEGA's USB receive path settles, so require a
-        # response and retry before starting a measurement.
+        # Synchronize after boot (or with an already-running Pico). USB-serial
+        # adapters can lose the first host write while the USB receive path
+        # settles, so require a response and retry before starting a run.
         time.sleep(0.5)
         status_ok = False
         for _ in range(4):
@@ -89,6 +89,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--tx-port", default="/dev/ttyUSB0")
     ap.add_argument("--monitor-port", default="/dev/ttyUSB1")
+    ap.add_argument("--monitor-type", choices=("mega", "pico"), default="mega",
+                    help="DMX monitor hardware (default: mega)")
     ap.add_argument("--rates", default="5,10,15,20,22,25,27,30,32,35,37,40")
     ap.add_argument("--settle", type=int, default=10)
     ap.add_argument("--seconds", type=int, default=60)
@@ -104,11 +106,12 @@ def main():
         ap.error("rates must be positive integers")
     require_port(args.tx_port)
     require_port(args.monitor_port)
-    for script in (FLASH_TX, FLASH_MONITOR):
+    monitor_flash = FLASH_PICO_MONITOR if args.monitor_type == "pico" else FLASH_MONITOR
+    for script in (FLASH_TX, monitor_flash):
         if not script.is_file() or not os.access(script, os.X_OK):
             raise RuntimeError(f"required executable is missing or not executable: {script}")
     if args.flash_monitor:
-        result = subprocess.run([str(FLASH_MONITOR), "-f", "--port", args.monitor_port], cwd=ROOT, check=False)
+        result = subprocess.run([str(monitor_flash), "-f", "--port", args.monitor_port], cwd=ROOT, check=False)
         if result.returncode:
             return result.returncode
 
@@ -116,6 +119,7 @@ def main():
     run_dir.mkdir(parents=True, exist_ok=False)
     manifest = {"started_utc": datetime.now(timezone.utc).isoformat(),
                 "tx_port": args.tx_port, "monitor_port": args.monitor_port,
+                "monitor_type": args.monitor_type,
                 "rates": rates, "settle_seconds": args.settle,
                 "measure_seconds": args.seconds, "overhead_ms": args.overhead,
                 "drain_timeout_ms": args.drain_timeout, "receiver_modified": False,
