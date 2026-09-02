@@ -528,20 +528,18 @@ the wireless receive callback.
 
 Telemetry must remain lower priority than realtime DMX reception.
 
-The production transmitter sketch at `./transmitter/transmitter.ino` currently
-uses the verified deterministic test universe (`universe[i] = (i + sequence) &
-0xFF`) and reports received telemetry as `RX TELEMETRY ...` lines at 115200 baud.
-It is intentionally separate from the later ENTTEC serial-input feature.
+The production transmitter sketch at `./transmitter/transmitter.ino` accepts
+ENTTEC DMX USB Pro input and processes received telemetry internally. UART0 is
+the binary ENTTEC input, so text output is disabled by default and must not be
+enabled during normal operation. The transmitter retains only the newest
+completed serial universe and broadcasts snapshots at the configured wireless
+refresh rate.
 
-Normal transmitter runtime packet/frame diagnostics are disabled so serial
-output cannot constrain the wireless refresh loop. Define
-`TRANSMITTER_VERBOSE_LOGGING` only when interactive TX diagnostics are needed;
-the optional logs should not be used for refresh-rate measurements.
-
-Receiver telemetry Serial reporting is controlled independently by
-`TRANSMITTER_TELEMETRY_LOGGING` and defaults to enabled for hardware testing.
-Build with `-DTRANSMITTER_TELEMETRY_LOGGING=0` to suppress `RX TELEMETRY ...`
-lines while continuing to receive, validate, and drain telemetry packets:
+For bench diagnostics only, `TRANSMITTER_TELEMETRY_LOGGING` and
+`TRANSMITTER_VERBOSE_LOGGING` can enable text output, but doing so makes UART0
+unsuitable for simultaneous ENTTEC input and must not be used for protocol or
+refresh-rate measurements. With telemetry logging disabled, packets are still
+received, validated, and drained:
 
 ```bash
 ./flash_transmitter.sh --define=-DTRANSMITTER_TELEMETRY_LOGGING=0
@@ -757,10 +755,10 @@ This script compiles and flashes to `/dev/ttyUSB0`. Adjust the port as needed.
 
 ### Transmitter
 
-The Feature 5 wireless transmitter test lives at `./tests/espnow_universe_tx/`.
-The receiver-only telemetry integration is exercised by the production
-`./transmitter/transmitter.ino` sketch, which currently preserves that same
-deterministic universe generator while adding telemetry reporting.
+The Feature 5 wireless transmitter test remains at `./tests/espnow_universe_tx/`.
+The production `./transmitter/transmitter.ino` sketch now accepts ENTTEC DMX
+USB Pro input while retaining the verified wireless fragmentation and telemetry
+processing paths.
 
 Verified 2026-08-24 against `esp8266:esp8266` core 3.1.2, arduino-cli 1.4.1,
 via `./flash_espnow_tx.sh` (compile-only, no `-f`):
@@ -1021,6 +1019,37 @@ Hardware validation:
   analyzer was reflashed first and all 12/12 rate captures succeeded. The
   results reproduce a conservative reliable ceiling of 20 Hz.
 
+### Feature 8: ENTTEC DMX USB Pro Serial Input/Parser
+
+Status: IMPLEMENTED (compile-verified 2026-09-02; hardware verification pending)
+
+The integrated transmitter at `./transmitter/transmitter.ino` accepts the
+ENTTEC DMX USB Pro packet format on UART0:
+
+```text
+0x7E | label | length LSB | length MSB | payload | 0xE7
+```
+
+`SEND_DMX_PACKET` (`0x06`) is supported. Its payload must contain DMX start
+code `0x00` followed by 1–512 channel slots. Valid packets are committed only
+after the complete payload and terminator are received. Short universes clear
+unused channel slots, preventing stale values from remaining active.
+
+Parsing is performed by a bounded, non-blocking byte state machine. It accepts
+partial serial reads, rejects malformed/oversized/unsupported packets without
+changing the current universe, and retains only the newest completed serial
+universe. Each wireless transmission takes a fixed snapshot before its three
+fragments are queued, preventing a frame from mixing two input universes.
+
+UART0 is configured for `57600 8N2`, the DMX USB Pro serial format. Telemetry
+packets continue to be received and validated, but telemetry and diagnostic
+text output is disabled by default because UART0 is the binary ENTTEC input.
+
+The 57600-baud input limits a complete 513-byte DMX payload to approximately
+10–11 frames per second before serial framing overhead. Hardware verification
+still requires an ENTTEC-compatible host or serial test source and the existing
+receiver/DMX monitor.
+
 ### Feature 9: Low-Battery GPIO Monitoring
 
 Status: COMPLETE (hardware-verified 2026-09-02 ✓)
@@ -1077,7 +1106,7 @@ Expected approximate sequence:
 5. Wireless packet format and fragmentation ✓ (Feature 5, verified 2026-08-24)
 6. Receiver universe reconstruction/double buffering ✓ (Feature 6, verified 2026-08-27)
 7. Configurable transmitter wireless refresh + reliable-rate test harness ✓ (hardware-validated 2026-09-02; conservative reliable ceiling 20 Hz)
-8. ENTTEC serial input/parser
+8. ENTTEC serial input/parser ✓ (implemented; hardware verification pending)
 9. Low-battery GPIO monitoring ✓ (hardware-verified 2026-09-02)
 10. Receiver telemetry ✓ (multi-receiver hardware-verified 2026-09-02)
 11. Status/management interface

@@ -1,13 +1,12 @@
 /**
- * Integrated Wireless DMX transmitter: deterministic universe broadcast plus
- * receiver telemetry reporting.
- * Broadcasts deterministic 512-byte universes via QuickESPNow broadcast.
+ * Integrated Wireless DMX transmitter: ENTTEC DMX USB Pro serial input,
+ * wireless universe broadcast, and receiver telemetry reporting.
  *
  * Each universe is split into DMX_FRAGMENTS_PER_UNIVERSE (3) fragments.
  * A frame is fully "sent" once all 3 fragments have been transmitted and the
  * QuickESPNow TX queue has drained (confirmed via the onDataSent callback).
  * The frame sequence increments after each complete frame so the receiver can
- * observe a varying (but still deterministic) payload pattern.
+ * observe monotonically sequenced completed input snapshots.
  */
 
 #include <Arduino.h>
@@ -18,28 +17,27 @@
  * (WirelessDMX library, pinned by the build via --library). */
 #include <wireless_protocol.h>
 
-/* Runtime TX diagnostics are disabled by default so UART activity cannot
- * consume loop time or distort refresh-rate measurements. Define
- * TRANSMITTER_VERBOSE_LOGGING for development diagnostics. */
+/* The UART is the PC-facing ENTTEC protocol port. Do not enable text logging
+ * on this port: it would corrupt the binary protocol stream. */
 #ifdef TRANSMITTER_VERBOSE_LOGGING
 #define TX_LOG(...) Serial.printf(__VA_ARGS__)
 #else
 #define TX_LOG(...) do { } while (0)
 #endif
 
-/* Receiver telemetry remains enabled by default for hardware verification.
- * Set -DTRANSMITTER_TELEMETRY_LOGGING=0 for silent production/sweep output;
- * telemetry reception and packet validation continue regardless. */
+/* The ENTTEC input and telemetry output share UART0. Keep telemetry logging
+ * disabled by default because text would corrupt the binary input stream.
+ * Packet reception/validation continues regardless. */
 #ifndef TRANSMITTER_TELEMETRY_LOGGING
-#define TRANSMITTER_TELEMETRY_LOGGING 1
+#define TRANSMITTER_TELEMETRY_LOGGING 0
 #endif
 
 /* --------------------------------------------------------------------------
  * TEST HOOK CONFIG (Feature 6) — ALL DEFAULT OFF.
  * To run a fault-injection test, uncomment (or add) exactly ONE mode below,
  * then build/flash with the existing script (./flash_espnow_tx.sh, add -f to
- * flash). With this block EMPTY the transmitter is the known-good Feature 5
- * behavior (slots {0,1,2}, no corruption, sequence starts at 0).
+ * flash). With this block EMPTY the transmitter sends real ENTTEC input (slots
+ * {0,1,2}, no corruption, sequence starts at 0).
  *
  *   #define TEST_DROP_FRAGMENT_INDEX      1   // omit fragment 1 (middle) each frame
  *   #define TEST_DUPLICATE_FRAGMENT_INDEX 1   // send fragment 1 twice each frame
@@ -54,8 +52,13 @@
  * re-run ./flash_espnow_tx.sh. Do NOT leave a fault mode enabled.
  * -------------------------------------------------------------------------- */
 
-/* Static universe buffer (the latest generated snapshot). */
+/* Latest complete universe received from the PC. */
 static uint8_t g_universe[DMX_UNIVERSE_SIZE];
+
+/* Snapshot used by one wireless frame. The parser may commit a newer PC frame
+ * while this frame's fragments are still being queued; keeping a snapshot
+ * prevents a wireless frame from containing bytes from two universes. */
+static uint8_t g_txUniverse[DMX_UNIVERSE_SIZE];
 
 /* Sequence number for the current frame (incremented after a full frame). */
 static uint32_t g_frameSequence = 0;
@@ -73,6 +76,125 @@ static TelemetrySlot telemetryRing[TELEMETRY_RING_SIZE];
 static volatile uint8_t telemetryHead = 0;
 static volatile uint8_t telemetryTail = 0;
 static unsigned long telemetryPacketsDropped = 0;
+
+/* --------------------------------------------------------------------------
+ * ENTTEC DMX USB Pro input (Feature 8)
+ *
+ * Packet format: 0x7E, label, length LSB, length MSB, payload, 0xE7.
+ * SEND_DMX_PACKET (0x06) payload is start code followed by 1..512 channels.
+ * The parser is deliberately byte-wise and non-blocking; Serial input can
+ * arrive in arbitrarily sized chunks and never delays the RF state machine.
+ * -------------------------------------------------------------------------- */
+static const uint8_t ENTTEC_START = 0x7E;
+static const uint8_t ENTTEC_END = 0xE7;
+static const uint8_t ENTTEC_SEND_DMX_PACKET = 0x06;
+static const uint16_t ENTTEC_MAX_PAYLOAD = DMX_UNIVERSE_SIZE + 1U;
+static uint8_t enttecPayload[ENTTEC_MAX_PAYLOAD];
+static uint16_t enttecLength = 0;
+static uint16_t enttecPayloadIndex = 0;
+static uint32_t enttecDiscardRemaining = 0;
+static uint8_t enttecLabel = 0;
+static unsigned long enttecValidFrames = 0;
+static unsigned long enttecMalformedFrames = 0;
+
+enum EnttecParserState {
+    ENTTEC_WAIT_START,
+    ENTTEC_READ_LABEL,
+    ENTTEC_READ_LENGTH_LOW,
+    ENTTEC_READ_LENGTH_HIGH,
+    ENTTEC_READ_PAYLOAD,
+    ENTTEC_READ_TERMINATOR,
+    ENTTEC_DISCARD_PAYLOAD,
+    ENTTEC_DISCARD_TERMINATOR
+};
+static EnttecParserState enttecState = ENTTEC_WAIT_START;
+
+static void resetEnttecParser(void) {
+    enttecState = ENTTEC_WAIT_START;
+    enttecLength = 0;
+    enttecPayloadIndex = 0;
+    enttecDiscardRemaining = 0;
+}
+
+static void startEnttecPacket(void) {
+    enttecState = ENTTEC_READ_LABEL;
+    enttecLength = 0;
+    enttecPayloadIndex = 0;
+    enttecDiscardRemaining = 0;
+}
+
+static void commitEnttecUniverse(void) {
+    /* ENTTEC includes the DMX start code in the payload; this project carries
+     * channel slots only, so reject non-zero start codes and strip byte 0. */
+    if (enttecLabel != ENTTEC_SEND_DMX_PACKET ||
+        enttecLength < 2 || enttecLength > ENTTEC_MAX_PAYLOAD ||
+        enttecPayload[0] != 0x00) {
+        if (enttecMalformedFrames < 0xFFFFFFFFUL) enttecMalformedFrames++;
+        return;
+    }
+
+    memset(g_universe, 0, sizeof(g_universe));
+    memcpy(g_universe, enttecPayload + 1, enttecLength - 1);
+    if (enttecValidFrames < 0xFFFFFFFFUL) enttecValidFrames++;
+}
+
+static void processEnttecByte(uint8_t value) {
+    switch (enttecState) {
+        case ENTTEC_WAIT_START:
+            if (value == ENTTEC_START) startEnttecPacket();
+            break;
+        case ENTTEC_READ_LABEL:
+            enttecLabel = value;
+            enttecState = ENTTEC_READ_LENGTH_LOW;
+            break;
+        case ENTTEC_READ_LENGTH_LOW:
+            enttecLength = value;
+            enttecState = ENTTEC_READ_LENGTH_HIGH;
+            break;
+        case ENTTEC_READ_LENGTH_HIGH:
+            enttecLength |= (uint16_t)value << 8;
+            enttecPayloadIndex = 0;
+            if (enttecLength >= 2 && enttecLength <= ENTTEC_MAX_PAYLOAD) {
+                enttecState = ENTTEC_READ_PAYLOAD;
+            } else {
+                enttecDiscardRemaining = enttecLength;
+                enttecState = ENTTEC_DISCARD_PAYLOAD;
+            }
+            break;
+        case ENTTEC_READ_PAYLOAD:
+            enttecPayload[enttecPayloadIndex++] = value;
+            if (enttecPayloadIndex >= enttecLength)
+                enttecState = ENTTEC_READ_TERMINATOR;
+            break;
+        case ENTTEC_READ_TERMINATOR:
+            if (value == ENTTEC_END) commitEnttecUniverse();
+            else if (enttecMalformedFrames < 0xFFFFFFFFUL) enttecMalformedFrames++;
+            resetEnttecParser();
+            if (value == ENTTEC_START) startEnttecPacket();
+            break;
+        case ENTTEC_DISCARD_PAYLOAD:
+            if (enttecDiscardRemaining > 0) enttecDiscardRemaining--;
+            if (enttecDiscardRemaining == 0)
+                enttecState = ENTTEC_DISCARD_TERMINATOR;
+            break;
+        case ENTTEC_DISCARD_TERMINATOR:
+            if (enttecMalformedFrames < 0xFFFFFFFFUL) enttecMalformedFrames++;
+            resetEnttecParser();
+            if (value == ENTTEC_START) startEnttecPacket();
+            break;
+        default:
+            resetEnttecParser();
+            break;
+    }
+}
+
+static void serviceEnttecInput(void) {
+    /* Bound work per loop so a hostile/overrunning serial source cannot starve
+     * QuickESPNow callbacks or the wireless scheduler. */
+    uint16_t budget = 128;
+    while (Serial.available() > 0 && budget-- > 0)
+        processEnttecByte((uint8_t)Serial.read());
+}
 
 static void onTelemetryReceived(uint8_t* address, uint8_t* data, uint8_t len,
                                 signed int rssi, bool broadcast) {
@@ -144,8 +266,8 @@ static void reportTelemetry(void) {
  * Feature 6 TEST HOOKS (all compile-time, DEFAULT OFF).
  * Enabling any of these changes only the TX test behavior so the receiver's
  * reconstruction / double buffering can be exercised robustly. With NONE
- * defined the transmitter is the known-good Feature 5 behavior: slots {0,1,2},
- * count 3, no corruption, sequence starts at 0.
+ * defined the transmitter uses normal ENTTEC input: slots {0,1,2}, count 3,
+ * no corruption, sequence starts at 0.
  *
  *   TEST_DROP_FRAGMENT_INDEX       omit this fragment (0/1/2) each frame
  *   TEST_DUPLICATE_FRAGMENT_INDEX  send this fragment twice each frame
@@ -161,13 +283,6 @@ static void reportTelemetry(void) {
  * Default (no hooks) = {0,1,2}, count 3. A duplicate appends a 4th slot. */
 static uint8_t txSlotList[DMX_FRAGMENTS_PER_UNIVERSE + 1];
 static uint8_t txSlotCount = DMX_FRAGMENTS_PER_UNIVERSE;
-
-/* Generate the deterministic test universe: g_universe[i] = (i + seq) & 0xFF. */
-void generateTestUniverse(uint32_t seq) {
-    for (uint16_t i = 0; i < DMX_UNIVERSE_SIZE; ++i) {
-        g_universe[i] = static_cast<uint8_t>((static_cast<uint32_t>(i) + seq) & 0xFF);
-    }
-}
 
 /* Build the per-frame send slot list from the (compile-time) test hooks.
  * Default (no hooks) = fragments 0,1,2 in order. A drop removes a slot; a
@@ -225,7 +340,7 @@ static void submitFragment(uint32_t seq, uint8_t fragIdx) {
     uint8_t* pPayload = packetBuffer + DMX_HEADER_SIZE;
     for (uint16_t i = 0; i < payloadLength; ++i) {
         const uint16_t universeIndex = static_cast<uint16_t>(offset) + i;
-        pPayload[i] = (universeIndex < DMX_UNIVERSE_SIZE) ? g_universe[universeIndex] : 0;
+        pPayload[i] = (universeIndex < DMX_UNIVERSE_SIZE) ? g_txUniverse[universeIndex] : 0;
     }
 
 #if defined(TEST_CORRUPT_FRAGMENT_INDEX)
@@ -238,7 +353,7 @@ static void submitFragment(uint32_t seq, uint8_t fragIdx) {
 #endif
         if (corruptAt >= payloadLength) corruptAt = 0;
         const uint16_t uIdx = static_cast<uint16_t>(offset + corruptAt);
-        pPayload[corruptAt] = static_cast<uint8_t>(g_universe[uIdx] ^ 0xFF);
+        pPayload[corruptAt] = static_cast<uint8_t>(g_txUniverse[uIdx] ^ 0xFF);
     }
 #endif
 
@@ -249,17 +364,13 @@ static void submitFragment(uint32_t seq, uint8_t fragIdx) {
 }
 
 void setup(void) {
-    Serial.begin(115200);
-    Serial.println();
-    Serial.print("Wireless DMX TX starting");
-    Serial.print(", channel=");
-    Serial.println(ESPNOW_CHANNEL);
+    /* ENTTEC DMX USB Pro uses 57600 baud, 8 data bits, no parity, 2 stops. */
+    Serial.begin(57600, SERIAL_8N2);
 
     WiFi.mode(WIFI_STA);
     WiFi.disconnect(false);
 
     if (!quickEspNow.begin(ESPNOW_CHANNEL, WIFI_IF_STA, false)) {
-        Serial.println("Failed to initialize QuickESPNow");
         while (true) delay(10);
     }
 
@@ -281,8 +392,7 @@ void setup(void) {
         snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
                  macBuffer[0], macBuffer[1], macBuffer[2],
                  macBuffer[3], macBuffer[4], macBuffer[5]);
-        Serial.print("Own MAC: ");
-        Serial.println(macStr);
+        (void)macStr; /* UART is reserved for ENTTEC binary input. */
     }
 
     /* TEST HOOKS: initialize the frame sequence (default 0). */
@@ -297,22 +407,6 @@ void setup(void) {
 
     delay(500);
 
-    Serial.println();
-    Serial.printf("TX ready seq=%u\n", g_frameSequence);
-    Serial.printf("refresh=%uHz\n", WIRELESS_REFRESH_HZ);
-    Serial.printf("header=%d payload=%d total=%d frags=%d\n",
-                  static_cast<int>(DMX_HEADER_SIZE),
-                  static_cast<int>(DMX_PAYLOAD_SIZE),
-                  static_cast<int>(DMX_TOTAL_PACKET_SIZE),
-                  static_cast<int>(DMX_FRAGMENTS_PER_UNIVERSE));
-    Serial.printf("slots=%d", txSlotCount);
-    for (uint8_t i = 0; i < txSlotCount; i++) {
-        Serial.printf(" %u", txSlotList[i]);
-    }
-    Serial.println();
-    if (txSlotCount != DMX_FRAGMENTS_PER_UNIVERSE) {
-        Serial.println("NOTE: TEST hook active (slot list differs from default {0,1,2})");
-    }
 }
 
 /* --------------------------------------------------------------------------
@@ -369,6 +463,7 @@ static const unsigned long TEST_DELAYED_FRAGMENT_DELAY_MS = 2500UL;
 void loop(void) {
     const unsigned long now = millis();
 
+    serviceEnttecInput();
     reportTelemetry();
 
     switch (txState) {
@@ -381,7 +476,7 @@ void loop(void) {
             break;
 
         case TX_GENERATING:
-            generateTestUniverse(g_frameSequence);
+            memcpy(g_txUniverse, g_universe, sizeof(g_txUniverse));
             currentFragment = 0;
             g_sendConfirmations = 0;   /* reset before the sends so all are counted */
             TX_LOG("TX FRAME seq=%u fragments=%u\n",
