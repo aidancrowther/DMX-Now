@@ -1,0 +1,3 @@
+baseline RESULT seconds=3 checks=125 pass=125 fail=0 no_data=22ms
+zero_one_reject_preserve RESULT seconds=3 checks=133 pass=133 fail=0 no_data=17ms
+followup_recovery RESULT seconds=3 checks=133 pass=120 fail=13 no_data=17ms

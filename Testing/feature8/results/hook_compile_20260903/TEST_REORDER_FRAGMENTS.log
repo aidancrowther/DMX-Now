@@ -1,0 +1,11 @@
+==============================================
+Integrated Wireless DMX Transmitter
+Target board: esp8266:esp8266:generic
+Libraries:
+  QuickESPNow: /home/aidancrowther/Documents/Projects/Cline Testing/libraries/QuickESPNow
+  WirelessDMX: /home/aidancrowther/Documents/Projects/Cline Testing/libraries/WirelessDMX
+Sketch: /home/aidancrowther/Documents/Projects/Cline Testing/transmitter
+Serial port: /dev/ttyUSB0
+Flash after compile: false
+Extra defines: -DTEST_REORDER_FRAGMENTS
+==============================================

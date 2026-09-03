@@ -50,6 +50,130 @@ and deployment logs are written under `Testing/feature8/runs/`.
 The Mega emits one `RESULT` per recording window. A passing result needs
 `checks > 0` and `fail = 0`; `no_data` detects a dead DMX link.
 
+## Comprehensive verification plan
+
+The four smoke tests above establish the basic path, but they are not a full
+Feature 8 acceptance test. Work through the groups below in order. Record the
+firmware build, receiver identity, wiring, port mapping, test command, result
+manifest, and any resets or cable changes for every run.
+
+### Test controls and safety
+
+1. Confirm the receiver is flashed with the default production build (no
+   `RX_VALIDATE_TEST_PATTERN` define). Do not use the `/dev/ttyUSB2` receiver
+   programming port during these tests unless explicitly testing deployment.
+2. Confirm `/dev/ttyUSB0` is the transmitter and `/dev/ttyUSB1` is the Mega;
+   stop other serial monitors before starting a run.
+3. Confirm receiver MAX3485 RO/data -> Mega pin 19 (`RX1`), common ground, and
+   correct RS-485 direction/output wiring. Keep USB charging disconnected from
+   battery-powered receiver hardware unless the charging/isolation procedure is
+   being tested.
+4. Use a unique run directory and a bounded command timeout. If a run fails or
+   a port disappears, stop, save logs, power-cycle only the affected device, and
+   do not infer a protocol failure from a deployment/USB failure.
+5. Before each case, send a known valid baseline and verify it for at least 3
+   seconds. A malformed case passes only if that baseline remains unchanged.
+
+### A. ENTTEC framing and parser state coverage
+
+Use valid payloads with distinctive values at channels 1, 2, 37, 38, 255,
+256, 511, and 512. For each case, verify both acceptance and that the previous
+universe is preserved when rejection is expected.
+
+| ID | Input / fault | Expected behavior |
+|---|---|---|
+| F8-A01 | One-channel universe (`length=2`, start code + 1 slot) | Accept; channels 2–512 become zero. |
+| F8-A02 | 37, 255, 256, 511, and 512 channel universes | Accept exact slots; all trailing slots zero. |
+| F8-A03 | Payload lengths 0 and 1 | Reject safely; preserve baseline; parser recovers on following valid frame. The zero-length discard-state issue was fixed in `transmitter.ino` and covered by the targeted regression run. |
+| F8-A04 | Maximum valid payload length 513 (`0x0201`) | Accept 512 channels exactly. |
+| F8-A05 | Length 514 and 65535 | Reject/discard bounded input; preserve baseline and recover. |
+| F8-A06 | Length byte order swapped (LSB/MSB reversed) | Reject or safely discard; following valid frame accepted. |
+| F8-A07 | Valid `SEND_DMX_PACKET` label `0x06` | Accept. |
+| F8-A08 | Unsupported labels `0x00`, `0x01`, `0x05`, `0x07`, `0x08`, `0xFF` with valid lengths | Reject after complete frame; preserve baseline. |
+| F8-A09 | Nonzero start codes `0x01`, `0x7E`, `0xE7`, `0xFF` | Reject; payload bytes must not alter output. |
+| F8-A10 | Wrong terminator: `0x00`, `0x7E`, `0xFF` | Reject; next valid frame accepted. |
+| F8-A11 | Missing terminator followed by valid frame | No false commit; recover according to delimiter handling. |
+| F8-A12 | Extra bytes after terminator, including noise and `0x7E` | Ignore noise; if `0x7E` starts a new frame, parse it correctly. |
+| F8-A13 | Noise before start delimiter, including long runs and embedded `0xE7` | Ignore noise and accept next valid frame. |
+| F8-A14 | Repeated consecutive start delimiters | Resynchronize without committing partial data. |
+| F8-A15 | Truncated label, length, payload, and terminator, each at every boundary | Preserve baseline; later valid frame accepted. |
+
+### B. Serial delivery, timing, and load
+
+| ID | Method | Expected behavior |
+|---|---|---|
+| F8-B01 | Send every valid frame byte-by-byte with 1–10 ms gaps | Accept without timeout assumptions. |
+| F8-B02 | Split after every header byte, at each payload boundary, and before terminator | Accept exact universe. |
+| F8-B03 | Random chunk sizes with deterministic seed, 100 valid frames | 100 correct updates; no malformed output. |
+| F8-B04 | Back-to-back valid frames with no inter-frame delay | Newest complete state wins; no mixed universe. |
+| F8-B05 | Invalid frame immediately followed by valid frame | Invalid frame does not update output; valid frame recovers. |
+| F8-B06 | Continuous malformed/noise stream for at least 60 s | RF/DMX service remains alive; no watchdog/reset; valid frame afterward recovers. |
+| F8-B07 | Serial input at sustained 57600 8N2 for 5–10 min | No starvation of ESP-NOW callbacks or DMX output; monitor reports no unexplained failures. |
+| F8-B08 | Valid frames faster than the wireless rate | Intermediate states may be dropped, but every promoted wireless frame is internally consistent and the newest state eventually appears. |
+
+### C. Wireless snapshot, fragmentation, and receiver reconstruction
+
+Run with production receiver firmware and use distinctive, non-pattern DMX
+values so an accidental legacy pattern gate cannot pass.
+
+| ID | Condition | Expected behavior |
+|---|---|---|
+| F8-C01 | Normal 3-fragment frame | One complete universe promoted. |
+| F8-C02 | Fragment order 2,0,1 | Complete universe promoted once. |
+| F8-C03 | Drop fragment 0, 1, or 2 | Incomplete frame never reaches DMX; last active remains. |
+| F8-C04 | Duplicate any fragment | No corruption or double promotion. |
+| F8-C05 | Corrupt one payload byte | Production structural mode will not detect arbitrary payload corruption; document this limitation and do not claim checksum integrity. Legacy pattern mode is only a test hook. |
+| F8-C06 | Delay a fragment beyond staging timeout | Partial frame discarded; old active remains. |
+| F8-C07 | Newer frame supersedes incomplete frame | Newer complete frame wins; stale partial data never leaks. |
+| F8-C08 | Receiver starts mid-stream | First complete received universe becomes active, regardless of sequence value. |
+| F8-C09 | Transmitter reset / sequence restart | Receiver re-baselines only after configured quiet period and then accepts a complete frame. |
+| F8-C10 | Sequence rollover (`0xFFFFFFFF -> 0`) | `seqIsNewer` ordering remains correct; no regression to old data. |
+| F8-C11 | Two receivers simultaneously | Both outputs match the source; receiver telemetry does not interrupt DMX reception. |
+
+Existing compile-time fault hooks in `transmitter/transmitter.ino` cover some
+of C02–C06. Each hook must be compiled, flashed, run, and then removed by
+flashing the default build again. The current production receiver deliberately
+does not provide a payload checksum, so payload corruption requires a separate
+integrity feature if detection is a product requirement.
+
+### D. Physical DMX and output fail-safe behavior
+
+| ID | Check | Expected behavior |
+|---|---|---|
+| F8-D01 | Inspect BREAK, MAB, 250000 baud, 8N2, start code 0 | Valid DMX captured by Mega/fixture. |
+| F8-D02 | Verify channels 1–512, especially 255/256 and 511/512 | Exact values, no off-by-one or truncation. |
+| F8-D03 | Update at low (1 Hz) and supported high wireless rates | Receiver repeats last complete universe continuously. |
+| F8-D04 | Remove transmitter RF/input for 30 s | Receiver retains last complete universe; no partial/zero collapse. |
+| F8-D05 | Receiver reset/power-cycle without valid RF | Startup output is the documented zero universe, with no boot garbage exposed. |
+| F8-D06 | Transmitter/receiver power cycles in each order | Devices recover and output the next complete valid universe. |
+| F8-D07 | Disconnect/reconnect DMX cable and change termination | No false pass caused by floating input; document termination and signal quality. |
+| F8-D08 | Battery-low hardware input, if exercised in this feature cycle | Verify the intended active-HIGH debounce and any `0xFF` safety behavior separately from parser acceptance; do not conflate it with Feature 8. |
+
+### E. Long-duration and repeatability
+
+1. Run the normal distinctive-value case for at least 30 minutes; target zero
+   content failures, zero unexplained no-data intervals, and no resets.
+2. Repeat the complete A–D critical subset at least three times after cold
+   power-up and three times after warm reset.
+3. Repeat with the transmitter input source disconnected/reconnected and with
+   a second receiver present. Record RF distance, antenna orientation, power
+   source, and termination.
+4. Preserve raw result JSON, deployment logs, serial-source configuration, and
+   a wiring photo or diagram. A passing run requires both the automated result
+   threshold and a documented physical setup.
+
+### Acceptance gates
+
+Feature 8 is hardware-verified only when:
+
+- all mandatory A–D critical cases pass, including malformed-input recovery;
+- every valid accepted universe matches all 512 channels at the Mega;
+- no invalid input changes the last valid universe;
+- no reset, watchdog, sustained `no_data`, or serial starvation occurs;
+- three repeat runs and the long-duration run meet the same criteria; and
+- known limitations (including the lack of a production payload checksum) are
+  documented rather than counted as silent passes.
+
 ## Compile-only verification
 
 ```bash
@@ -83,10 +207,43 @@ That opt-in build additionally requires
 `stagingUniverse[i] == (i + frameSequence) & 0xFF`, and will reject ordinary
 ENTTEC lighting values. Do not flash that test configuration for Feature 8.
 
-### Prior hardware observation (2026-09-03)
+### Hardware observations (2026-09-03)
 
 Before production validation was made the default, the prior receiver build
 still had the deterministic gate always enabled. The Mega saw live DMX (`133`
 complete frames per three-second window), but arbitrary ENTTEC expectations did
 not promote. That run is not Feature 8 acceptance evidence; re-run the suite
 with the current default receiver build and retain its new manifest.
+
+The following bounded runs were subsequently completed using `/dev/ttyUSB0`
+for the transmitter and `/dev/ttyUSB1` for the Mega; `/dev/ttyUSB2` was not
+accessed:
+
+- `Testing/feature8/runs/20260903_132331_smoke_fixed/`: 4/4 smoke cases passed.
+- `Testing/feature8/runs/20260903_140000_edge_cases_fixed/`: 13/13 targeted
+  parser and boundary cases passed after the parser resynchronization fix.
+
+The transmitter changes made for those edge cases are: zero-length malformed
+payloads now advance directly to terminator handling, and a repeated start
+delimiter while reading the label starts a fresh packet. The latter is not
+applied inside payload bytes, where `0x7E` is valid DMX data.
+
+Additional fault-hook coverage:
+
+- `TEST_REORDER_FRAGMENTS`: compiled, flashed, and the complete smoke suite
+  passed (4/4).
+- `TEST_DUPLICATE_FRAGMENT_INDEX=1`: compiled, flashed, and the complete smoke
+  suite passed (4/4).
+- `TEST_SEQUENCE_WRAP`: compiled successfully, but was not flashed in this
+  session.
+- `TEST_DELAYED_FRAGMENT`: initially exposed a pre-existing hook syntax error;
+  after correction it compiled and flashed. The ordinary smoke suite failed
+  under this altered cadence (short-universe: 38 failures; recovery: 1 failure),
+  so delayed-fragment behavior remains open for a dedicated stale-fragment
+  oracle rather than being counted as a pass.
+
+The production transmitter image was restored and flash-verified after the
+fault-hook tests. The first repeat smoke run before the parser fixes also had
+one intermittent short-universe mismatch (`25/26` frames passed); subsequent
+fixed-image smoke and boundary runs passed. This intermittent observation
+should be investigated during the soak/repeat phase rather than discarded.

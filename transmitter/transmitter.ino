@@ -144,6 +144,15 @@ static void processEnttecByte(uint8_t value) {
             if (value == ENTTEC_START) startEnttecPacket();
             break;
         case ENTTEC_READ_LABEL:
+            /* Treat a repeated start delimiter as a fresh packet boundary.
+             * This allows recovery from noise or a truncated packet that ends
+             * immediately before the next valid frame, without interpreting
+             * the real frame delimiter as its label.  Do not apply this rule
+             * inside the payload: 0x7E is valid DMX data there. */
+            if (value == ENTTEC_START) {
+                startEnttecPacket();
+                break;
+            }
             enttecLabel = value;
             enttecState = ENTTEC_READ_LENGTH_LOW;
             break;
@@ -158,7 +167,13 @@ static void processEnttecByte(uint8_t value) {
                 enttecState = ENTTEC_READ_PAYLOAD;
             } else {
                 enttecDiscardRemaining = enttecLength;
-                enttecState = ENTTEC_DISCARD_PAYLOAD;
+                /* Zero/one-byte payloads have no bytes to discard.  Advance
+                 * directly to the terminator instead of entering the discard
+                 * state with a zero counter, which would consume the next
+                 * packet's first byte as discarded payload forever. */
+                enttecState = enttecDiscardRemaining == 0
+                    ? ENTTEC_DISCARD_TERMINATOR
+                    : ENTTEC_DISCARD_PAYLOAD;
             }
             break;
         case ENTTEC_READ_PAYLOAD:
@@ -530,7 +545,7 @@ void loop(void) {
                     TX_LOG("TX LATE: transmitted delayed fragment of previous frame\n");
                 }
             } else if (g_sendConfirmations >= 1 ||
-                       (now - stateEnteredTime) >= WIRELESS_TX_DRAIN_TIMEOUT_MS)) {
+                       (now - stateEnteredTime) >= WIRELESS_TX_DRAIN_TIMEOUT_MS) {
                 txState = TX_IDLE;
                 TX_LOG("TX LATE: complete, resuming normal frames\n");
             }

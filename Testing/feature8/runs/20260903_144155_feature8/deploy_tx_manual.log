@@ -1,0 +1,64 @@
+==============================================
+Integrated Wireless DMX Transmitter
+Target board: esp8266:esp8266:generic
+Libraries:
+  QuickESPNow: /home/aidancrowther/Documents/Projects/Cline Testing/libraries/QuickESPNow
+  WirelessDMX: /home/aidancrowther/Documents/Projects/Cline Testing/libraries/WirelessDMX
+Sketch: /home/aidancrowther/Documents/Projects/Cline Testing/transmitter
+Serial port: /dev/ttyUSB0
+Flash after compile: true
+==============================================
+/home/aidancrowther/.arduino15/packages/esp8266/hardware/esp8266/3.1.2/tools/elf2bin.py:54: SyntaxWarning: "\s" is an invalid escape sequence. Such sequences will not work in the future. Did you mean "\\s"? A raw string is also an option.
+  words = re.split('\s+', line)
+/home/aidancrowther/.arduino15/packages/esp8266/hardware/esp8266/3.1.2/tools/elf2bin.py:73: SyntaxWarning: "\s" is an invalid escape sequence. Such sequences will not work in the future. Did you mean "\\s"? A raw string is also an option.
+  words = re.split('\s+', line)
+. Variables and constants in RAM (global, static), used 31016 / 80192 bytes (38%)
+║   SEGMENT  BYTES    DESCRIPTION
+╠══ DATA     1500     initialized variables
+╠══ RODATA   996      constants       
+╚══ BSS      28520    zeroed variables
+. Instruction RAM (IRAM_ATTR, ICACHE_RAM_ATTR), used 59747 / 65536 bytes (91%)
+║   SEGMENT  BYTES    DESCRIPTION
+╠══ ICACHE   32768    reserved space for flash instruction cache
+╚══ IRAM     26979    code in IRAM    
+. Code in flash (default, ICACHE_FLASH_ATTR), used 243664 / 1048576 bytes (23%)
+║   SEGMENT  BYTES    DESCRIPTION
+╚══ IROM     243664   code in flash   
+
+==============================================
+COMPILE SUCCESSFUL
+Binary: /home/aidancrowther/Documents/Projects/Cline Testing/transmitter/build/esp8266.esp8266.generic/transmitter.ino.bin
+==============================================
+
+==============================================
+FLASHING DEVICE
+Port: /dev/ttyUSB0
+Binary: /home/aidancrowther/Documents/Projects/Cline Testing/transmitter/build/esp8266.esp8266.generic/transmitter.ino.bin
+==============================================
+esptool v5.3.1
+Serial port /dev/ttyUSB0:
+Connecting....
+Detecting chip type... ESP8266
+[1A[2K[1A[2K[1A[2KConnected to ESP8266 on /dev/ttyUSB0:
+Chip type:          ESP8266EX
+Features:           Wi-Fi, 160MHz
+Crystal frequency:  26MHz
+MAC:                d8:bf:c0:c0:1b:2a
+
+Uploading stub flasher...
+Running stub flasher...
+[1A[2K[1A[2KStub flasher running.
+
+Configuring flash size...
+Flash will be erased from 0x00000000 to 0x00043fff...
+Compressed 277296 bytes to 203693...
+[KWriting at 0x00000000 [                              ]   0.0% 0/203693 bytes... [KWriting at 0x00005b3e [=>                            ]   8.0% 16384/203693 bytes... [KWriting at 0x0000b10b [===>                          ]  16.1% 32768/203693 bytes... [KWriting at 0x00010786 [======>                       ]  24.1% 49152/203693 bytes... [KWriting at 0x00015fe9 [========>                     ]  32.2% 65536/203693 bytes... [KWriting at 0x0001b012 [===========>                  ]  40.2% 81920/203693 bytes... [KWriting at 0x00020022 [=============>                ]  48.3% 98304/203693 bytes... [KWriting at 0x000251f5 [===============>              ]  56.3% 114688/203693 bytes... [KWriting at 0x0002ab2f [==================>           ]  64.3% 131072/203693 bytes... [KWriting at 0x0003028f [====================>         ]  72.4% 147456/203693 bytes... [KWriting at 0x000356dc [=======================>      ]  80.4% 163840/203693 bytes... [KWriting at 0x0003b583 [=========================>    ]  88.5% 180224/203693 bytes... [KWriting at 0x00041109 [===========================>  ]  96.5% 196608/203693 bytes... [KWriting at 0x00043b30 [==============================] 100.0% 203693/203693 bytes... 
+[1A[2K[1A[2KWrote 277296 bytes (203693 compressed) at 0x00000000 in 18.4 seconds (120.5 kbit/s).
+Verifying written data...
+[1A[2KHash of data verified.
+
+Hard resetting via RTS pin...
+
+==============================================
+FLASH SUCCESSFUL
+==============================================

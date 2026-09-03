@@ -1,0 +1,5 @@
+{
+  "name": "parser_recovers_after_malformed",
+  "passed": false,
+  "detail": "RESULT seconds=3 checks=132 pass=131 fail=1 no_data=13ms"
+}

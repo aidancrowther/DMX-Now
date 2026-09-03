@@ -1,0 +1,28 @@
+==============================================
+Integrated Wireless DMX Transmitter
+Target board: esp8266:esp8266:generic
+Libraries:
+  QuickESPNow: /home/aidancrowther/Documents/Projects/Cline Testing/libraries/QuickESPNow
+  WirelessDMX: /home/aidancrowther/Documents/Projects/Cline Testing/libraries/WirelessDMX
+Sketch: /home/aidancrowther/Documents/Projects/Cline Testing/transmitter
+Serial port: /dev/ttyUSB0
+Flash after compile: false
+Extra defines: -DTEST_DELAYED_FRAGMENT
+==============================================
+/home/aidancrowther/Documents/Projects/Cline Testing/transmitter/transmitter.ino: In function 'void loop()':
+/home/aidancrowther/Documents/Projects/Cline Testing/transmitter/transmitter.ino:548:81: error: expected primary-expression before ')' token
+  548 |                        (now - stateEnteredTime) >= WIRELESS_TX_DRAIN_TIMEOUT_MS)) {
+      |                                                                                 ^
+
+[92mUsed library[0m                  [92mVersion[0m [90mPath[0m
+[93mESP8266WiFi[0m                   1.0     [90m/home/aidancrowther/.arduino15/packages/esp8266/hardware/esp8266/3.1.2/libraries/ESP8266WiFi[0m
+[93mQuickEspNow[0m                   0.8.1   [90m/home/aidancrowther/Documents/Projects/Cline Testing/libraries/QuickESPNow[0m
+[93mWirelessDMX Fragment Protocol[0m 1.0.0   [90m/home/aidancrowther/Documents/Projects/Cline Testing/libraries/WirelessDMX[0m
+
+[92mUsed platform[0m   [92mVersion[0m [90mPath[0m
+[93mesp8266:esp8266[0m 3.1.2   [90m/home/aidancrowther/.arduino15/packages/esp8266/hardware/esp8266/3.1.2[0m
+Error during build: exit status 1
+
+==============================================
+COMPILE FAILED
+==============================================

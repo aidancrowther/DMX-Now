@@ -1,0 +1,72 @@
+{
+  "tx_port": "/dev/ttyUSB0",
+  "mega_port": "/dev/ttyUSB1",
+  "passed": false,
+  "results": [
+    {
+      "name": "valid_1_slot",
+      "passed": true,
+      "detail": "RESULT seconds=2 checks=22 pass=22 fail=0 no_data=0ms"
+    },
+    {
+      "name": "valid_37_slots",
+      "passed": true,
+      "detail": "RESULT seconds=2 checks=2 pass=2 fail=0 no_data=2ms"
+    },
+    {
+      "name": "valid_255_slots",
+      "passed": true,
+      "detail": "RESULT seconds=2 checks=2 pass=2 fail=0 no_data=3ms"
+    },
+    {
+      "name": "valid_256_slots",
+      "passed": true,
+      "detail": "RESULT seconds=2 checks=2 pass=2 fail=0 no_data=7ms"
+    },
+    {
+      "name": "valid_511_slots",
+      "passed": true,
+      "detail": "RESULT seconds=2 checks=88 pass=88 fail=0 no_data=18ms"
+    },
+    {
+      "name": "valid_512_slots",
+      "passed": true,
+      "detail": "RESULT seconds=2 checks=89 pass=89 fail=0 no_data=6ms"
+    },
+    {
+      "name": "zero_length_then_valid",
+      "passed": true,
+      "detail": "RESULT seconds=2 checks=88 pass=88 fail=0 no_data=17ms"
+    },
+    {
+      "name": "one_length_then_valid",
+      "passed": true,
+      "detail": "RESULT seconds=2 checks=89 pass=89 fail=0 no_data=7ms"
+    },
+    {
+      "name": "wrong_label_preserves",
+      "passed": true,
+      "detail": "RESULT seconds=2 checks=89 pass=89 fail=0 no_data=18ms"
+    },
+    {
+      "name": "nonzero_start_code_preserves",
+      "passed": true,
+      "detail": "RESULT seconds=2 checks=89 pass=89 fail=0 no_data=5ms"
+    },
+    {
+      "name": "wrong_terminator_preserves",
+      "passed": true,
+      "detail": "RESULT seconds=2 checks=89 pass=89 fail=0 no_data=17ms"
+    },
+    {
+      "name": "noise_then_valid",
+      "passed": false,
+      "detail": "RESULT seconds=2 checks=89 pass=0 fail=89 no_data=4ms"
+    },
+    {
+      "name": "oversize_then_valid",
+      "passed": true,
+      "detail": "RESULT seconds=2 checks=88 pass=88 fail=0 no_data=0ms"
+    }
+  ]
+}

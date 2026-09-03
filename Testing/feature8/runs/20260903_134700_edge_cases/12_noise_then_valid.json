@@ -1,0 +1,5 @@
+{
+  "name": "noise_then_valid",
+  "passed": false,
+  "detail": "RESULT seconds=2 checks=89 pass=0 fail=89 no_data=4ms"
+}

@@ -1,0 +1,36 @@
+==============================================
+Integrated Wireless DMX Transmitter
+Target board: esp8266:esp8266:generic
+Libraries:
+  QuickESPNow: /home/aidancrowther/Documents/Projects/Cline Testing/libraries/QuickESPNow
+  WirelessDMX: /home/aidancrowther/Documents/Projects/Cline Testing/libraries/WirelessDMX
+Sketch: /home/aidancrowther/Documents/Projects/Cline Testing/transmitter
+Serial port: /dev/ttyUSB0
+Flash after compile: false
+==============================================
+/home/aidancrowther/.arduino15/packages/esp8266/hardware/esp8266/3.1.2/tools/elf2bin.py:54: SyntaxWarning: "\s" is an invalid escape sequence. Such sequences will not work in the future. Did you mean "\\s"? A raw string is also an option.
+  words = re.split('\s+', line)
+/home/aidancrowther/.arduino15/packages/esp8266/hardware/esp8266/3.1.2/tools/elf2bin.py:73: SyntaxWarning: "\s" is an invalid escape sequence. Such sequences will not work in the future. Did you mean "\\s"? A raw string is also an option.
+  words = re.split('\s+', line)
+. Variables and constants in RAM (global, static), used 31016 / 80192 bytes (38%)
+║   SEGMENT  BYTES    DESCRIPTION
+╠══ DATA     1500     initialized variables
+╠══ RODATA   996      constants       
+╚══ BSS      28520    zeroed variables
+. Instruction RAM (IRAM_ATTR, ICACHE_RAM_ATTR), used 59747 / 65536 bytes (91%)
+║   SEGMENT  BYTES    DESCRIPTION
+╠══ ICACHE   32768    reserved space for flash instruction cache
+╚══ IRAM     26979    code in IRAM    
+. Code in flash (default, ICACHE_FLASH_ATTR), used 243664 / 1048576 bytes (23%)
+║   SEGMENT  BYTES    DESCRIPTION
+╚══ IROM     243664   code in flash   
+
+==============================================
+COMPILE SUCCESSFUL
+Binary: /home/aidancrowther/Documents/Projects/Cline Testing/transmitter/build/esp8266.esp8266.generic/transmitter.ino.bin
+==============================================
+
+Compilation only. Use -f to compile and flash.
+Example:
+  ./flash_transmitter.sh -f --port /dev/ttyUSB0
+==============================================
