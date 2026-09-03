@@ -923,9 +923,17 @@ code verified). The receiver implementation passes all test scenarios from the
 - `STAGING_TIMEOUT_MS = 2000`: abandon a partially assembled frame after this much silence.
 - `TRANSMITTER_RESET_RECOVERY_MS = 3000`: permit re-baselining to an older sequence only after the link has been quiet for this long (transmitter restarted).
 
-#### Integrity Validation (test-only)
-- The complete reconstructed staging universe is validated against the Feature 5 pattern: `universe[i] == (i + seq) & 0xFF`.
-- Only if all 512 bytes match is the frame promoted to active. Corrupt-but-complete frames increment an integrity-failure counter and do NOT promote.
+#### Validation and Production Promotion
+- Every build validates fragment wire format, protocol metadata, canonical tile
+  offsets/lengths, non-overlap, expected-fragment count, and full 512-byte
+  coverage before promotion.
+- Production receiver builds then promote arbitrary DMX slot values; this is
+  necessary because lighting data has no deterministic byte pattern.
+- The former Feature 5 deterministic content check is retained only as an
+  opt-in test build (`-DRX_VALIDATE_TEST_PATTERN=1`). In that mode,
+  `universe[i] == (i + seq) & 0xFF` is additionally required and a
+  corrupt-but-complete frame increments the integrity-failure counter without
+  replacing the active universe.
 
 #### Diagnostic Counters (local only, no telemetry)
 - Packets received, valid fragments accepted, malformed fragments, duplicate fragments, stale fragments, incomplete frames abandoned, complete universes accepted, integrity failures, ring overflows, re-baselined events, last RSSI.

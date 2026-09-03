@@ -12,7 +12,7 @@
  *   QuickESPNow fragment (ROM timer callback)
  *     -> bounded SPSC handoff ring
  *     -> loop(): validate, assemble into staging, wrap-safe sequence check
- *     -> on COMPLETE + integrity pass: pointer-swap promote to active
+ *     -> on COMPLETE + configured validation: pointer-swap promote to active
  *     -> dmxA.setChans(active)   (espDMX copies into its own buffer)
  *     -> espDMX self-refreshes the last active universe continuously.
  *   - Low-rate ReceiverTelemetryPacket broadcast with deterministic phase and
@@ -76,6 +76,17 @@ static const unsigned long TRANSMITTER_RESET_RECOVERY_MS = 3000UL;
 #endif
 #ifndef BATTERY_LOW_CLEAR_MS
 #define BATTERY_LOW_CLEAR_MS 5000UL
+#endif
+
+/* Feature 5 used a deterministic channel pattern to prove fragment assembly.
+ * Production DMX content is intentionally arbitrary, so that content check is
+ * disabled by default. The structural checks below (wire format, canonical
+ * tiles, no overlaps, every expected fragment, and complete 512-byte coverage)
+ * remain mandatory in every build. Enable only for legacy Feature 5 tests:
+ *   ./flash_receiver.sh --define -DRX_VALIDATE_TEST_PATTERN=1
+ */
+#ifndef RX_VALIDATE_TEST_PATTERN
+#define RX_VALIDATE_TEST_PATTERN 0
 #endif
 
 /* Bounded callback->loop handoff ring. One more than QuickESPNow's own RX
@@ -371,10 +382,9 @@ static void stagingAbandonIncomplete(void) {
 }
 
 /* TEST-ONLY: validate the ENTIRE reconstructed universe against the
- * deterministic Feature 5 pattern. Returns the first failing index, or
- * DMX_UNIVERSE_SIZE if all 512 bytes match. Kept so the integrated receiver
- * stays verifiable against the existing test transmitter; swap out when the
- * production transmitter ships real DMX content. */
+ * deterministic Feature 5 pattern. This code is compiled out of production
+ * builds so arbitrary valid DMX content can be promoted. */
+#if RX_VALIDATE_TEST_PATTERN
 static uint16_t fullIntegrityCheck(uint32_t seq) {
     for (uint16_t i = 0; i < DMX_UNIVERSE_SIZE; i++) {
         const uint8_t expected = (uint8_t)(i + seq);
@@ -384,6 +394,7 @@ static uint16_t fullIntegrityCheck(uint32_t seq) {
     }
     return DMX_UNIVERSE_SIZE;
 }
+#endif
 
 /* Promote staging -> active by swapping the pointers (no 512-byte copy).
  * After the swap, the buffer that WAS active becomes the (reusable) staging
@@ -424,7 +435,8 @@ static void rejectMalformed(void) {
 /* --------------------------------------------------------------------------
  * Accept one structurally-valid fragment into the STAGING buffer and update
  * reconstruction state. loop() context only. Promotes when the frame is
- * complete and passes the full 512-byte integrity check.
+ * complete. Production acceptance is structural; the optional legacy Feature
+ * 5 deterministic-content check is controlled by RX_VALIDATE_TEST_PATTERN.
  * -------------------------------------------------------------------------- */
 static void acceptFragment(const uint8_t* pkt, uint32_t seq,
                            const DmxFragmentPacket& hdr,
@@ -459,6 +471,7 @@ static void acceptFragment(const uint8_t* pkt, uint32_t seq,
 
     /* Completion: every one of the 512 bytes is covered by received tiles. */
     if (coverageFull() && (stagingUniqueCount == stagingFragmentCount)) {
+#if RX_VALIDATE_TEST_PATTERN
         const uint16_t badIndex = fullIntegrityCheck(seq);
         if (badIndex >= DMX_UNIVERSE_SIZE) {
             promoteActive(seq);
@@ -470,6 +483,11 @@ static void acceptFragment(const uint8_t* pkt, uint32_t seq,
             stagingUniqueCount  = 0;
             coverageClear();
         }
+#else
+        /* All required structural/reassembly checks above passed. DMX slot
+         * values are deliberately unrestricted in a production universe. */
+        promoteActive(seq);
+#endif
     }
 }
 
@@ -525,7 +543,7 @@ static void processPacket(const uint8_t* pkt, uint8_t len, int8_t rssi) {
         if ((millis() - lastAcceptedFragmentTimeMs) >= TRANSMITTER_RESET_RECOVERY_MS) {
             /* Link quiet for the recovery window: transmitter likely restarted.
              * Permit establishing a new baseline (commits only if this frame
-             * completes + passes integrity). */
+             * completes and passes the configured validation mode). */
             resetRebaselined++;
             stagingBegin(seq, hdr.fragmentCount);
             acceptFragment(pkt, seq, hdr, tileOffset, tileLen, rssi);
