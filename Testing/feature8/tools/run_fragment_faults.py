@@ -117,7 +117,7 @@ def main() -> int:
             try:
                 # Establish a known active baseline using the current production
                 # image before applying the next fault image.
-                with serial.Serial(args.tx_port, 57600, bytesize=8,
+                with serial.Serial(args.tx_port, 115200, bytesize=8,
                                    parity=serial.PARITY_NONE, stopbits=serial.STOPBITS_TWO,
                                    timeout=0.1) as tx, serial.Serial(args.mega_port,
                                                                      115200, timeout=0.2) as mega:
@@ -136,7 +136,7 @@ def main() -> int:
                 # allow the receiver's documented reset-recovery window to
                 # expire before judging the new fault image.
                 time.sleep(3.5)
-                with serial.Serial(args.tx_port, 57600, bytesize=8,
+                with serial.Serial(args.tx_port, 115200, bytesize=8,
                                    parity=serial.PARITY_NONE, stopbits=serial.STOPBITS_TWO,
                                    timeout=0.1) as tx, serial.Serial(args.mega_port,
                                                                      115200, timeout=0.2) as mega:

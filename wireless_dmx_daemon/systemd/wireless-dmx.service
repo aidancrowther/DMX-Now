@@ -1,0 +1,14 @@
+[Unit]
+Description=ESP8266 Wireless DMX host bridge
+After=local-fs.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/wireless-dmx-daemon
+ExecStart=/usr/bin/wireless-dmx run --config /etc/wireless-dmx/config.toml
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

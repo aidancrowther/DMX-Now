@@ -77,6 +77,114 @@ static volatile uint8_t telemetryHead = 0;
 static volatile uint8_t telemetryTail = 0;
 static unsigned long telemetryPacketsDropped = 0;
 
+/* Feature 11: bounded cache retained for the host management interface. */
+#ifndef MAX_TELEMETRY_RECEIVERS
+#define MAX_TELEMETRY_RECEIVERS 32U
+#endif
+#ifndef RECEIVER_STALE_TIMEOUT_MS
+#define RECEIVER_STALE_TIMEOUT_MS 15000UL
+#endif
+#ifndef RECEIVER_OFFLINE_TIMEOUT_MS
+#define RECEIVER_OFFLINE_TIMEOUT_MS 30000UL
+#endif
+#ifndef MANAGEMENT_MIN_REPORT_INTERVAL_MS
+#define MANAGEMENT_MIN_REPORT_INTERVAL_MS 1000UL
+#endif
+#define TELEMETRY_REPORT_RECORDS_PER_PART 4U
+
+struct ReceiverTelemetryEntry {
+    bool valid;
+    uint8_t macAddress[6];
+    ReceiverTelemetryPacket telemetry;
+    int8_t transmitterRssi;
+    unsigned long lastSeenMs;
+};
+static ReceiverTelemetryEntry receiverTable[MAX_TELEMETRY_RECEIVERS];
+static uint32_t telemetryReportSequence = 0;
+
+enum ManagementParserState {
+    MGMT_WAIT_SYNC_1,
+    MGMT_WAIT_SYNC_2,
+    MGMT_READ_VERSION,
+    MGMT_READ_OPCODE,
+    MGMT_READ_LENGTH_LOW,
+    MGMT_READ_LENGTH_HIGH,
+    MGMT_READ_PAYLOAD,
+    MGMT_READ_CRC_LOW,
+    MGMT_READ_CRC_HIGH
+};
+static ManagementParserState managementState = MGMT_WAIT_SYNC_1;
+static uint8_t managementVersion = 0;
+static uint8_t managementOpcode = 0;
+static uint16_t managementLength = 0;
+static uint16_t managementIndex = 0;
+static uint16_t managementReceivedCrc = 0;
+static uint8_t managementPayload[32];
+
+static bool telemetryReportPending = false;
+static uint8_t telemetryReportPart = 0;
+static uint8_t telemetryReportPartCount = 0;
+static uint8_t telemetryReportRecordIndex = 0;
+static uint8_t telemetryReportRecordCount = 0;
+static uint32_t telemetryReportActiveSequence = 0;
+static unsigned long telemetryReportLastStartMs = 0;
+
+static uint16_t managementCrc16(const uint8_t* data, uint16_t length) {
+    uint16_t crc = 0xFFFFU;
+    for (uint16_t i = 0; i < length; i++) {
+        crc ^= (uint16_t)data[i] << 8;
+        for (uint8_t bit = 0; bit < 8; bit++)
+            crc = (crc & 0x8000U) ? (uint16_t)((crc << 1) ^ 0x1021U)
+                                   : (uint16_t)(crc << 1);
+    }
+    return crc;
+}
+
+static bool sequenceIsNewer(uint32_t a, uint32_t b) {
+    return (int32_t)(a - b) > 0;
+}
+
+static int findReceiverEntry(const ReceiverTelemetryPacket& packet) {
+    for (uint8_t i = 0; i < MAX_TELEMETRY_RECEIVERS; i++) {
+        if (receiverTable[i].valid &&
+            receiverTable[i].telemetry.receiverId == packet.receiverId)
+            return i;
+    }
+    return -1;
+}
+
+static uint8_t receiverLinkState(const ReceiverTelemetryEntry& entry,
+                                 unsigned long now) {
+    const unsigned long age = now - entry.lastSeenMs;
+    if (age <= RECEIVER_STALE_TIMEOUT_MS) return 1U;
+    if (age <= RECEIVER_OFFLINE_TIMEOUT_MS) return 2U;
+    return 3U;
+}
+
+static void cacheTelemetry(const ReceiverTelemetryPacket& packet, int8_t rssi) {
+    int index = findReceiverEntry(packet);
+    if (index < 0) {
+        unsigned long oldestAge = 0;
+        uint8_t oldest = 0;
+        for (uint8_t i = 0; i < MAX_TELEMETRY_RECEIVERS; i++) {
+            if (!receiverTable[i].valid) { index = i; break; }
+            const unsigned long age = millis() - receiverTable[i].lastSeenMs;
+            if (age >= oldestAge) { oldestAge = age; oldest = i; }
+        }
+        if (index < 0) index = oldest;
+    } else if (receiverTable[index].valid &&
+               !sequenceIsNewer(packet.telemetrySequence,
+                                receiverTable[index].telemetry.telemetrySequence)) {
+        return;
+    }
+
+    receiverTable[index].valid = true;
+    memcpy(receiverTable[index].macAddress, packet.macAddress, 6);
+    receiverTable[index].telemetry = packet;
+    receiverTable[index].transmitterRssi = rssi;
+    receiverTable[index].lastSeenMs = millis();
+}
+
 /* --------------------------------------------------------------------------
  * ENTTEC DMX USB Pro input (Feature 8)
  *
@@ -207,8 +315,69 @@ static void serviceEnttecInput(void) {
     /* Bound work per loop so a hostile/overrunning serial source cannot starve
      * QuickESPNow callbacks or the wireless scheduler. */
     uint16_t budget = 128;
-    while (Serial.available() > 0 && budget-- > 0)
-        processEnttecByte((uint8_t)Serial.read());
+    while (Serial.available() > 0 && budget-- > 0) {
+        const uint8_t value = (uint8_t)Serial.read();
+        processEnttecByte(value);
+        /* Management parsing observes the same input stream. It only accepts
+         * a complete, CRC-checked A5 5A frame, so arbitrary ENTTEC payload
+         * bytes cannot become a command. */
+        switch (managementState) {
+            case MGMT_WAIT_SYNC_1:
+                if (value == MANAGEMENT_SYNC_1) managementState = MGMT_WAIT_SYNC_2;
+                break;
+            case MGMT_WAIT_SYNC_2:
+                if (value == MANAGEMENT_SYNC_2) managementState = MGMT_READ_VERSION;
+                else managementState = (value == MANAGEMENT_SYNC_1)
+                    ? MGMT_WAIT_SYNC_2 : MGMT_WAIT_SYNC_1;
+                break;
+            case MGMT_READ_VERSION: managementVersion = value; managementState = MGMT_READ_OPCODE; break;
+            case MGMT_READ_OPCODE: managementOpcode = value; managementState = MGMT_READ_LENGTH_LOW; break;
+            case MGMT_READ_LENGTH_LOW: managementLength = value; managementState = MGMT_READ_LENGTH_HIGH; break;
+            case MGMT_READ_LENGTH_HIGH:
+                managementLength |= (uint16_t)value << 8;
+                managementIndex = 0;
+                managementState = managementLength <= sizeof(managementPayload)
+                    ? (managementLength ? MGMT_READ_PAYLOAD : MGMT_READ_CRC_LOW)
+                    : MGMT_WAIT_SYNC_1;
+                break;
+            case MGMT_READ_PAYLOAD:
+                managementPayload[managementIndex++] = value;
+                if (managementIndex >= managementLength) managementState = MGMT_READ_CRC_LOW;
+                break;
+            case MGMT_READ_CRC_LOW: managementReceivedCrc = value; managementState = MGMT_READ_CRC_HIGH; break;
+            case MGMT_READ_CRC_HIGH: {
+                managementReceivedCrc |= (uint16_t)value << 8;
+                uint8_t crcInput[4 + sizeof(managementPayload)];
+                crcInput[0] = managementVersion;
+                crcInput[1] = managementOpcode;
+                crcInput[2] = (uint8_t)managementLength;
+                crcInput[3] = (uint8_t)(managementLength >> 8);
+                memcpy(crcInput + 4, managementPayload, managementLength);
+                if (managementVersion == MANAGEMENT_PROTO_VERSION &&
+                    managementCrc16(crcInput, (uint16_t)(4 + managementLength)) == managementReceivedCrc &&
+                    managementOpcode == MANAGEMENT_GET_RECEIVER_TELEMETRY && managementLength == 0) {
+                    const unsigned long now = millis();
+                    if (!telemetryReportPending &&
+                        now - telemetryReportLastStartMs >= MANAGEMENT_MIN_REPORT_INTERVAL_MS) {
+                        uint8_t count = 0;
+                        for (uint8_t i = 0; i < MAX_TELEMETRY_RECEIVERS; i++)
+                            if (receiverTable[i].valid) count++;
+                        telemetryReportPartCount = (uint8_t)((count + TELEMETRY_REPORT_RECORDS_PER_PART - 1) /
+                                                             TELEMETRY_REPORT_RECORDS_PER_PART);
+                        if (telemetryReportPartCount == 0) telemetryReportPartCount = 1;
+                        telemetryReportRecordCount = count;
+                        telemetryReportPart = 0;
+                        telemetryReportRecordIndex = 0;
+                        telemetryReportActiveSequence = telemetryReportSequence++;
+                        telemetryReportPending = true;
+                        telemetryReportLastStartMs = now;
+                    }
+                }
+                managementState = MGMT_WAIT_SYNC_1;
+                break;
+            }
+        }
+    }
 }
 
 static void onTelemetryReceived(uint8_t* address, uint8_t* data, uint8_t len,
@@ -255,6 +424,7 @@ static void reportTelemetry(void) {
     ReceiverTelemetryPacket packet;
     int8_t rssi;
     while (popTelemetry(packet, rssi)) {
+        cacheTelemetry(packet, rssi);
         Serial.printf("RX TELEMETRY id=%08lX mac=%02X:%02X:%02X:%02X:%02X:%02X uptime=%lus battery=%s last_seq=%lu complete=%lu incomplete=%lu malformed=%lu since=%lums rssi=%d fw=%u proto=%u t_seq=%lu\n",
                       (unsigned long)packet.receiverId,
                       packet.macAddress[0], packet.macAddress[1], packet.macAddress[2],
@@ -270,11 +440,89 @@ static void reportTelemetry(void) {
                       (unsigned long)packet.telemetrySequence);
     }
 #else
-    /* Drain the queue even when reporting is disabled. */
+    /* Drain the queue even when reporting is disabled, while retaining the
+     * latest packet for the binary management interface. */
     ReceiverTelemetryPacket packet;
     int8_t rssi;
-    while (popTelemetry(packet, rssi)) { }
+    while (popTelemetry(packet, rssi)) cacheTelemetry(packet, rssi);
 #endif
+}
+
+static int validReceiverByOrdinal(uint8_t ordinal) {
+    uint8_t seen = 0;
+    for (uint8_t i = 0; i < MAX_TELEMETRY_RECEIVERS; i++) {
+        if (receiverTable[i].valid) {
+            if (seen++ == ordinal) return i;
+        }
+    }
+    return -1;
+}
+
+/* Emit one bounded response part per loop. Multipart responses are supported
+ * from the initial implementation so receiver counts can exceed 16. */
+static void serviceTelemetryReport(void) {
+    if (!telemetryReportPending) return;
+
+    uint8_t packet[6 + sizeof(TelemetryReportPartHeader) +
+                   TELEMETRY_REPORT_RECORDS_PER_PART * sizeof(TelemetryReportRecord) + 2];
+    uint16_t offset = 0;
+    packet[offset++] = MANAGEMENT_SYNC_1;
+    packet[offset++] = MANAGEMENT_SYNC_2;
+    packet[offset++] = MANAGEMENT_PROTO_VERSION;
+    packet[offset++] = MANAGEMENT_RECEIVER_TELEMETRY;
+
+    TelemetryReportPartHeader header;
+    header.reportVersion = 1U;
+    header.partIndex = telemetryReportPart;
+    header.partCount = telemetryReportPartCount;
+    header.recordCount = telemetryReportRecordCount - telemetryReportRecordIndex;
+    if (header.recordCount > TELEMETRY_REPORT_RECORDS_PER_PART)
+        header.recordCount = TELEMETRY_REPORT_RECORDS_PER_PART;
+    header.reportSequence = telemetryReportActiveSequence;
+
+    const uint16_t payloadLength = sizeof(header) +
+                                   header.recordCount * sizeof(TelemetryReportRecord);
+    packet[offset++] = (uint8_t)payloadLength;
+    packet[offset++] = (uint8_t)(payloadLength >> 8);
+    memcpy(packet + offset, &header, sizeof(header));
+    offset += sizeof(header);
+
+    for (uint8_t n = 0; n < header.recordCount; n++) {
+        const int index = validReceiverByOrdinal((uint8_t)(telemetryReportRecordIndex + n));
+        if (index < 0) break;
+        const ReceiverTelemetryEntry& source = receiverTable[index];
+        TelemetryReportRecord record;
+        record.receiverId = source.telemetry.receiverId;
+        memcpy(record.macAddress, source.macAddress, sizeof(record.macAddress));
+        record.linkState = receiverLinkState(source, millis());
+        record.batteryLow = source.telemetry.batteryLow;
+        record.transmitterRssi = source.transmitterRssi;
+        record.receiverLastRssi = source.telemetry.lastRssi;
+        record.uptimeSeconds = source.telemetry.uptimeSeconds;
+        record.lastActiveSequence = source.telemetry.lastActiveSequence;
+        record.completeUniverses = source.telemetry.completeUniverses;
+        record.incompleteUniverses = source.telemetry.incompleteUniverses;
+        record.malformedPackets = source.telemetry.malformedPackets;
+        record.timeSinceLastUniverseMs = source.telemetry.timeSinceLastUniverseMs;
+        record.transmitterLastSeenMs = millis() - source.lastSeenMs;
+        record.firmwareVersion = source.telemetry.firmwareVersion;
+        record.protocolVersion = source.telemetry.protocolVersion;
+        record.reserved = 0;
+        memcpy(packet + offset, &record, sizeof(record));
+        offset += sizeof(record);
+    }
+
+    /* CRC covers version, opcode, length, and payload (not sync bytes). */
+    const uint16_t crc = managementCrc16(packet + 2,
+                                         (uint16_t)(4 + payloadLength));
+    packet[offset++] = (uint8_t)crc;
+    packet[offset++] = (uint8_t)(crc >> 8);
+    Serial.write(packet, offset);
+
+    telemetryReportRecordIndex = (uint8_t)(telemetryReportRecordIndex + header.recordCount);
+    telemetryReportPart++;
+    if (telemetryReportPart >= telemetryReportPartCount || header.recordCount == 0)
+        telemetryReportPending = false;
 }
 
 /* --------------------------------------------------------------------------
@@ -379,8 +627,10 @@ static void submitFragment(uint32_t seq, uint8_t fragIdx) {
 }
 
 void setup(void) {
-    /* ENTTEC DMX USB Pro uses 57600 baud, 8 data bits, no parity, 2 stops. */
-    Serial.begin(57600, SERIAL_8N2);
+    /* ENTTEC-compatible host input at 115200 baud, 8 data bits, no parity,
+     * 2 stops. This supports the full-universe input bandwidth needed when the
+     * validated 20 Hz wireless refresh default is used. */
+    Serial.begin(115200, SERIAL_8N2);
 
     WiFi.mode(WIFI_STA);
     WiFi.disconnect(false);
@@ -480,6 +730,7 @@ void loop(void) {
 
     serviceEnttecInput();
     reportTelemetry();
+    serviceTelemetryReport();
 
     switch (txState) {
         case TX_IDLE:

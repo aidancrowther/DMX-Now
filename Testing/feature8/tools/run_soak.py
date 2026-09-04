@@ -71,7 +71,7 @@ def main() -> int:
     ramp = bytes((ramp_base + i) & 255 for i in range(512))
 
     try:
-        with serial.Serial(args.tx_port, 57600, bytesize=8,
+        with serial.Serial(args.tx_port, 115200, bytesize=8,
                            parity=serial.PARITY_NONE, stopbits=serial.STOPBITS_TWO,
                            timeout=0.2) as tx, serial.Serial(args.mega_port, 115200,
                                                              timeout=0.2) as mega:

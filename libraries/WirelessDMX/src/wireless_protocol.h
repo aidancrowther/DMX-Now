@@ -51,6 +51,16 @@
 #define DMX_UNIVERSE_ID        1U        /* Single universe for now; extendable later */
 #define DMX_UNIVERSE_SIZE      512U      /* 512 DMX channels */
 
+/* Host-facing management protocol. These frames share the transmitter UART
+ * with ENTTEC, but use a distinct sync pair and a CRC so a bridge daemon can
+ * safely separate management traffic from lighting traffic. */
+#define MANAGEMENT_SYNC_1      0xA5U
+#define MANAGEMENT_SYNC_2      0x5AU
+#define MANAGEMENT_PROTO_VERSION 1U
+#define MANAGEMENT_GET_RECEIVER_TELEMETRY 0x01U
+#define MANAGEMENT_RECEIVER_TELEMETRY      0x81U
+#define MANAGEMENT_ERROR                   0xE0U
+
 /* --------------------------------------------------------------------------
  * Channel and refresh rate (test defaults; configurable)
  * -------------------------------------------------------------------------- */
@@ -58,10 +68,10 @@
 
 /* Wireless universe refresh rate. Configurable per build (Feature 7):
  * pass -DWIRELESS_REFRESH_HZ=N to the compiler (e.g. via the flash scripts'
- * --define option) to override the conservative 1 Hz default. Only the
+ * --define option) to override the validated 20 Hz production default. Only the
  * transmitter paces off this value; receivers do not depend on it. */
 #ifndef WIRELESS_REFRESH_HZ
-#define WIRELESS_REFRESH_HZ    1U
+#define WIRELESS_REFRESH_HZ    20U
 #endif
 static constexpr unsigned long WIRELESS_REFRESH_INTERVAL_MS = 1000UL / WIRELESS_REFRESH_HZ;
 
@@ -117,6 +127,37 @@ struct __attribute__((packed)) ReceiverTelemetryPacket {
     uint32_t telemetrySequence;
 };
 
+/* One multipart host response part. The payload consists of zero or more
+ * TelemetryReportRecord values. */
+struct __attribute__((packed)) TelemetryReportPartHeader {
+    uint8_t  reportVersion;
+    uint8_t  partIndex;
+    uint8_t  partCount;
+    uint8_t  recordCount;
+    uint32_t reportSequence;
+};
+
+/* Fixed-size record deliberately duplicates the wireless telemetry fields and
+ * adds transmitter-side link age/RSSI and a derived link state. */
+struct __attribute__((packed)) TelemetryReportRecord {
+    uint32_t receiverId;
+    uint8_t  macAddress[6];
+    uint8_t  linkState;                 /* 1 online, 2 stale, 3 offline */
+    uint8_t  batteryLow;
+    int8_t   transmitterRssi;
+    int8_t   receiverLastRssi;
+    uint32_t uptimeSeconds;
+    uint32_t lastActiveSequence;
+    uint32_t completeUniverses;
+    uint32_t incompleteUniverses;
+    uint32_t malformedPackets;
+    uint32_t timeSinceLastUniverseMs;
+    uint32_t transmitterLastSeenMs;
+    uint16_t firmwareVersion;
+    uint8_t  protocolVersion;
+    uint8_t  reserved;
+};
+
 /* --------------------------------------------------------------------------
  * Compile-time guards against the Feature 5 bug class: the header must be
  * exactly 14 bytes (packed, no padding) and fit inside one ESP-NOW packet.
@@ -127,6 +168,10 @@ static_assert(sizeof(DmxFragmentPacket) <= ESP_NOW_MAX_DATA_LEN,
               "DmxFragmentPacket header must fit within ESP_NOW_MAX_DATA_LEN");
 static_assert(sizeof(ReceiverTelemetryPacket) <= ESP_NOW_MAX_DATA_LEN,
               "ReceiverTelemetryPacket must fit within ESP_NOW_MAX_DATA_LEN");
+static_assert(sizeof(TelemetryReportPartHeader) == 8,
+              "TelemetryReportPartHeader layout changed unexpectedly");
+static_assert(sizeof(TelemetryReportRecord) == 46,
+              "TelemetryReportRecord layout changed unexpectedly");
 
 /* --------------------------------------------------------------------------
  * Helper: payload length a fragment at `offset` should carry (last gets remainder)

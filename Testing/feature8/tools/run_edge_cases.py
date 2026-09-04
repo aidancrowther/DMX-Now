@@ -83,7 +83,7 @@ def main() -> int:
 
     summary = {"tx_port": args.tx_port, "mega_port": args.mega_port, "passed": True, "results": []}
     try:
-        with serial.Serial(args.tx_port, 57600, bytesize=8, parity=serial.PARITY_NONE,
+        with serial.Serial(args.tx_port, 115200, bytesize=8, parity=serial.PARITY_NONE,
                            stopbits=serial.STOPBITS_TWO, timeout=0.1) as tx, \
              serial.Serial(args.mega_port, 115200, timeout=0.2) as mega:
             tx.reset_input_buffer()

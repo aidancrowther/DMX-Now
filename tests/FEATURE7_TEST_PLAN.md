@@ -52,7 +52,11 @@ rate-independent. Set the rate per run with a build define:
 ./flash_espnow_tx.sh -f --define -DWIRELESS_REFRESH_HZ=N    # compile + flash
 ```
 
-Verified: TX compiles at the default (1 Hz) and with `-DWIRELESS_REFRESH_HZ=30`.
+The production default is now 20 Hz, based on the measured reliable RF ceiling.
+The setting remains configurable, including experimental builds up to 40 Hz.
+
+The integrated transmitter UART is `115200 8N2`; update host test tools and
+lighting software accordingly.
 
 ## Building / flashing the monitor
 

@@ -337,28 +337,39 @@ This prevents communication overhead from scaling directly with receiver count.
 
 Wireless universe refresh rate and physical DMX refresh rate are separate concepts.
 
-The initial wireless refresh rate should be deliberately conservative:
+The validated production wireless refresh rate is:
 
 ```
-WIRELESS_REFRESH_HZ = 1
+WIRELESS_REFRESH_HZ = 20
 ```
 
 This value must be configurable.
 
-Testing will gradually increase it until a stable practical rate is established.
+Feature 7 testing established approximately 20 Hz as the reliable production
+ceiling for the ESP8266 RF link. Higher rates remain available for experiments
+using `-DWIRELESS_REFRESH_HZ=N`; those rates are not the default reliability
+target.
 
 QuickESPNow's ESP8266 implementation has limited throughput, so do not assume full DMX refresh rates are practical over the wireless transport.
 
-If PC updates arrive faster than the configured wireless refresh rate, retain only the newest universe.
+If PC updates arrive faster than the configured wireless refresh rate, retain
+only the newest universe. ENTTEC-compatible converters may provide output at up
+to approximately 40 Hz, so the transmitter UART has been increased to 115200
+baud, 8N2. This provides enough serial bandwidth for the validated 20 Hz full-
+universe wireless rate. A full 513-byte ENTTEC packet at 8N2 requires about
+207200 baud at 40 Hz, so true 40 Hz full-universe input would require a higher
+UART rate such as 230400; 40 Hz remains available as an experimental wireless
+build override, not the validated production setting.
 
 Example:
 
 ```
-PC updates:          30 Hz
-wireless refresh:    5 Hz
+PC updates:          40 Hz
+wireless refresh:    20 Hz
 ```
 
-The transmitter should send approximately five snapshots of the latest universe per second.
+The transmitter should send approximately twenty snapshots of the latest
+universe per second.
 
 It should NOT queue the other 25 obsolete intermediate states.
 
@@ -579,6 +590,16 @@ RX-19C2       OK       Fair      14         1.7s
 This is NOT part of the initial implementation.
 
 The telemetry architecture should merely avoid making such an interface difficult to add later.
+
+Feature 11 adds a binary host-management protocol to the transmitter. The
+transmitter accepts a CRC-16 protected `GET_RECEIVER_TELEMETRY` request framed
+with `A5 5A`, and returns multipart telemetry records using the same framing.
+Each part contains up to four fixed-size records, so the receiver cache can be
+larger than 16 devices without requiring one large response buffer. The
+protocol is intended for a host bridge/daemon: that program can expose a
+virtual ENTTEC-compatible serial port to lighting software while providing a
+separate management API for telemetry. The ESP8266 continues to receive normal
+ENTTEC frames and does not emit diagnostic text by default.
 
 ## Fail-Safe Philosophy
 
@@ -1049,12 +1070,14 @@ changing the current universe, and retains only the newest completed serial
 universe. Each wireless transmission takes a fixed snapshot before its three
 fragments are queued, preventing a frame from mixing two input universes.
 
-UART0 is configured for `57600 8N2`, the DMX USB Pro serial format. Telemetry
+UART0 is configured for `115200 8N2`, the DMX USB Pro serial format. Telemetry
 packets continue to be received and validated, but telemetry and diagnostic
 text output is disabled by default because UART0 is the binary ENTTEC input.
 
-The 57600-baud input limits a complete 513-byte DMX payload to approximately
-10–11 frames per second before serial framing overhead.
+The 115200-baud input supports the validated 20 Hz full-universe operating rate
+with the available serial headroom. Higher wireless rates can be selected
+explicitly for experimentation, but 40 Hz full-universe serial input requires a
+higher baud rate than 115200.
 
 #### Feature 8 verification summary
 
@@ -1113,8 +1136,9 @@ Completed:
 * Telemetry is handled through a bounded callback-to-loop ring and does not
   perform Serial I/O in the wireless callback.
 * `TRANSMITTER_TELEMETRY_LOGGING` independently controls telemetry display and
-  defaults to enabled. Set it to `0` to keep telemetry processing active while
-  suppressing `RX TELEMETRY ...` output.
+  defaults to disabled. Set it to `1` only for bench diagnostics; keep it at
+  `0` during ENTTEC operation because text output would corrupt the binary UART
+  stream. Telemetry processing remains active while display is suppressed.
 * The `completeUniverses` counter is a saturating 32-bit value. Its four-byte
   field is sent only once per telemetry report and is safe for the expected
   5–7 hour runtime.
@@ -1122,6 +1146,14 @@ Completed:
 Hardware verification confirmed telemetry operation with multiple receivers.
 The implementation is intentionally complete before the future status/management
 interface and ENTTEC input features.
+
+The Feature 11 extended acceptance run operated the integrated transmitter at
+20 Hz for 660 seconds while the Arduino Mega monitor verified the receiver DMX
+output. All 13,200 submitted input frames were sent at 20 Hz, the Mega recorded
+29,290 correct frames with zero failures, and 43/43 telemetry reports covering
+two receivers passed CRC and multipart validation. Mean telemetry latency was
+55.23 ms and maximum latency was 55.58 ms. Detailed evidence is retained under
+`./Testing/feature11/runs/20hz-extended/`.
 
 Follow-up (not required for Feature 7 completion):
 
