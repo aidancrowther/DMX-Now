@@ -1,0 +1,42 @@
+{
+  "tx_port": "/dev/ttyUSB0",
+  "mega_port": "/dev/ttyUSB1",
+  "passed": true,
+  "results": [
+    {
+      "name": "reorder",
+      "passed": true,
+      "detail": "RESULT seconds=3 checks=134 pass=134 fail=0 no_data=3ms"
+    },
+    {
+      "name": "duplicate_1",
+      "passed": true,
+      "detail": "RESULT seconds=3 checks=133 pass=133 fail=0 no_data=11ms"
+    },
+    {
+      "name": "drop_0",
+      "passed": true,
+      "detail": "RESULT seconds=3 checks=133 pass=133 fail=0 no_data=17ms"
+    },
+    {
+      "name": "drop_1",
+      "passed": true,
+      "detail": "RESULT seconds=3 checks=134 pass=134 fail=0 no_data=3ms"
+    },
+    {
+      "name": "drop_2",
+      "passed": true,
+      "detail": "RESULT seconds=3 checks=133 pass=133 fail=0 no_data=18ms"
+    },
+    {
+      "name": "corrupt_1",
+      "passed": true,
+      "detail": "expected production limitation; RESULT seconds=3 checks=133 pass=0 fail=133 no_data=18ms"
+    },
+    {
+      "name": "delayed",
+      "passed": true,
+      "detail": "RESULT seconds=3 checks=133 pass=133 fail=0 no_data=14ms"
+    }
+  ]
+}

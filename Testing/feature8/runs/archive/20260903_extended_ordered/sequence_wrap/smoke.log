@@ -1,0 +1,28 @@
+{
+  "run_utc": "smoke",
+  "tx_port": "/dev/ttyUSB0",
+  "mega_port": "/dev/ttyUSB1",
+  "passed": true,
+  "results": [
+    {
+      "name": "full_512_split_input",
+      "passed": true,
+      "detail": "RESULT seconds=3 checks=132 pass=132 fail=0 no_data=23ms"
+    },
+    {
+      "name": "short_universe_zero_fill",
+      "passed": true,
+      "detail": "RESULT seconds=3 checks=23 pass=23 fail=0 no_data=2ms"
+    },
+    {
+      "name": "malformed_preserves_active",
+      "passed": true,
+      "detail": "RESULT seconds=3 checks=3 pass=3 fail=0 no_data=1ms"
+    },
+    {
+      "name": "parser_recovers_after_malformed",
+      "passed": true,
+      "detail": "RESULT seconds=3 checks=133 pass=133 fail=0 no_data=5ms"
+    }
+  ]
+}

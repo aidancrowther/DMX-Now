@@ -1,0 +1,5 @@
+{
+  "name": "oversize_then_valid",
+  "passed": true,
+  "detail": "RESULT seconds=2 checks=88 pass=88 fail=0 no_data=18ms"
+}

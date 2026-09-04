@@ -1,0 +1,5 @@
+{
+  "name": "drop_1",
+  "passed": true,
+  "detail": "RESULT seconds=3 checks=134 pass=134 fail=0 no_data=3ms"
+}

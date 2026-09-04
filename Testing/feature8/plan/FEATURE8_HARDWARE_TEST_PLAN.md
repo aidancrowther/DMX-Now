@@ -1,5 +1,13 @@
 # Feature 8 — ENTTEC Serial Input Hardware Test Plan
 
+## Status: SUBSTANTIALLY COMPLETE
+
+The implementation and automated hardware validation are complete for the
+current Feature 8 scope. Canonical passing evidence is indexed in
+`../runs/ARCHIVE_INDEX.md`. Remaining items are optional/manual physical
+coverage rather than blockers for the validated serial-to-wireless-to-DMX
+path.
+
 ## Goal
 
 Verify the existing `transmitter/transmitter.ino` Feature 8 parser end-to-end:
@@ -174,6 +182,109 @@ Feature 8 is hardware-verified only when:
 - known limitations (including the lack of a production payload checksum) are
   documented rather than counted as silent passes.
 
+### Ordered execution record — 2026-09-03
+
+The extended procedure was executed in order using the transmitter on
+`/dev/ttyUSB0` and the Mega monitor on `/dev/ttyUSB1`. The receiver programming
+port `/dev/ttyUSB2` was not opened or passed to any command. Deployment was
+performed separately with bounded timeouts, followed by the smoke gate and the
+parser/state group. Both passed:
+
+- smoke gate: 4/4;
+- parser/state boundary and malformed-input group: 13/13.
+
+The first implementation of the serial delivery/load runner produced false
+failures because it began counting immediately after a burst, allowing
+in-flight latest-state updates to be judged against the final expectation.
+Those historical results remain under
+`Testing/feature8/runs/archive/20260903_extended_ordered/delivery_load/` and are not
+acceptance evidence. The runner was corrected to configure the expectation
+before transmission and use the monitor's bounded settle interval. The
+corrected group passed:
+
+Results are retained under
+`Testing/feature8/runs/canonical/03_delivery_load/`:
+
+| Case | Result |
+|---|---|
+| Bytewise valid frame with 1 ms gaps | 133/133 pass, 0 fail |
+| Header splits and back-to-back frames | 133/133 pass, 0 fail |
+| 100 deterministic random-chunk frames | 133/133 pass, 0 fail |
+
+The sequence-wrap hook was then compiled, flashed, and exercised with the
+four-case smoke oracle; it passed 4/4. The default production transmitter was
+flashed again and its final smoke regression passed 4/4. Evidence is under
+`Testing/feature8/runs/canonical/05_sequence_wrap/` and
+`Testing/feature8/runs/canonical/01_final_production_smoke/`.
+
+This execution covers the automated parser, serial delivery/load, and selected
+wireless-hook checks. It does **not** by itself satisfy the complete Feature 8
+acceptance gates: physical DMX inspection, receiver power/RF interruption,
+two-receiver comparison, the remaining fault hooks, repeat runs, and the
+30-minute soak still require execution and/or manual hardware intervention.
+
+### Fragment fault runner execution — 2026-09-03
+
+A dedicated lifecycle-safe runner,
+`Testing/feature8/tools/run_fragment_faults.py`, was added and executed using
+only `/dev/ttyUSB0` and `/dev/ttyUSB1`. It closes both serial ports before each
+compile/flash operation, applies a bounded timeout, records each case
+incrementally, restores the default transmitter after every hook, and performs
+a final production restore. `/dev/ttyUSB2` was not accessed.
+
+The complete matrix passed under
+`Testing/feature8/runs/canonical/04_fragment_faults/`:
+
+| Hook | Expected behavior | Result |
+|---|---|---|
+| `TEST_REORDER_FRAGMENTS` | Complete universe remains correct | Pass |
+| `TEST_DUPLICATE_FRAGMENT_INDEX=1` | Duplicate does not corrupt output | Pass |
+| `TEST_DROP_FRAGMENT_INDEX=0` | Previous universe remains active | Pass |
+| `TEST_DROP_FRAGMENT_INDEX=1` | Previous universe remains active | Pass |
+| `TEST_DROP_FRAGMENT_INDEX=2` | Previous universe remains active | Pass |
+| `TEST_CORRUPT_FRAGMENT_INDEX=1` | Corruption is observed and documented; no checksum is claimed | Pass |
+| `TEST_DELAYED_FRAGMENT` | Stale fragment does not alter active output | Pass |
+
+All seven hook images compiled and flashed successfully. The final default
+production image also compiled, flashed, and was hash-verified successfully.
+The corruption case intentionally reports `pass=0 fail=133`: this is the
+expected limitation of the current structural-only production protocol, not a
+claim that payload corruption is detected or rejected.
+
+The bounded runner used for this group is
+`Testing/feature8/tools/run_fragment_faults.py`. It writes each result before
+starting the next case, closes the serial ports before flashing, restores the
+production image after every hook, and intentionally opens only the two test
+ports.
+
+### Production soak execution — 2026-09-03
+
+The dedicated bounded soak runner,
+`Testing/feature8/tools/run_soak.py`, was executed with the production
+transmitter on `/dev/ttyUSB0` and the Mega monitor on `/dev/ttyUSB1`. It sent a
+distinctive 512-slot universe, measured the wired DMX output for the required
+30 minutes, and polled monitor liveness every 30 seconds. `/dev/ttyUSB2` was
+not accessed.
+
+The verified run is retained under
+`Testing/feature8/runs/canonical/06_soak_30min/` and passed:
+
+- requested duration: 1,800 seconds;
+- monitor liveness: 59/59 polls returned `STATUS state=2`;
+- captured DMX frames: 79,882;
+- matching frames: 79,882;
+- content failures: 0;
+- final monitor result: `RESULT seconds=1800 checks=79882 pass=79882 fail=0 no_data=14ms`.
+
+Two earlier runs completed the full timed window and had clean liveness polls
+but were correctly classified as inconclusive because the harness missed the
+final `RESULT` line. The result-read timing and integer-second acceptance logic
+were corrected before the verified run; those earlier manifests remain under
+`Testing/feature8/runs/archive/20260903_soak_30min/`,
+`Testing/feature8/runs/archive/20260903_soak_30min_repeat/`, and
+`Testing/feature8/runs/archive/20260903_soak_30min_acceptance/` as diagnostic
+evidence.
+
 ## Compile-only verification
 
 ```bash
@@ -207,43 +318,26 @@ That opt-in build additionally requires
 `stagingUniverse[i] == (i + frameSequence) & 0xFF`, and will reject ordinary
 ENTTEC lighting values. Do not flash that test configuration for Feature 8.
 
-### Hardware observations (2026-09-03)
+### Hardware observations and canonical evidence (2026-09-03)
 
-Before production validation was made the default, the prior receiver build
-still had the deterministic gate always enabled. The Mega saw live DMX (`133`
-complete frames per three-second window), but arbitrary ENTTEC expectations did
-not promote. That run is not Feature 8 acceptance evidence; re-run the suite
-with the current default receiver build and retain its new manifest.
+The production transmitter image was restored and flash-verified after all
+fault-hook tests. The canonical evidence index is:
 
-The following bounded runs were subsequently completed using `/dev/ttyUSB0`
-for the transmitter and `/dev/ttyUSB1` for the Mega; `/dev/ttyUSB2` was not
-accessed:
+| Coverage | Canonical evidence |
+|---|---|
+| Smoke and final production regression | `Testing/feature8/runs/canonical/01_final_production_smoke/` |
+| Parser and boundary cases | `Testing/feature8/runs/canonical/02_parser_edge_cases/` |
+| Serial delivery/load | `Testing/feature8/runs/canonical/03_delivery_load/` |
+| Fragment fault matrix | `Testing/feature8/runs/canonical/04_fragment_faults/` |
+| Sequence rollover | `Testing/feature8/runs/canonical/05_sequence_wrap/` |
+| 30-minute production soak | `Testing/feature8/runs/canonical/06_soak_30min/` |
 
-- `Testing/feature8/runs/20260903_132331_smoke_fixed/`: 4/4 smoke cases passed.
-- `Testing/feature8/runs/20260903_140000_edge_cases_fixed/`: 13/13 targeted
-  parser and boundary cases passed after the parser resynchronization fix.
+All canonical runs used `/dev/ttyUSB0` for the transmitter and `/dev/ttyUSB1`
+for the Mega; `/dev/ttyUSB2` was not accessed. Superseded runs and diagnostic
+compile logs are retained separately in
+`Testing/feature8/runs/archive/` and `Testing/feature8/results/archive/` and
+are not part of the acceptance evidence.
 
-The transmitter changes made for those edge cases are: zero-length malformed
-payloads now advance directly to terminator handling, and a repeated start
-delimiter while reading the label starts a fresh packet. The latter is not
-applied inside payload bytes, where `0x7E` is valid DMX data.
-
-Additional fault-hook coverage:
-
-- `TEST_REORDER_FRAGMENTS`: compiled, flashed, and the complete smoke suite
-  passed (4/4).
-- `TEST_DUPLICATE_FRAGMENT_INDEX=1`: compiled, flashed, and the complete smoke
-  suite passed (4/4).
-- `TEST_SEQUENCE_WRAP`: compiled successfully, but was not flashed in this
-  session.
-- `TEST_DELAYED_FRAGMENT`: initially exposed a pre-existing hook syntax error;
-  after correction it compiled and flashed. The ordinary smoke suite failed
-  under this altered cadence (short-universe: 38 failures; recovery: 1 failure),
-  so delayed-fragment behavior remains open for a dedicated stale-fragment
-  oracle rather than being counted as a pass.
-
-The production transmitter image was restored and flash-verified after the
-fault-hook tests. The first repeat smoke run before the parser fixes also had
-one intermittent short-universe mismatch (`25/26` frames passed); subsequent
-fixed-image smoke and boundary runs passed. This intermittent observation
-should be investigated during the soak/repeat phase rather than discarded.
+The verified implementation includes the zero-length malformed-payload fix
+and repeated-start resynchronization fix. The production protocol remains
+structural-only and intentionally has no payload checksum.

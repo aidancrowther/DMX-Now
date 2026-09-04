@@ -1029,7 +1029,7 @@ Hardware validation:
 
 ### Feature 8: ENTTEC DMX USB Pro Serial Input/Parser
 
-Status: IMPLEMENTED (compile-verified 2026-09-02; hardware verification pending)
+Status: SUBSTANTIALLY COMPLETE (implemented and hardware-verified 2026-09-03)
 
 The integrated transmitter at `./transmitter/transmitter.ino` accepts the
 ENTTEC DMX USB Pro packet format on UART0:
@@ -1054,9 +1054,34 @@ packets continue to be received and validated, but telemetry and diagnostic
 text output is disabled by default because UART0 is the binary ENTTEC input.
 
 The 57600-baud input limits a complete 513-byte DMX payload to approximately
-10–11 frames per second before serial framing overhead. Hardware verification
-still requires an ENTTEC-compatible host or serial test source and the existing
-receiver/DMX monitor.
+10–11 frames per second before serial framing overhead.
+
+#### Feature 8 verification summary
+
+Hardware verification used an ENTTEC-compatible serial source, an ESP8266
+transmitter, the production receiver firmware, the receiver MAX3485 DMX output,
+and an Arduino Mega monitor on USART1. The canonical evidence is indexed in
+`./Testing/feature8/plan/FEATURE8_HARDWARE_TEST_PLAN.md` and retained under
+`./Testing/feature8/runs/canonical/`.
+
+Verified on 2026-09-03:
+
+* four-case end-to-end smoke suite: 4/4;
+* parser and boundary suite: 13/13;
+* serial delivery/load suite: 3/3 after correcting the test oracle to account
+  for the latest-state wireless design;
+* fragment reorder, duplicate, dropped-fragment, delayed-fragment, and sequence
+  rollover tests: all defined cases passed;
+* production 30-minute soak: 1,800 seconds, 79,882/79,882 DMX frames matched,
+  zero content failures, and 59/59 monitor liveness polls passed.
+
+This is substantial hardware completion of Feature 8. Remaining work is
+limited to optional/manual coverage outside the automated TX-to-Mega pipeline:
+physical DMX waveform inspection, deliberate receiver power/RF interruption
+and recovery, simultaneous comparison of both receivers, cold/warm repeat
+runs, and any additional long-duration environmental testing. The current
+production protocol intentionally has no payload checksum; the fault test
+documents that limitation rather than claiming payload-corruption detection.
 
 ### Feature 9: Low-Battery GPIO Monitoring
 
@@ -1114,7 +1139,8 @@ Expected approximate sequence:
 5. Wireless packet format and fragmentation ✓ (Feature 5, verified 2026-08-24)
 6. Receiver universe reconstruction/double buffering ✓ (Feature 6, verified 2026-08-27)
 7. Configurable transmitter wireless refresh + reliable-rate test harness ✓ (hardware-validated 2026-09-02; conservative reliable ceiling 20 Hz)
-8. ENTTEC serial input/parser ✓ (implemented; hardware verification pending)
+8. ENTTEC serial input/parser ✓ (substantially complete; hardware-verified
+   2026-09-03; optional manual physical/repeat coverage remains)
 9. Low-battery GPIO monitoring ✓ (hardware-verified 2026-09-02)
 10. Receiver telemetry ✓ (multi-receiver hardware-verified 2026-09-02)
 11. Status/management interface

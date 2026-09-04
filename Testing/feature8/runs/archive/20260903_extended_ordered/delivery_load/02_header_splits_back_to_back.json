@@ -1,0 +1,5 @@
+{
+  "name": "header_splits_back_to_back",
+  "passed": false,
+  "detail": "RESULT seconds=3 checks=133 pass=103 fail=30 no_data=1ms"
+}

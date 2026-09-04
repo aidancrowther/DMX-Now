@@ -1,0 +1,22 @@
+{
+  "tx_port": "/dev/ttyUSB0",
+  "mega_port": "/dev/ttyUSB1",
+  "passed": false,
+  "results": [
+    {
+      "name": "bytewise_1ms",
+      "passed": false,
+      "detail": "elapsed=3.7s RESULT seconds=3 checks=134 pass=129 fail=5 no_data=3ms"
+    },
+    {
+      "name": "header_splits_back_to_back",
+      "passed": false,
+      "detail": "RESULT seconds=3 checks=133 pass=103 fail=30 no_data=1ms"
+    },
+    {
+      "name": "100_random_chunk_frames",
+      "passed": false,
+      "detail": "RESULT seconds=3 checks=133 pass=95 fail=38 no_data=4ms"
+    }
+  ]
+}
