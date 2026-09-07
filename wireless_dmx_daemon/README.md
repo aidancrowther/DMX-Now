@@ -165,6 +165,30 @@ daemon owns the physical transmitter at 115200 8N2 and exposes current state
 through service snapshots rather than mixing diagnostic text into the ENTTEC
 stream.
 
+The 30-minute end-to-end acceptance runner completed successfully on 2026-09-04
+with the real transmitter at `/dev/ttyUSB0`, the Arduino Mega monitor at
+`/dev/ttyUSB1`, and two active receivers. It submitted 36,000 full-universe DMX
+frames at 20 Hz with zero daemon pacer drops. The Mega performed 79,880 physical
+DMX checks, with 79,880 passes and zero failures; reported no-data time was
+19 ms. The daemon maintained transmitter and virtual-client connectivity and
+observed both receivers throughout. Evidence is retained under
+`runs/30min-acceptance/`.
+
+The end-to-end acceptance runner is:
+
+```bash
+python3 tests/run_30min_acceptance.py \
+  --tx-port /dev/ttyUSB0 \
+  --mega-port /dev/ttyUSB1 \
+  --seconds 1800 \
+  --run-dir runs/30min-acceptance
+```
+
+It opens the daemon PTY as a serial client, streams a complete ramp universe at
+20 Hz, validates the physical receiver output with the Arduino Mega, and logs
+daemon telemetry/progress. The transmitter's text telemetry logging must remain
+disabled because its UART carries the ENTTEC stream.
+
 For a one-shot live receiver query:
 
 ```bash
