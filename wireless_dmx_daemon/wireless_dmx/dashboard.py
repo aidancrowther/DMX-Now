@@ -1,0 +1,471 @@
+"""btop-like terminal dashboard for the Wireless DMX system."""
+
+from __future__ import annotations
+
+import argparse
+import curses
+import json
+import os
+import subprocess
+import threading
+import time
+from collections import deque
+from dataclasses import asdict
+from pathlib import Path
+
+import serial
+
+from .app import WirelessDmxService
+from .config import apply_args, load_config
+from .config_editor import EDITABLE_FIELDS, field_value, save_edited_config, update_field
+from .models import DaemonConfig, DaemonHealth, DaemonSnapshot
+
+
+COLOR_PAIRS = {
+    "healthy": 1,
+    "warning": 2,
+    "critical": 3,
+    "accent": 4,
+    "muted": 5,
+}
+
+
+def init_colors() -> None:
+    """Initialize semantic dashboard colors when the terminal supports them."""
+    if not curses.has_colors():
+        return
+    curses.start_color()
+    try:
+        curses.use_default_colors()
+    except curses.error:
+        pass
+    curses.init_pair(COLOR_PAIRS["healthy"], curses.COLOR_GREEN, -1)
+    curses.init_pair(COLOR_PAIRS["warning"], curses.COLOR_YELLOW, -1)
+    curses.init_pair(COLOR_PAIRS["critical"], curses.COLOR_RED, -1)
+    curses.init_pair(COLOR_PAIRS["accent"], curses.COLOR_CYAN, -1)
+    curses.init_pair(COLOR_PAIRS["muted"], curses.COLOR_WHITE, -1)
+
+
+def color_attr(name: str, bold: bool = False) -> int:
+    attr = curses.color_pair(COLOR_PAIRS.get(name, COLOR_PAIRS["muted"])) if curses.has_colors() else 0
+    return attr | (curses.A_BOLD if bold else 0)
+
+
+def bar(value: float, maximum: float, width: int = 12) -> str:
+    """Return a compact Unicode-independent ASCII bar for narrow terminals."""
+    if maximum <= 0:
+        filled = 0
+    else:
+        filled = max(0, min(width, int(round(value / maximum * width))))
+    return "[" + "#" * filled + "." * (width - filled) + "]"
+
+
+def rssi_quality(rssi: int) -> tuple[str, float]:
+    """Convert RSSI dBm into a display label and normalized bar value."""
+    quality = max(0.0, min(1.0, (rssi + 90) / 60.0))
+    label = "GOOD" if quality >= 0.66 else "FAIR" if quality >= 0.33 else "WEAK"
+    return label, quality
+
+
+def receiver_display_segments(receiver) -> tuple[str, str, str, str, str]:
+    """Return non-overlapping receiver display fields.
+
+    Keeping these fields separate prevents battery status text from overwriting
+    the RSSI quality/bar visualization in narrow terminal layouts.
+    """
+    quality, quality_value = rssi_quality(receiver.transmitter_rssi)
+    return (
+        f"RX-{receiver.receiver_id:08X}",
+        receiver.link_state.value,
+        "LOW" if receiver.battery_low else "OK",
+        f"{receiver.transmitter_rssi:>3}dBm {quality:<4}{bar(quality_value, 1, 8)}",
+        f"{receiver.transmitter_last_seen_ms:>7}ms {receiver.complete_universes:>9} {receiver.incomplete_universes:>9}",
+    )
+
+
+MAIN_COMMANDS = "[d] daemon  [r] telemetry  [s] SETTINGS  [x] advanced  [l] logs  [q] quit"
+SETUP_COMMANDS = "[↑/↓/j/k] select  [e] edit  [w] write config  [x] cancel"
+ADVANCED_COMMANDS = "[m] Mega  [a] acceptance  [b] abort Mega  [x] main  [q] quit"
+
+
+class MegaMonitorController:
+    """Non-blocking controller for the existing Arduino Mega DMX monitor."""
+
+    def __init__(self, port: str = "/dev/ttyUSB1") -> None:
+        self.port_name = port
+        self.port: serial.Serial | None = None
+        self.state = "disconnected"
+        self.result: dict[str, int] = {}
+        self.last_line = ""
+        self.error: str | None = None
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._lock = threading.Lock()
+
+    def connect(self) -> None:
+        if self.port is not None:
+            return
+        self.port = serial.Serial(self.port_name, 115200, timeout=0.2)
+        self.port.reset_input_buffer()
+        self.state = "ready"
+        self.error = None
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._read_loop, name="mega-monitor", daemon=True)
+        self._thread.start()
+
+    def _read_loop(self) -> None:
+        while not self._stop.is_set() and self.port is not None:
+            try:
+                line = self.port.readline().decode(errors="replace").strip()
+                if not line:
+                    continue
+                with self._lock:
+                    self.last_line = line
+                    if line.startswith("RESULT "):
+                        self.result = self._fields(line)
+                        self.state = "complete"
+            except Exception as exc:
+                self.error = str(exc)
+                self.state = "error"
+                return
+
+    @staticmethod
+    def _fields(line: str) -> dict[str, int]:
+        result = {}
+        for token in line.split()[1:]:
+            if "=" in token:
+                key, value = token.split("=", 1)
+                result[key] = int(value.rstrip("ms"))
+        return result
+
+    def _command(self, command: str) -> None:
+        if self.port is None:
+            self.connect()
+        assert self.port is not None
+        self.port.write((command + "\n").encode())
+        self.port.flush()
+
+    def start_measurement(self, seconds: int = 1800, ramp_base: int = 23) -> None:
+        self._command(f"EXPECT RAMP {ramp_base}")
+        self._command(f"START 5 {seconds}")
+        self.state = f"measuring {seconds}s"
+        self.result = {}
+
+    def abort(self) -> None:
+        if self.port is not None:
+            self._command("ABORT")
+        self.state = "ready"
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            return {"port": self.port_name, "state": self.state, "last_line": self.last_line,
+                    "result": dict(self.result), "error": self.error}
+
+    def close(self) -> None:
+        self._stop.set()
+        if self.port is not None:
+            try:
+                self.port.close()
+            except Exception:
+                pass
+        if self._thread:
+            self._thread.join(timeout=1)
+        self.port = None
+
+
+class DashboardController:
+    def __init__(self, config: DaemonConfig, mega_port: str = "/dev/ttyUSB1", config_path: str = "default.conf") -> None:
+        self.config = config
+        self.config_path = config_path
+        self.service: WirelessDmxService | None = None
+        self.mega = MegaMonitorController(mega_port)
+        self.events: deque[str] = deque(maxlen=80)
+        self.acceptance: subprocess.Popen | None = None
+        self._lock = threading.Lock()
+
+    def save_configuration(self) -> None:
+        save_edited_config(self.config, self.config_path)
+        self.log(f"configuration saved to {self.config_path}")
+
+    def log(self, message: str) -> None:
+        with self._lock:
+            self.events.appendleft(f"{time.strftime('%H:%M:%S')} {message}")
+
+    def start_daemon(self) -> None:
+        if self.service is not None:
+            self.log("daemon already running")
+            return
+        self.service = WirelessDmxService(self.config)
+        self.service.start()
+        self.log(f"daemon started; PTY={self.service.virtual.path}")
+
+    def stop_daemon(self) -> None:
+        if self.service is None:
+            self.log("daemon already stopped")
+            return
+        self.service.stop()
+        self.service = None
+        self.log("daemon stopped")
+
+    def request_telemetry(self) -> None:
+        if self.service is None:
+            self.log("cannot request telemetry: daemon stopped")
+            return
+        self.service._last_telemetry_request = 0.0
+        self.log("telemetry request scheduled")
+
+    def start_mega(self) -> None:
+        try:
+            self.mega.connect()
+            self.mega.start_measurement()
+            self.log(f"Mega measurement started on {self.mega.port_name}")
+        except Exception as exc:
+            self.log(f"Mega error: {exc}")
+
+    def start_acceptance(self) -> None:
+        if self.acceptance and self.acceptance.poll() is None:
+            self.log("acceptance runner already active")
+            return
+        root = Path(__file__).resolve().parents[1]
+        run_dir = root / "runs" / "dashboard-acceptance"
+        command = ["python3", str(root / "tests" / "run_30min_acceptance.py"),
+                   "--tx-port", self.config.transmitter_device, "--mega-port", self.mega.port_name,
+                   "--seconds", "1800", "--run-dir", str(run_dir)]
+        self.acceptance = subprocess.Popen(command, cwd=root, stdout=subprocess.DEVNULL,
+                                           stderr=subprocess.DEVNULL)
+        self.log(f"acceptance runner started pid={self.acceptance.pid}")
+
+    def snapshot(self) -> DaemonSnapshot:
+        return self.service.snapshot() if self.service else DaemonSnapshot(health=DaemonHealth.READY)
+
+    def close(self) -> None:
+        if self.acceptance and self.acceptance.poll() is None:
+            self.acceptance.terminate()
+        self.mega.close()
+        self.stop_daemon()
+
+
+def _safe_add(stdscr, y: int, x: int, text: str, attr=0, width: int | None = None) -> None:
+    height, columns = stdscr.getmaxyx()
+    if y < 0 or y >= height or x >= columns:
+        return
+    text = text if width is None else text[:width]
+    try:
+        stdscr.addnstr(y, x, text, max(0, columns - x - 1) if width is None else width, attr)
+    except curses.error:
+        pass
+
+
+def _box(stdscr, top: int, left: int, bottom: int, right: int, title: str) -> None:
+    try:
+        stdscr.addch(top, left, curses.ACS_ULCORNER)
+        stdscr.hline(top, left + 1, curses.ACS_HLINE, max(0, right - left - 1))
+        stdscr.addch(top, right, curses.ACS_URCORNER)
+        stdscr.vline(top + 1, left, curses.ACS_VLINE, max(0, bottom - top - 1))
+        stdscr.vline(top + 1, right, curses.ACS_VLINE, max(0, bottom - top - 1))
+        stdscr.addch(bottom, left, curses.ACS_LLCORNER)
+        stdscr.hline(bottom, left + 1, curses.ACS_HLINE, max(0, right - left - 1))
+        stdscr.addch(bottom, right, curses.ACS_LRCORNER)
+        _safe_add(stdscr, top, left + 2, f" {title} ", curses.A_BOLD)
+    except curses.error:
+        pass
+
+
+def render(stdscr, controller: DashboardController, show_logs: bool) -> None:
+    stdscr.erase()
+    height, width = stdscr.getmaxyx()
+    snapshot = controller.snapshot()
+    mega = controller.mega.snapshot()
+    title = "WIRELESS DMX CONTROL CENTER"
+    _safe_add(stdscr, 0, 2, title, color_attr("accent", True) | curses.A_REVERSE)
+    _safe_add(stdscr, 0, max(2, width - 26), time.strftime("%Y-%m-%d %H:%M:%S"), curses.A_DIM)
+    _box(stdscr, 2, 1, 7, width // 2 - 1, "DAEMON")
+    _box(stdscr, 2, width // 2, 7, width - 2, "DMX / PACER")
+    health_color = "healthy" if snapshot.health.value == "running" else "critical"
+    tx_color = "healthy" if snapshot.transmitter_connected else "critical"
+    client_color = "healthy" if snapshot.virtual_client_connected else "warning"
+    _safe_add(stdscr, 3, 3, f"Health       : {snapshot.health.value}", color_attr(health_color, True))
+    _safe_add(stdscr, 4, 3, f"Transmitter  : {'CONNECTED' if snapshot.transmitter_connected else 'OFFLINE'}", color_attr(tx_color, True))
+    _safe_add(stdscr, 5, 3, f"Virtual PTY  : {snapshot.virtual_port or '-'}", color_attr("accent"))
+    _safe_add(stdscr, 6, 3, f"Lighting app : {'CONNECTED' if snapshot.virtual_client_connected else 'WAITING'}", color_attr(client_color, True))
+    x = width // 2 + 2
+    _safe_add(stdscr, 3, x, f"Input        : {snapshot.dmx.valid_dmx_frames:>8} {bar(snapshot.dmx.valid_dmx_frames, max(1, snapshot.dmx.valid_dmx_frames))}")
+    _safe_add(stdscr, 4, x, f"Submitted    : {snapshot.dmx.frames_submitted:>8} {bar(snapshot.dmx.frames_submitted, max(1, snapshot.dmx.valid_dmx_frames))}", color_attr("healthy"))
+    drop_color = "warning" if snapshot.dmx.frames_dropped_by_pacer else "healthy"
+    _safe_add(stdscr, 5, x, f"Dropped      : {snapshot.dmx.frames_dropped_by_pacer:>8} {bar(snapshot.dmx.frames_dropped_by_pacer, max(1, snapshot.dmx.valid_dmx_frames))}", color_attr(drop_color))
+    _safe_add(stdscr, 6, x, f"Target rate  : {controller.config.pacer_rate_hz:.1f} Hz  Art-Net: "
+              f"{'ON' if controller.config.artnet_enabled else 'OFF'}:{controller.config.artnet_port}", color_attr("accent", True))
+    _box(stdscr, 8, 1, max(10, 11 + len(snapshot.receivers)), width - 2, "RECEIVERS")
+    row = 9
+    _safe_add(stdscr, row, 3, "ID         LINK     BATTERY  RSSI             LAST SEEN  COMPLETE  INCOMPLETE", color_attr("accent", True))
+    for receiver in snapshot.receivers:
+        row += 1
+        link_color = "healthy" if receiver.link_state.value == "online" else "warning" if receiver.link_state.value == "stale" else "critical"
+        battery_color = "warning" if receiver.battery_low else "healthy"
+        receiver_id, link, battery, rssi, counters = receiver_display_segments(receiver)
+        _safe_add(stdscr, row, 3, receiver_id, color_attr("accent", True))
+        _safe_add(stdscr, row, 15, f"{link:<8}", color_attr(link_color, True))
+        _safe_add(stdscr, row, 24, f"{battery:<8}", color_attr(battery_color, True))
+        _safe_add(stdscr, row, 33, rssi, color_attr("healthy" if receiver.transmitter_rssi >= -55 else "warning"))
+        _safe_add(stdscr, row, 54, counters)
+    log_top = max(12 + len(snapshot.receivers), height - 8) if show_logs else height - 3
+    if show_logs and log_top < height - 2:
+        _box(stdscr, log_top, 1, height - 3, width - 2, "EVENTS")
+        for index, event in enumerate(list(controller.events)[:max(0, height - log_top - 4)]):
+            _safe_add(stdscr, log_top + 1 + index, 3, event)
+    _safe_add(stdscr, height - 2, 2, MAIN_COMMANDS, color_attr("accent", True))
+    telemetry = snapshot.telemetry
+    telemetry_state = "WAITING" if telemetry.request_in_flight else "ACTIVE" if telemetry.enabled else "OFF"
+    _safe_add(stdscr, height - 1, 2, f"TELEMETRY: {telemetry_state} req={telemetry.requests_sent} reports={telemetry.reports_received} failures={telemetry.consecutive_failures}  MEGA: {mega['state']}", curses.A_DIM)
+    stdscr.refresh()
+
+
+def render_advanced(stdscr, controller: DashboardController) -> None:
+    stdscr.erase()
+    height, width = stdscr.getmaxyx()
+    _safe_add(stdscr, 0, 2, "WIRELESS DMX ADVANCED / HARDWARE TESTING", color_attr("warning", True) | curses.A_REVERSE)
+    _box(stdscr, 2, 1, min(height - 4, 10), width - 2, "MEGA MONITOR")
+    mega = controller.mega.snapshot()
+    _safe_add(stdscr, 3, 3, f"Port       : {mega['port']}")
+    _safe_add(stdscr, 4, 3, f"State      : {mega['state']}", color_attr("healthy" if mega['state'] in ('ready', 'complete') else "warning", True))
+    _safe_add(stdscr, 5, 3, f"Last line  : {mega.get('last_line', '-')}")
+    result = mega.get("result", {})
+    _safe_add(stdscr, 6, 3, f"Checks     : {result.get('checks', '-')}")
+    _safe_add(stdscr, 7, 3, f"Pass/fail  : {result.get('pass', '-')} / {result.get('fail', '-')}")
+    _safe_add(stdscr, 8, 3, f"No-data    : {result.get('no_data', '-')} ms")
+    _box(stdscr, 12, 1, min(height - 4, 18), width - 2, "ACTIONS")
+    _safe_add(stdscr, 14, 3, "[m] connect Mega and start 30-minute-style measurement", color_attr("warning", True))
+    _safe_add(stdscr, 15, 3, "[a] launch external 30-minute acceptance runner", color_attr("warning", True))
+    _safe_add(stdscr, 16, 3, "[b] abort Mega measurement", color_attr("warning", True))
+    _safe_add(stdscr, 17, 3, "[x] return to main dashboard", color_attr("accent", True))
+    _safe_add(stdscr, height - 2, 2, ADVANCED_COMMANDS, color_attr("accent", True))
+    _safe_add(stdscr, height - 1, 2, "Hardware validation controls are intentionally hidden from the normal dashboard.", curses.A_DIM)
+    stdscr.refresh()
+
+
+def render_setup(stdscr, controller: DashboardController, selected: int, message: str) -> None:
+    stdscr.erase()
+    height, width = stdscr.getmaxyx()
+    _safe_add(stdscr, 0, 2, "WIRELESS DMX SETUP", color_attr("accent", True) | curses.A_REVERSE)
+    _safe_add(stdscr, 1, 2, f"File: {controller.config_path}", curses.A_DIM)
+    top, bottom = 3, max(4, height - 4)
+    _box(stdscr, top, 1, bottom, width - 2, "CONFIGURATION")
+    visible = max(1, bottom - top - 2)
+    first = max(0, min(selected - visible + 1, len(EDITABLE_FIELDS) - visible))
+    for row, index in enumerate(range(first, min(len(EDITABLE_FIELDS), first + visible)), top + 1):
+        label, _, _ = EDITABLE_FIELDS[index]
+        attr = color_attr("accent", True) if index == selected else 0
+        _safe_add(stdscr, row, 3, f"{label:<28} {field_value(controller.config, index)}", attr)
+    if message:
+        _safe_add(stdscr, height - 2, 2, message, color_attr("warning", True))
+    _safe_add(stdscr, height - 1, 2, SETUP_COMMANDS, color_attr("accent", True))
+    stdscr.refresh()
+
+
+def run_dashboard(stdscr, controller: DashboardController) -> None:
+    curses.curs_set(0)
+    init_colors()
+    stdscr.nodelay(True)
+    stdscr.timeout(250)
+    show_logs = True
+    advanced = False
+    setup = False
+    setup_selected = 0
+    setup_message = ""
+    controller.start_daemon()
+    while True:
+        if setup:
+            render_setup(stdscr, controller, setup_selected, setup_message)
+        elif advanced:
+            render_advanced(stdscr, controller)
+        else:
+            render(stdscr, controller, show_logs)
+        key = stdscr.getch()
+        if key < 0:
+            continue
+        if key in (ord("q"), ord("Q")):
+            return
+        if key in (ord("x"), ord("X")):
+            if setup:
+                setup = False
+                setup_message = "changes discarded"
+            else:
+                advanced = not advanced
+            continue
+        if key in (ord("s"), ord("S")) and not advanced and not setup:
+            setup = True
+            setup_selected = 0
+            setup_message = ""
+            continue
+        if setup:
+            if key in (curses.KEY_UP, ord("k")):
+                setup_selected = max(0, setup_selected - 1)
+            elif key in (curses.KEY_DOWN, ord("j")):
+                setup_selected = min(len(EDITABLE_FIELDS) - 1, setup_selected + 1)
+            elif key in (ord("e"), ord("E")):
+                label, _, _ = EDITABLE_FIELDS[setup_selected]
+                curses.echo()
+                curses.curs_set(1)
+                _safe_add(stdscr, height - 1, 2, f"Enter {label}: ")
+                stdscr.refresh()
+                try:
+                    text = stdscr.getstr(height - 1, min(width - 2, 2 + len(label) + 8), 80).decode()
+                    controller.config = update_field(controller.config, setup_selected, text)
+                    setup_message = f"updated {label}"
+                except (ValueError, curses.error) as exc:
+                    setup_message = f"invalid value: {exc}"
+                finally:
+                    curses.noecho()
+                    curses.curs_set(0)
+            elif key in (ord("w"), ord("W")):
+                try:
+                    controller.save_configuration()
+                    setup_message = f"saved {controller.config_path}; restart daemon to apply"
+                except Exception as exc:
+                    setup_message = f"save failed: {exc}"
+            continue
+        if advanced:
+            if key in (ord("m"), ord("M")):
+                controller.start_mega()
+            elif key in (ord("a"), ord("A")):
+                controller.start_acceptance()
+            elif key in (ord("b"), ord("B")):
+                controller.mega.abort()
+                controller.log("Mega measurement aborted")
+            continue
+        if key in (ord("d"), ord("D")):
+            if controller.service:
+                controller.stop_daemon()
+            else:
+                controller.start_daemon()
+        elif key in (ord("r"), ord("R")):
+            controller.request_telemetry()
+        elif key in (ord("l"), ord("L")):
+            show_logs = not show_logs
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="wireless-dmx-dashboard")
+    parser.add_argument("--config")
+    parser.add_argument("--mega-port", default="/dev/ttyUSB1")
+    parser.add_argument("--no-daemon", action="store_true")
+    parser.add_argument("--config-path", help="path to save from setup editor; defaults to selected config")
+    return parser
+
+
+def main(argv=None) -> int:
+    args = build_parser().parse_args(argv)
+    config_path = args.config or "default.conf"
+    config = load_config(args.config)
+    controller = DashboardController(config, args.mega_port, args.config_path or config_path)
+    try:
+        if args.no_daemon:
+            controller.log("dashboard started without daemon")
+        curses.wrapper(run_dashboard, controller)
+    finally:
+        controller.close()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

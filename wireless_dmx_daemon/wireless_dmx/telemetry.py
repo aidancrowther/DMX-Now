@@ -8,7 +8,6 @@ from threading import Lock
 
 from .models import ReceiverLinkState, ReceiverTelemetry
 from .transmitter.management import TelemetryReportPart
-from .transmitter.management import TelemetryReportPart
 
 
 class TelemetryStore:
@@ -21,19 +20,6 @@ class TelemetryStore:
     def update(self, telemetry: ReceiverTelemetry) -> None:
         with self._lock:
             self._items[telemetry.receiver_id] = (telemetry, time.monotonic())
-
-    def update_report(self, parts: tuple[TelemetryReportPart, ...]) -> bool:
-        if not parts:
-            return False
-        first = parts[0]
-        if (len(parts) != first.part_count or
-                sorted(part.part_index for part in parts) != list(range(first.part_count)) or
-                any(part.report_sequence != first.report_sequence for part in parts)):
-            return False
-        for part in parts:
-            for telemetry in part.records:
-                self.update(telemetry)
-        return True
 
     def update_report(self, parts: tuple[TelemetryReportPart, ...]) -> bool:
         """Publish one complete, internally consistent multipart report."""

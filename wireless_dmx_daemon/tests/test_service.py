@@ -88,6 +88,42 @@ class ServiceTests(unittest.TestCase):
         connection.stop()
         self.assertEqual(fake.writes[:2], [b"mgmt", b"dmx"])
 
+    def test_telemetry_request_is_reissued_after_timeout(self):
+        fake = FakeSerial()
+        service = WirelessDmxService(
+            DaemonConfig(virtual_port_path="/tmp/wireless-dmx-telemetry-timeout",
+                         telemetry_interval_seconds=0.05,
+                         telemetry_response_timeout_seconds=0.01),
+            serial_factory=lambda: fake,
+            virtual_backend=LinuxPtyBackend("/tmp/wireless-dmx-telemetry-timeout"),
+        )
+        service.start()
+        try:
+            deadline = time.monotonic() + 0.25
+            while time.monotonic() < deadline and len(fake.writes) < 3:
+                time.sleep(0.01)
+            snapshot = service.snapshot()
+            self.assertGreaterEqual(snapshot.telemetry.requests_sent, 3)
+            self.assertGreaterEqual(snapshot.telemetry.consecutive_failures, 1)
+            self.assertLessEqual(snapshot.telemetry.requests_sent, 8)
+        finally:
+            service.stop()
+
+    def test_telemetry_report_clears_in_flight_request(self):
+        fake = FakeSerial()
+        service = WirelessDmxService(
+            DaemonConfig(virtual_port_path="/tmp/wireless-dmx-telemetry-success"),
+            serial_factory=lambda: fake,
+            virtual_backend=LinuxPtyBackend("/tmp/wireless-dmx-telemetry-success"),
+        )
+        service._telemetry_request_started = time.monotonic()
+        service._telemetry_requests_sent = 1
+        service._on_transmitter_data(telemetry_part())
+        # The report is complete and should be counted even when injected by a
+        # fake transport rather than received by the background thread.
+        self.assertEqual(service.snapshot().telemetry.reports_received, 1)
+        self.assertFalse(service.snapshot().telemetry.request_in_flight)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -14,6 +14,8 @@ receiver telemetry and operating statistics through a CLI and future GUI/API.
 * Transmitter connection: configurable serial device, default `/dev/ttyUSB0`.
 * Transmitter serial format: 115200 baud, 8 data bits, no parity, 2 stop bits.
 * Default wireless pacing rate: 20 Hz.
+* Art-Net ArtDMX input is enabled by default on UDP port 6454, Universe 0.
+* Virtual serial and Art-Net inputs can be enabled independently or together.
 * Rates above 20 Hz require an explicit experimental override.
 * Telemetry is binary Feature 11 management traffic. The transmitter's text
   telemetry logging is not enabled during normal operation because it would
@@ -138,13 +140,13 @@ and safe reconnect behavior.
 
 ## Current implementation status
 
-Phases 0–8 are implemented in the initial Linux host version. The package has
+Phases 0–8 and the current Feature 11 host status/management scope are
+substantially complete for the Linux/20 Hz deployment. The package has
 standard-library core models, a streaming ENTTEC parser, Feature 11 management
 codec, bounded latest-state pacer, reconnecting transmitter adapter, Linux PTY
 backend, TOML loading, CLI entry point, structured logging, and a systemd unit
-template. Phase 9 hardware acceptance still requires running the daemon against
-the physical Mega/transmitter combination; the existing ESP8266 firmware and
-Feature 11 hardware evidence remain separate from this host component.
+template. Native Windows/macOS virtual serial support, broader fault-injection
+coverage, and a future GUI remain follow-up work.
 
 The host implementation has passed 21 automated tests and live validation on
 2026-09-04. The live test opened the real transmitter at `/dev/ttyUSB0`, exposed
@@ -164,6 +166,52 @@ The printed PTY slave path is the port to configure in lighting software. The
 daemon owns the physical transmitter at 115200 8N2 and exposes current state
 through service snapshots rather than mixing diagnostic text into the ENTTEC
 stream.
+
+## Art-Net input
+
+QLC+ can use its Art-Net output plugin to send Universe 0 to the daemon without
+requiring a discoverable USB Enttec interface. The default Art-Net listener is:
+
+```text
+bind:     0.0.0.0
+UDP port: 6454
+Universe: 0
+```
+
+Configure QLC+ to send Art-Net to the daemon host's IP address and Universe 0.
+The daemon normalizes ArtDMX payloads to 512 channels and sends them through the
+same 20 Hz latest-state pacer used by the virtual serial input.
+
+Input combinations are configured in TOML:
+
+```toml
+[virtual_port]
+enabled = true
+
+[artnet]
+enabled = true
+bind_host = "0.0.0.0"
+port = 6454
+universe = 0
+
+[input]
+source_policy = "latest" # latest, serial, or artnet
+```
+
+Use `source_policy = "serial"` or `"artnet"` to give one input source
+exclusive ownership when both are enabled. `latest` accepts whichever valid
+source frame arrives most recently.
+
+If no configuration path is supplied, the application loads
+`default.conf` from its working directory when present, otherwise it uses the
+built-in safe defaults.
+
+The Art-Net listener is a UDP input adapter and does not require QLC+ to see a
+USB or serial interface. Configure QLC+'s Art-Net output for the daemon host,
+Universe 0, and UDP port 6454. The daemon accepts ArtDMX while virtual serial
+is enabled, disabled, or used simultaneously. When both sources are enabled,
+`input_source_policy = "latest"` accepts the most recent valid frame;
+`"serial"` or `"artnet"` can enforce exclusive source ownership.
 
 The 30-minute end-to-end acceptance runner completed successfully on 2026-09-04
 with the real transmitter at `/dev/ttyUSB0`, the Arduino Mega monitor at
@@ -194,6 +242,67 @@ For a one-shot live receiver query:
 ```bash
 python3 -m wireless_dmx --config config.example.toml status
 ```
+
+## btop-like management dashboard
+
+The single wrapper application is the curses dashboard:
+
+```bash
+python3 wireless_dmx_dashboard.py --config config.example.toml --mega-port /dev/ttyUSB1
+```
+
+or, after installing the package:
+
+```bash
+wireless-dmx-dashboard --config config.example.toml --mega-port /dev/ttyUSB1
+```
+
+The dashboard owns one in-process `WirelessDmxService`, so it is the preferred
+interactive management entry point rather than starting the daemon separately.
+It uses a btop-inspired continuously refreshed terminal layout with color-coded
+health states, compact ASCII bar visualizations for DMX/pacer activity and RSSI,
+and separate panels for daemon state, receiver telemetry, and recent events.
+
+### Dashboard controls
+
+| Key | Action |
+|---|---|
+| `d` | Start or stop the in-process daemon |
+| `r` | Schedule an immediate telemetry request |
+| `x` | Enter/leave the Advanced hardware-testing menu |
+| `s` | Open the configuration setup editor |
+| `l` | Toggle the event panel |
+| `q` | Stop components and exit cleanly |
+
+Mega testing and the acceptance runner are intentionally hidden behind the
+Advanced menu (`x`) because they are development/validation functions rather
+than normal release controls. Inside Advanced:
+
+| Key | Action |
+|---|---|
+| `m` | Connect to `/dev/ttyUSB1` and start a Mega measurement |
+| `a` | Launch the external 30-minute acceptance runner |
+| `b` | Abort the active Mega measurement |
+| `x` | Return to the main dashboard |
+
+The `a` action starts `tests/run_30min_acceptance.py` as a bounded external
+process and writes evidence to `runs/dashboard-acceptance/`. The dashboard
+does not mix Mega monitor text or diagnostic output into the transmitter UART.
+The daemon continues to use binary Feature 11 telemetry management traffic.
+
+The dashboard/controller is separated from curses rendering. Future GUI code
+can reuse `DashboardController`, `WirelessDmxService`, `DaemonSnapshot`, and
+`MegaMonitorController` without depending on terminal drawing functions.
+
+### Configuration setup editor
+
+Press `s` on the main dashboard to edit the selected configuration fields,
+including Art-Net enablement, bind host, UDP port, universe, and input policy.
+Navigate with arrow keys or `j`/`k`, press `e` to edit a value, `w` to save
+atomically, and `x` to cancel. The editor validates each change before applying
+it and saves to the path selected by `--config-path` or the active configuration
+path. Restart the daemon after changing settings that affect sockets, PTYs, or
+the transmitter connection.
 
 ## Suggested future layout
 

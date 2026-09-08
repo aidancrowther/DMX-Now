@@ -38,6 +38,23 @@ class DmxStatistics:
     input_rate_hz: float = 0.0
     output_rate_hz: float = 0.0
     last_frame_monotonic: Optional[float] = None
+    artnet_packets: int = 0
+    artnet_valid_frames: int = 0
+    artnet_invalid_packets: int = 0
+    artnet_source_frames: int = 0
+    serial_source_frames: int = 0
+    source_frames_rejected: int = 0
+
+
+@dataclass(frozen=True)
+class TelemetryStatus:
+    enabled: bool = True
+    request_in_flight: bool = False
+    requests_sent: int = 0
+    reports_received: int = 0
+    consecutive_failures: int = 0
+    last_request_age_ms: Optional[int] = None
+    last_report_age_ms: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -86,6 +103,12 @@ class DaemonConfig:
     telemetry_offline_seconds: float = 30.0
     virtual_port_path: str = "/tmp/wireless-dmx"
     telemetry_max_report_age_seconds: float = 5.0
+    virtual_serial_enabled: bool = True
+    artnet_enabled: bool = True
+    artnet_bind_host: str = "0.0.0.0"
+    artnet_port: int = 6454
+    artnet_universe: int = 0
+    input_source_policy: str = "latest"
 
     def validate(self) -> None:
         if not self.transmitter_device:
@@ -113,7 +136,18 @@ class DaemonConfig:
         if self.telemetry_stale_seconds >= self.telemetry_offline_seconds:
             raise ValueError("stale threshold must be below offline threshold")
         if not self.virtual_port_path:
-            raise ValueError("virtual_port_path must not be empty")
+            if self.virtual_serial_enabled:
+                raise ValueError("virtual_port_path must not be empty when virtual serial is enabled")
+        if not self.virtual_serial_enabled and not self.artnet_enabled:
+            raise ValueError("at least one DMX input must be enabled")
+        if not self.artnet_bind_host:
+            raise ValueError("artnet_bind_host must not be empty")
+        if not 1 <= self.artnet_port <= 65535:
+            raise ValueError("artnet_port must be between 1 and 65535")
+        if not 0 <= self.artnet_universe <= 32767:
+            raise ValueError("artnet_universe must be between 0 and 32767")
+        if self.input_source_policy not in ("latest", "serial", "artnet"):
+            raise ValueError("input_source_policy must be latest, serial, or artnet")
         if self.telemetry_max_report_age_seconds <= 0:
             raise ValueError("telemetry_max_report_age_seconds must be positive")
 
@@ -128,4 +162,5 @@ class DaemonSnapshot:
     virtual_client_connected: bool = False
     dmx: DmxStatistics = field(default_factory=DmxStatistics)
     receivers: Tuple[ReceiverTelemetry, ...] = ()
+    telemetry: TelemetryStatus = field(default_factory=TelemetryStatus)
     last_error: Optional[str] = None

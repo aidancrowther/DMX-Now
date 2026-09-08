@@ -7,6 +7,7 @@ from .models import (
     DmxStatistics,
     ReceiverLinkState,
     ReceiverTelemetry,
+    TelemetryStatus,
 )
 
 __all__ = [
@@ -16,4 +17,5 @@ __all__ = [
     "DmxStatistics",
     "ReceiverLinkState",
     "ReceiverTelemetry",
+    "TelemetryStatus",
 ]

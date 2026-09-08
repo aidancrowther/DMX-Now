@@ -15,6 +15,7 @@ class Phase0Tests(unittest.TestCase):
         config.validate()
         self.assertEqual(config.transmitter_baud, 115200)
         self.assertEqual(config.pacer_rate_hz, 20.0)
+        self.assertTrue(config.artnet_enabled)
 
     def test_experimental_rate_requires_explicit_opt_in(self):
         with self.assertRaisesRegex(ValueError, "allow_experimental_rates"):
