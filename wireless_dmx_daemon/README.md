@@ -6,6 +6,11 @@ lighting software, forward validated DMX data to the ESP8266 transmitter at
 115200 8N2, pace DMX frames at the validated 20 Hz wireless rate, and expose
 receiver telemetry and operating statistics through a CLI and future GUI/API.
 
+## Project attribution
+
+This host software is vibe coded with AI assistance. The underlying Wireless
+DMX hardware was designed by me.
+
 ## Initial assumptions
 
 * Initial host platform: Linux.

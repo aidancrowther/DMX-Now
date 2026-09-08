@@ -6,6 +6,11 @@ from lighting software and broadcasts the latest complete universe to multiple
 battery-powered ESP-01 receivers. Each receiver regenerates standard wired DMX
 for its connected fixture or DMX chain.
 
+## Project attribution
+
+The software in this project is vibe coded with AI assistance. The receiver,
+transmitter, and supporting electronics hardware were designed by me.
+
 ## System overview
 
 ```text
