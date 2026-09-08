@@ -1,0 +1,57 @@
+# ---------------------------------------------------------------------------
+# Build output
+# ---------------------------------------------------------------------------
+# arduino-cli sketch builds (transmitter/, receiver/, tests/*/) and the
+# setuptools build tree under wireless_dmx_daemon/.
+build/
+*.elf
+*.map
+*.hex
+*.eep
+*.uf2
+
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# ---------------------------------------------------------------------------
+# Local configuration / runtime state
+# ---------------------------------------------------------------------------
+# The daemon takes its config path on the command line; keep local copies out
+# of the repo. config.example.toml and default.conf remain tracked.
+config.toml
+config.local.toml
+*.pid
+
+# ---------------------------------------------------------------------------
+# Scratch / working files
+# ---------------------------------------------------------------------------
+.work/
+
+# ---------------------------------------------------------------------------
+# Editors & OS
+# ---------------------------------------------------------------------------
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
