@@ -490,6 +490,24 @@ class WirelessDmxService:
         for priority_id, event in list(self._priority_events.items()):
             if event["terminal"] or now - event["last_attempt_at"] < window:
                 continue
+            if event.get("receiver_order"):
+                current = event.get("current_receiver")
+                if current is None:
+                    self._start_priority_receiver(event, priority_id, now)
+                    continue
+                state = event["receiver_states"][current]
+                if state["ack"]:
+                    event["receiver_index"] += 1
+                    event["current_receiver"] = None
+                    self._start_priority_receiver(event, priority_id, now)
+                    continue
+                started = state["started_at"] or event["submitted_at"]
+                if now - started >= self.config.priority_receiver_budget_seconds:
+                    state["failed"] = True
+                    event["receiver_index"] += 1
+                    event["current_receiver"] = None
+                    self._start_priority_receiver(event, priority_id, now)
+                continue
             expected = event["expected_receivers"]
             if not expected:
                 expected.update(receiver.receiver_id for receiver in self.telemetry.snapshot()

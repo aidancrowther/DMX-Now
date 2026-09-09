@@ -35,6 +35,12 @@ class ConfigTelemetryTests(unittest.TestCase):
             self.assertEqual(config.transmitter_device, "/dev/test")
             self.assertEqual(config.pacer_rate_hz, 20)
 
+    def test_priority_receiver_budget_loads(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.toml"
+            path.write_text('[priority]\nreceiver_budget_seconds=1.5\n')
+            self.assertEqual(load_config(str(path)).priority_receiver_budget_seconds, 1.5)
+
     def test_receiver_becomes_offline(self):
         store = TelemetryStore(stale_seconds=0.01, offline_seconds=0.03)
         record = ReceiverTelemetry(1, "00:00:00:00:00:01", ReceiverLinkState.UNKNOWN, False,

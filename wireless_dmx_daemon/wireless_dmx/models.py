@@ -200,6 +200,7 @@ class DaemonConfig:
     priority_confirmation_window_ms: int = 1500
     priority_max_attempts: int = 5
     priority_receiver_budget_seconds: float = 1.0
+    priority_receiver_budget_seconds: float = 1.0
     priority_retry_cooldown_min_seconds: float = 1.0
     priority_retry_cooldown_max_seconds: float = 2.5
     priority_normal_quiet_before_ms: int = 500
@@ -269,6 +270,8 @@ class DaemonConfig:
             raise ValueError("priority_max_consecutive_events must be positive")
         if not 1 <= self.priority_max_attempts <= 255:
             raise ValueError("priority_max_attempts must be between 1 and 255")
+        if self.priority_receiver_budget_seconds <= 0:
+            raise ValueError("priority_receiver_budget_seconds must be positive")
         if self.priority_retry_cooldown_min_seconds < 0:
             raise ValueError("priority_retry_cooldown_min_seconds must not be negative")
         if self.priority_retry_cooldown_max_seconds < self.priority_retry_cooldown_min_seconds:
