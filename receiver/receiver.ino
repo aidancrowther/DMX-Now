@@ -92,7 +92,10 @@ static const unsigned long TRANSMITTER_RESET_RECOVERY_MS = 3000UL;
 /* Bounded callback->loop handoff ring. One more than QuickESPNow's own RX
  * queue depth (ESPNOW_QUEUE_SIZE = 3), so a tight 3-fragment burst is never
  * dropped by our own architecture. Static, bounded, no dynamic allocation. */
-static const uint8_t RX_RING_SIZE = 4;
+/* Priority delivery can arrive as a three-fragment burst while normal traffic
+ * is already in the callback handoff. Leave headroom so a timing variation in
+ * loop() cannot discard the targeted priority fragments. */
+static const uint8_t RX_RING_SIZE = 8;
 static const uint8_t RX_SLOT_MAX  = ESPNOW_MAX_MESSAGE_LENGTH; /* 255 */
 
 /* --------------------------------------------------------------------------
@@ -128,7 +131,7 @@ static unsigned long priorityLastActivityMs = 0;
 #define PRIORITY_ACK_REPEAT_INTERVAL_MS 100UL
 #endif
 #ifndef PRIORITY_ACK_LIFETIME_MS
-#define PRIORITY_ACK_LIFETIME_MS 1000UL
+#define PRIORITY_ACK_LIFETIME_MS 2500UL
 #endif
 struct PriorityAckEntry {
     uint32_t id;
@@ -140,6 +143,7 @@ struct PriorityAckEntry {
     unsigned long scheduledMs;
     uint8_t sendRetries;
     uint8_t transmissionsSent;
+    uint8_t sourceMac[6];
 };
 static PriorityAckEntry priorityAckQueue[PRIORITY_ACK_QUEUE_SIZE];
 static uint8_t priorityAckHead = 0;
@@ -160,6 +164,7 @@ struct RxFragSlot {
     uint8_t payload[RX_SLOT_MAX];
     uint8_t len;
     int8_t  rssi;
+    uint8_t sourceMac[6];
 };
 static RxFragSlot rxRing[RX_RING_SIZE];
 static volatile uint8_t ringHead = 0; /* written only by the callback */
@@ -221,6 +226,8 @@ static unsigned long integrityFailures      = 0;
 static unsigned long rxRingOverflow         = 0;
 static unsigned long resetRebaselined       = 0;
 static unsigned long priorityFramesAccepted = 0;
+static unsigned long priorityPacketsSeen = 0;
+static unsigned long radioPacketsSeen = 0;
 static unsigned long priorityDuplicateFragments = 0;
 static unsigned long priorityMalformedPackets = 0;
 static unsigned long priorityCompletionsSent = 0;
@@ -281,6 +288,16 @@ static void transmitTelemetry(void) {
     packet.lastRssi = lastRssi;
     packet.firmwareVersion = TELEMETRY_FIRMWARE_VERSION;
     packet.telemetrySequence = telemetrySequence++;
+    /* Priority counters are exported through the existing telemetry fields so
+     * targeted-delivery failures can be diagnosed without using UART0, which
+     * is owned by the DMX output driver. */
+    packet.completeUniverses = saturatingU32(priorityFramesAccepted);
+    packet.incompleteUniverses = saturatingU32(priorityMalformedPackets);
+    packet.malformedPackets = saturatingU32(priorityDuplicateFragments);
+    packet.lastActiveSequence = saturatingU32(priorityAckQueueDrops);
+    packet.timeSinceLastUniverseMs = saturatingU32(priorityCompletionsSent);
+    packet.uptimeSeconds = saturatingU32(priorityPacketsSeen);
+    packet.batteryLow = (uint8_t)(radioPacketsSeen > 255UL ? 255U : radioPacketsSeen);
 
     if (!quickEspNow.readyToSendData()) {
         telemetryRetryCount++;
@@ -379,7 +396,8 @@ static uint32_t priorityHash(uint32_t value) {
     return value;
 }
 
-static void schedulePriorityAck(uint32_t id, uint32_t seq, uint8_t attempt) {
+static void schedulePriorityAck(uint32_t id, uint32_t seq, uint8_t attempt,
+                                const uint8_t* sourceMac) {
     if (priorityAckCount >= PRIORITY_ACK_QUEUE_SIZE) {
         if (priorityAckQueueDrops < 0xFFFFFFFFUL) priorityAckQueueDrops++;
         return;
@@ -392,6 +410,7 @@ static void schedulePriorityAck(uint32_t id, uint32_t seq, uint8_t attempt) {
     entry.attempt = attempt;
     entry.attemptsObserved = priorityRepeatCount;
     entry.rssi = lastRssi;
+    if (sourceMac) memcpy(entry.sourceMac, sourceMac, 6);
     entry.dueMs = millis() + 10UL + slot * 12UL + jitter;
     entry.scheduledMs = millis();
     entry.sendRetries = 0;
@@ -420,8 +439,15 @@ static void transmitPriorityAck(void) {
     packet.completionStatus = PRIORITY_COMPLETE_ACCEPTED;
     packet.attemptsObserved = entry.attemptsObserved;
     packet.lastRssi = entry.rssi;
-    if (quickEspNow.readyToSendData() &&
-        quickEspNow.sendBcast(reinterpret_cast<const uint8_t*>(&packet), sizeof(packet)) == COMMS_SEND_OK) {
+    const uint8_t* destination = entry.sourceMac;
+#if defined(PRIORITY_ACK_BROADCAST_DIAGNOSTIC)
+    const comms_send_error_t sendResult = quickEspNow.sendBcast(
+        reinterpret_cast<const uint8_t*>(&packet), sizeof(packet));
+#else
+    const comms_send_error_t sendResult = quickEspNow.send(
+        destination, reinterpret_cast<const uint8_t*>(&packet), sizeof(packet));
+#endif
+    if (sendResult == COMMS_SEND_OK) {
         priorityCompletionsSent++;
         entry.transmissionsSent++;
         if (entry.transmissionsSent >= PRIORITY_ACK_REPEAT_COUNT) {
@@ -434,7 +460,7 @@ static void transmitPriorityAck(void) {
         if (priorityAckSendFailures < 0xFFFFFFFFUL) priorityAckSendFailures++;
         if (entry.sendRetries < 255U) entry.sendRetries++;
         if (priorityAckSendRetries < 0xFFFFFFFFUL) priorityAckSendRetries++;
-        entry.dueMs = millis() + 25UL + (priorityHash(entry.id ^ receiverId) % 25UL);
+        entry.dueMs = millis() + 50UL + (priorityHash(entry.id ^ receiverId) % 50UL);
     }
 }
 
@@ -449,7 +475,9 @@ static bool priorityCanonicalTile(uint8_t index, uint16_t offset, uint8_t len,
     return true;
 }
 
-static void processPriorityPacket(const uint8_t* pkt, uint8_t len, int8_t rssi) {
+static void processPriorityPacket(const uint8_t* pkt, uint8_t len, int8_t rssi,
+                                  const uint8_t* sourceMac) {
+    if (priorityPacketsSeen < 0xFFFFFFFFUL) priorityPacketsSeen++;
     if (len < PRIORITY_HEADER_SIZE + 1U) {
         priorityMalformedPackets++;
         return;
@@ -464,6 +492,9 @@ static void processPriorityPacket(const uint8_t* pkt, uint8_t len, int8_t rssi) 
         priorityMalformedPackets++;
         return;
     }
+#if !defined(RX_IGNORE_PRIORITY_TARGET_DIAGNOSTIC)
+    if (hdr.targetReceiverId != 0U && hdr.targetReceiverId != receiverId) return;
+#endif
     uint16_t offset;
     uint8_t tileLen;
     if (!priorityCanonicalTile(hdr.fragmentIndex, hdr.dataOffset, hdr.payloadLength,
@@ -518,7 +549,7 @@ static void processPriorityPacket(const uint8_t* pkt, uint8_t len, int8_t rssi) 
         // Suppress repeats of this event, but permit priority IDs to be reused
         // after a daemon/transmitter restart or ID rollover.
         priorityCompletedUntilMs = millis() + 1000UL;
-        schedulePriorityAck(priorityId, priorityFrameSequence, priorityAttempt);
+        schedulePriorityAck(priorityId, priorityFrameSequence, priorityAttempt, sourceMac);
         priorityActive = false;
         priorityReceivedMask = 0;
         priorityUniqueCount = 0;
@@ -534,6 +565,7 @@ static void processPriorityPacket(const uint8_t* pkt, uint8_t len, int8_t rssi) 
 void dataReceived(uint8_t* address, uint8_t* data, uint8_t len, signed int rssi, bool broadcast) {
     (void)address;
     (void)broadcast;
+    if (radioPacketsSeen < 0xFFFFFFFFUL) radioPacketsSeen++;
 
     /* Drop anything that cannot be a valid fragment (header + >=1 payload byte). */
     if (len < (DMX_HEADER_SIZE + 1) || len > RX_SLOT_MAX) {
@@ -558,6 +590,7 @@ void dataReceived(uint8_t* address, uint8_t* data, uint8_t len, signed int rssi,
         memcpy(rxRing[slotIdx].payload, data, len);
         rxRing[slotIdx].len  = len;
         rxRing[slotIdx].rssi = (int8_t)rssi;
+        memcpy(rxRing[slotIdx].sourceMac, address, 6);
         ringHead = next; /* publish: slot now valid, head advanced */
     }
     xt_wsr_ps(savedPS);
@@ -567,7 +600,8 @@ void dataReceived(uint8_t* address, uint8_t* data, uint8_t len, signed int rssi,
  * Ring consumer (loop context): copy one pending fragment out, if any.
  * Returns false if the ring is empty.
  * -------------------------------------------------------------------------- */
-static bool popPendingFrag(uint8_t* outBuf, uint8_t& outLen, int8_t& outRssi) {
+static bool popPendingFrag(uint8_t* outBuf, uint8_t& outLen, int8_t& outRssi,
+                           uint8_t* outSourceMac) {
     if (ringHead == ringTail) {
         return false;
     }
@@ -577,6 +611,7 @@ static bool popPendingFrag(uint8_t* outBuf, uint8_t& outLen, int8_t& outRssi) {
         memcpy(outBuf, rxRing[slotIdx].payload, rxRing[slotIdx].len);
         outLen  = rxRing[slotIdx].len;
         outRssi = rxRing[slotIdx].rssi;
+        memcpy(outSourceMac, rxRing[slotIdx].sourceMac, 6);
         ringTail = (uint8_t)((ringTail + 1) % RX_RING_SIZE);
         xt_wsr_ps(savedPS);
         return true;
@@ -723,13 +758,14 @@ static void acceptFragment(const uint8_t* pkt, uint32_t seq,
  * Validates structure, resolves sequence ordering (wrap-safe), and either
  * assembles into staging, flags stale/duplicate, supersedes, or re-baselines.
  * -------------------------------------------------------------------------- */
-static void processPacket(const uint8_t* pkt, uint8_t len, int8_t rssi) {
+static void processPacket(const uint8_t* pkt, uint8_t len, int8_t rssi,
+                          const uint8_t* sourceMac) {
     /* Telemetry is intended for the transmitter; do not classify it as a
      * malformed DMX fragment when receivers hear one another. */
     if (len >= 4 && (pkt[3] == TELEMETRY_PACKET_TYPE ||
                      pkt[3] == PRIORITY_COMPLETION_PACKET_TYPE)) return;
     if (len >= PRIORITY_HEADER_SIZE && pkt[3] == DMX_PRIORITY_PACKET_TYPE) {
-        processPriorityPacket(pkt, len, rssi);
+        processPriorityPacket(pkt, len, rssi, sourceMac);
         return;
     }
 
@@ -903,6 +939,7 @@ static uint8_t rxWorkBuf[RX_SLOT_MAX];
 void loop(void) {
     uint8_t len;
     int8_t  rssi;
+    uint8_t sourceMac[6];
 
     /* 1. Debounce the active-HIGH battery comparator input. */
     updateBatteryLow();
@@ -912,9 +949,9 @@ void loop(void) {
     transmitPriorityAck();
 
     /* 3. Drain every pending fragment (bounded by RX_RING_SIZE). */
-    while (popPendingFrag(rxWorkBuf, len, rssi)) {
+    while (popPendingFrag(rxWorkBuf, len, rssi, sourceMac)) {
         packetsReceived++;
-        processPacket(rxWorkBuf, len, rssi);
+        processPacket(rxWorkBuf, len, rssi, sourceMac);
     }
 
     /* 4. Staging timeout: abandon a frame that stopped receiving fragments. */

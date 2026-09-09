@@ -67,6 +67,7 @@ def save_config(config: DaemonConfig, path: str = DEFAULT_CONFIG_PATH) -> None:
                       "lead_out_ms": config.priority_lead_out_ms,
                       "confirmation_window_ms": config.priority_confirmation_window_ms,
                       "max_attempts": config.priority_max_attempts,
+                      "receiver_budget_seconds": config.priority_receiver_budget_seconds,
                       "retry_cooldown_min_seconds": config.priority_retry_cooldown_min_seconds,
                       "retry_cooldown_max_seconds": config.priority_retry_cooldown_max_seconds,
                       "normal_quiet_before_ms": config.priority_normal_quiet_before_ms,
