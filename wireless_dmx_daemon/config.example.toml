@@ -24,6 +24,10 @@ stale_seconds = 15.0
 offline_seconds = 30.0
 max_report_age_seconds = 5.0
 
+[channel_gates]
+management_only = []
+locked = []
+
 [artnet]
 enabled = true
 bind_host = "0.0.0.0"

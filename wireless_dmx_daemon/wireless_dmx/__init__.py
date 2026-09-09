@@ -9,6 +9,7 @@ from .models import (
     ReceiverTelemetry,
     TelemetryStatus,
     PriorityStatus,
+    ChannelGate,
 )
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     "ReceiverTelemetry",
     "TelemetryStatus",
     "PriorityStatus",
+    "ChannelGate",
 ]

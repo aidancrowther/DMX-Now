@@ -24,6 +24,12 @@ class DaemonHealth(str, Enum):
     STOPPING = "stopping"
 
 
+class ChannelGate(str, Enum):
+    OPEN = "open"
+    MANAGEMENT_ONLY = "management_only"
+    LOCKED = "locked"
+
+
 @dataclass
 class DmxStatistics:
     """Counters and rates for normalized ENTTEC DMX input and pacing."""
@@ -44,6 +50,10 @@ class DmxStatistics:
     artnet_source_frames: int = 0
     serial_source_frames: int = 0
     source_frames_rejected: int = 0
+    serial_channels_blocked: int = 0
+    artnet_channels_blocked: int = 0
+    management_channels_rejected: int = 0
+    channel_gate_changes: int = 0
     priority_received: int = 0
     priority_queued: int = 0
     priority_frames_submitted: int = 0
@@ -194,6 +204,8 @@ class DaemonConfig:
     priority_normal_quiet_before_ms: int = 500
     priority_normal_quiet_after_ms: int = 1000
     priority_max_consecutive_events: int = 3
+    management_only_channels: tuple[int, ...] = ()
+    locked_channels: tuple[int, ...] = ()
 
     def validate(self) -> None:
         if not self.transmitter_device:
@@ -233,6 +245,12 @@ class DaemonConfig:
             raise ValueError("artnet_universe must be between 0 and 32767")
         if self.input_source_policy not in ("latest", "serial", "artnet"):
             raise ValueError("input_source_policy must be latest, serial, or artnet")
+        for name, channels in (("management_only_channels", self.management_only_channels),
+                               ("locked_channels", self.locked_channels)):
+            if len(set(channels)) != len(channels) or any(not 1 <= channel <= 512 for channel in channels):
+                raise ValueError(f"{name} must contain unique channels from 1 through 512")
+        if set(self.management_only_channels) & set(self.locked_channels):
+            raise ValueError("channel gate lists must not overlap")
         if self.priority_max_queue_depth < 1:
             raise ValueError("priority_max_queue_depth must be positive")
         if not 1 <= self.priority_default_repeat_count <= self.priority_max_repeat_count:

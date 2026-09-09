@@ -5,12 +5,13 @@ from __future__ import annotations
 import time
 import logging
 import random
+from dataclasses import replace
 from threading import Event, Thread, Lock
 
 from .enttec.parser import EnttecParser
 from .artnet import ArtNetListener, ArtNetParser
 from .models import (DaemonConfig, DaemonHealth, DaemonSnapshot, DmxStatistics,
-                      PriorityAck, PriorityAckSummary, PriorityStatus, TelemetryStatus)
+    ChannelGate, PriorityAck, PriorityAckSummary, PriorityStatus, TelemetryStatus)
 from .pacer import DmxPacer
 from .telemetry import TelemetryStore
 from .transmitter.connection import TransmitterConnection
@@ -65,6 +66,11 @@ class WirelessDmxService:
             priority_max_consecutive_events=config.priority_max_consecutive_events,
         )
         self.manual_universe = bytearray(512)
+        self._channel_gates = [ChannelGate.OPEN] * 512
+        for channel in config.management_only_channels:
+            self._channel_gates[channel - 1] = ChannelGate.MANAGEMENT_ONLY
+        for channel in config.locked_channels:
+            self._channel_gates[channel - 1] = ChannelGate.LOCKED
         self._stop = Event()
         self._thread: Thread | None = None
         self._lock = Lock()
@@ -107,15 +113,45 @@ class WirelessDmxService:
             raise ValueError("channel must be 1..512")
         if not 0 <= value <= 255:
             raise ValueError("value must be 0..255")
+        if self._channel_gates[channel - 1] == ChannelGate.LOCKED:
+            self.stats.management_channels_rejected += 1
+            raise PermissionError(f"channel {channel} is locked")
         self.manual_universe[channel - 1] = value
 
     def set_manual_universe(self, universe: bytes) -> None:
         if len(universe) != 512:
             raise ValueError("manual universe must contain 512 channels")
-        self.manual_universe[:] = universe
+        for index, value in enumerate(universe):
+            if self._channel_gates[index] != ChannelGate.LOCKED:
+                self.manual_universe[index] = value
+
+    def channel_gate(self, channel: int) -> ChannelGate:
+        if not 1 <= channel <= 512:
+            raise ValueError("channel must be 1..512")
+        return self._channel_gates[channel - 1]
+
+    def set_channel_gate(self, channel: int, gate: ChannelGate) -> None:
+        if not 1 <= channel <= 512:
+            raise ValueError("channel must be 1..512")
+        self._channel_gates[channel - 1] = ChannelGate(gate)
+        management_only, locked = self.channel_gate_lists()
+        self.config = replace(self.config, management_only_channels=management_only,
+                              locked_channels=locked)
+        self.stats.channel_gate_changes += 1
+
+    def channel_gates_snapshot(self) -> tuple[ChannelGate, ...]:
+        return tuple(self._channel_gates)
+
+    def channel_gate_lists(self) -> tuple[tuple[int, ...], tuple[int, ...]]:
+        return (tuple(i + 1 for i, gate in enumerate(self._channel_gates)
+                      if gate == ChannelGate.MANAGEMENT_ONLY),
+                tuple(i + 1 for i, gate in enumerate(self._channel_gates)
+                      if gate == ChannelGate.LOCKED))
 
     def clear_manual_universe(self) -> None:
-        self.manual_universe[:] = bytes(512)
+        for index in range(512):
+            if self._channel_gates[index] != ChannelGate.LOCKED:
+                self.manual_universe[index] = 0
 
     def manual_universe_snapshot(self) -> bytes:
         return bytes(self.manual_universe)
@@ -268,10 +304,22 @@ class WirelessDmxService:
             self.stats.artnet_source_frames += 1
         else:
             self.stats.serial_source_frames += 1
-        if self.config.pacer_enabled:
-            self.pacer.submit(universe)
+        merged = bytearray(self.manual_universe)
+        blocked = 0
+        for index, value in enumerate(universe):
+            if self._channel_gates[index] == ChannelGate.OPEN:
+                merged[index] = value
+            else:
+                blocked += 1
+        self.manual_universe[:] = merged
+        if source == "artnet":
+            self.stats.artnet_channels_blocked += blocked
         else:
-            self._send_universe(universe)
+            self.stats.serial_channels_blocked += blocked
+        if self.config.pacer_enabled:
+            self.pacer.submit(bytes(merged))
+        else:
+            self._send_universe(bytes(merged))
             self.stats.frames_submitted += 1
 
     def _on_transmitter_data(self, data: bytes) -> None:

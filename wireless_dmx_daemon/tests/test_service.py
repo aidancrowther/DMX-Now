@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).parents[1]))
 
 from wireless_dmx.app import WirelessDmxService
 from wireless_dmx.enttec.protocol import encode_dmx
-from wireless_dmx.models import DaemonConfig, ReceiverLinkState, ReceiverTelemetry
+from wireless_dmx.models import ChannelGate, DaemonConfig, ReceiverLinkState, ReceiverTelemetry
 from wireless_dmx.protocols import (MANAGEMENT_CACHE_CLEARED, MANAGEMENT_PRIORITY_ACKS,
                                     MANAGEMENT_RECEIVER_TELEMETRY, MANAGEMENT_SYNC, crc16_ccitt)
 from wireless_dmx.transmitter.management import ACK_HEADER, ACK_RECORD, PART_HEADER, RECORD
@@ -169,6 +169,31 @@ class ServiceTests(unittest.TestCase):
         priority_id = service.send_manual(priority=True, repeat_count=1, ttl_seconds=1)
         self.assertEqual(priority_id, 0)
         self.assertEqual(service.pacer.priority_status().queue_depth, 1)
+
+    def test_channel_gates_block_external_sources_but_allow_management(self):
+        service = WirelessDmxService(
+            DaemonConfig(virtual_port_path="/tmp/wireless-dmx-gates"),
+            serial_factory=lambda: FakeSerial(), virtual_backend=LinuxPtyBackend(),
+        )
+        service.set_manual_universe(bytes([10, 20]) + bytes(510))
+        service.set_channel_gate(1, ChannelGate.MANAGEMENT_ONLY)
+        service.set_channel_gate(2, ChannelGate.LOCKED)
+        service._accept_source_frame(bytes([100, 200, 30]) + bytes(509), "serial")
+        self.assertEqual(service.manual_universe_snapshot()[:3], bytes([10, 20, 30]))
+        service.set_manual_channel(1, 101)
+        with self.assertRaises(PermissionError):
+            service.set_manual_channel(2, 201)
+        self.assertEqual(service.stats.serial_channels_blocked, 2)
+
+    def test_clear_and_full_management_updates_preserve_locked_channels(self):
+        service = WirelessDmxService(DaemonConfig(virtual_port_path="/tmp/wireless-dmx-gates-2"),
+                                     serial_factory=lambda: FakeSerial(), virtual_backend=LinuxPtyBackend())
+        service.set_manual_channel(4, 44)
+        service.set_channel_gate(4, ChannelGate.LOCKED)
+        service.set_manual_universe(bytes([9]) * 512)
+        self.assertEqual(service.manual_universe_snapshot()[3], 44)
+        service.clear_manual_universe()
+        self.assertEqual(service.manual_universe_snapshot()[3], 44)
 
     def test_priority_id_seed_is_used_before_submission(self):
         service = WirelessDmxService(

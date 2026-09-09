@@ -1179,9 +1179,25 @@ Expected approximate sequence:
 12. Reliability and throughput testing
 13. Hardware-specific cleanup and fail-safe refinement
 14. High-priority transmission ✓ (daemon-only stage; receiver firmware ACK stage pending)
-15. Channel gate implementation, block mistaken channel writes
+15. Channel gating — IN PROGRESS (daemon implementation and tests added)
 
 This ordering may change as hardware testing reveals constraints.
+
+### Feature 15: Channel Gating
+
+Status: IN PROGRESS (daemon implementation and automated tests added)
+
+The daemon now supports three per-channel states: `OPEN`, `MANAGEMENT_ONLY`,
+and `LOCKED`. Serial and Art-Net frames update only open channels; management
+editing may update open and management-only channels, while locked channels
+reject management writes as well. Mixed frames preserve protected channel
+values while applying permitted changes to the remaining channels.
+
+Gate assignments are persisted in TOML under `[channel_gates]` using
+`management_only` and `locked` channel lists. The universe editor uses `l` to
+cycle the selected channel's gate; `g` retains its existing grid command.
+Automated coverage includes source blocking, management permissions, locked
+value preservation, configuration round trips, validation, and dashboard help.
 
 ### Feature 11: Host Status and Management Interface
 

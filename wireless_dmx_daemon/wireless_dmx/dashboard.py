@@ -18,7 +18,7 @@ import serial
 from .app import WirelessDmxService
 from .config import apply_args, load_config
 from .config_editor import EDITABLE_FIELDS, field_value, save_edited_config, update_field
-from .models import DaemonConfig, DaemonHealth, DaemonSnapshot
+from .models import ChannelGate, DaemonConfig, DaemonHealth, DaemonSnapshot
 
 
 COLOR_PAIRS = {
@@ -27,6 +27,9 @@ COLOR_PAIRS = {
     "critical": 3,
     "accent": 4,
     "muted": 5,
+    "gate_open_selected": 6,
+    "gate_management_selected": 7,
+    "gate_locked_selected": 8,
 }
 
 
@@ -44,11 +47,32 @@ def init_colors() -> None:
     curses.init_pair(COLOR_PAIRS["critical"], curses.COLOR_RED, -1)
     curses.init_pair(COLOR_PAIRS["accent"], curses.COLOR_CYAN, -1)
     curses.init_pair(COLOR_PAIRS["muted"], curses.COLOR_WHITE, -1)
+    curses.init_pair(COLOR_PAIRS["gate_open_selected"], curses.COLOR_WHITE, curses.COLOR_CYAN)
+    curses.init_pair(COLOR_PAIRS["gate_management_selected"], curses.COLOR_YELLOW, curses.COLOR_CYAN)
+    curses.init_pair(COLOR_PAIRS["gate_locked_selected"], curses.COLOR_RED, curses.COLOR_CYAN)
 
 
 def color_attr(name: str, bold: bool = False) -> int:
     attr = curses.color_pair(COLOR_PAIRS.get(name, COLOR_PAIRS["muted"])) if curses.has_colors() else 0
     return attr | (curses.A_BOLD if bold else 0)
+
+
+def channel_gate_color(gate: ChannelGate) -> str:
+    """Return the consistent manual-editor color for a channel gate."""
+    return {
+        ChannelGate.OPEN: "muted",
+        ChannelGate.MANAGEMENT_ONLY: "warning",
+        ChannelGate.LOCKED: "critical",
+    }[ChannelGate(gate)]
+
+
+def channel_gate_selected_color(gate: ChannelGate) -> str:
+    """Return the selected-entry pair: gate foreground on cyan background."""
+    return {
+        ChannelGate.OPEN: "gate_open_selected",
+        ChannelGate.MANAGEMENT_ONLY: "gate_management_selected",
+        ChannelGate.LOCKED: "gate_locked_selected",
+    }[ChannelGate(gate)]
 
 
 def bar(value: float, maximum: float, width: int = 12) -> str:
@@ -86,7 +110,7 @@ def receiver_display_segments(receiver) -> tuple[str, str, str, str, str]:
 MAIN_COMMANDS = "[d] daemon  [r] telemetry  [s] SETTINGS  [u] MANUAL DMX  [x] advanced  [l] logs  [q] quit"
 SETUP_COMMANDS = "[↑/↓/j/k] select  [e] edit  [w] write config  [x] cancel"
 ADVANCED_COMMANDS = "[m] Mega  [a] acceptance  [b] abort Mega  [x] main  [q] quit"
-MANUAL_COMMANDS = "[↑/↓/j/k] move  [←/→] grid  [a] jump  [e] value  [+/-] nudge  [n/p] priority  [Enter] send  [c] clear  [u] full  [g] grid  [x] main"
+MANUAL_COMMANDS = "[↑/↓/j/k] select  [←/→] grid  [a] jump  [e] value  [+/-] nudge  [l] gate  [n/p] priority  [Enter] send  [c] clear  [u] full  [g] grid  [x] main"
 
 
 def grid_position(channel: int, columns: int = 16) -> tuple[int, int]:
@@ -415,7 +439,8 @@ def render_manual(stdscr, controller: DashboardController, channel: int, priorit
                 index = grid_row * columns + grid_col
                 if index >= 512:
                     break
-                attr = color_attr("accent", True) if index == channel - 1 else 0
+                gate = service.channel_gate(index + 1) if service else ChannelGate.OPEN
+                attr = color_attr(channel_gate_selected_color(gate), True) if index == channel - 1 else color_attr(channel_gate_color(gate))
                 _safe_add(stdscr, y, 8 + grid_col * cell_width,
                           f"{universe[index]:02X}", attr, cell_width - 1)
     elif full_mode:
@@ -423,13 +448,16 @@ def render_manual(stdscr, controller: DashboardController, channel: int, priorit
         visible = max(1, height - 8)
         first = max(0, min(channel - 1 - visible // 2, 512 - visible))
         for row, index in enumerate(range(first, first + visible), 5):
-            attr = color_attr("accent", True) if index == channel - 1 else 0
+            gate = service.channel_gate(index + 1) if service else ChannelGate.OPEN
+            attr = color_attr(channel_gate_selected_color(gate), True) if index == channel - 1 else color_attr(channel_gate_color(gate))
             _safe_add(stdscr, row, 4, f"{index + 1:03d}       {universe[index]:03d}       0x{universe[index]:02X}", attr)
     else:
         _box(stdscr, 4, 1, 12, width - 2, "CHANNEL EDITOR")
         _safe_add(stdscr, 6, 4, f"Channel: {channel:03d} / 512", color_attr("accent", True))
-        _safe_add(stdscr, 7, 4, f"Value:   {universe[channel - 1]:03d}")
-        _safe_add(stdscr, 8, 4, f"Hex:     0x{universe[channel - 1]:02X}")
+        gate = service.channel_gate(channel) if service else ChannelGate.OPEN
+        gate_attr = color_attr(channel_gate_color(gate), True)
+        _safe_add(stdscr, 7, 4, f"Value:   {universe[channel - 1]:03d}   Gate: {gate.value}", gate_attr)
+        _safe_add(stdscr, 8, 4, f"Hex:     0x{universe[channel - 1]:02X}", gate_attr)
         _safe_add(stdscr, 10, 4, "Enter sends the complete 512-channel manual universe.")
     if message:
         _safe_add(stdscr, height - 3, 2, message, color_attr("warning", True))
@@ -508,12 +536,18 @@ def run_dashboard(stdscr, controller: DashboardController) -> None:
                         raise ValueError("channel must be 1-512")
                     manual_channel = target
                     manual_message = f"jumped to channel {target}"
-                except (ValueError, curses.error) as exc:
+                except (ValueError, PermissionError, curses.error) as exc:
                     manual_message = f"invalid channel: {exc}"
             elif key in (ord("+"), ord("=")) and controller.service:
-                controller.service.set_manual_channel(manual_channel, min(255, controller.service.manual_universe[manual_channel - 1] + 1))
+                try:
+                    controller.service.set_manual_channel(manual_channel, min(255, controller.service.manual_universe[manual_channel - 1] + 1))
+                except PermissionError as exc:
+                    manual_message = str(exc)
             elif key in (ord("-"), ord("_")) and controller.service:
-                controller.service.set_manual_channel(manual_channel, max(0, controller.service.manual_universe[manual_channel - 1] - 1))
+                try:
+                    controller.service.set_manual_channel(manual_channel, max(0, controller.service.manual_universe[manual_channel - 1] - 1))
+                except PermissionError as exc:
+                    manual_message = str(exc)
             elif key in (ord("n"), ord("N")):
                 manual_priority = False
             elif key in (ord("p"), ord("P")):
@@ -521,13 +555,26 @@ def run_dashboard(stdscr, controller: DashboardController) -> None:
             elif key in (ord("c"), ord("C")) and controller.service:
                 controller.service.clear_manual_universe()
                 manual_message = "manual universe cleared"
+            elif key in (ord("l"), ord("L")) and controller.service:
+                from .models import ChannelGate
+                gates = (ChannelGate.OPEN, ChannelGate.MANAGEMENT_ONLY, ChannelGate.LOCKED)
+                current = controller.service.channel_gate(manual_channel)
+                controller.service.set_channel_gate(manual_channel, gates[(gates.index(current) + 1) % len(gates)])
+                manual_message = f"channel {manual_channel} gate: {controller.service.channel_gate(manual_channel).value}"
             elif key in (ord("r"), ord("R")):
                 manual_repeat = manual_repeat % controller.config.priority_max_repeat_count + 1
             elif key in (ord("t"), ord("T")):
                 manual_ttl = 0.5 if manual_ttl >= controller.config.priority_max_ttl_seconds else min(controller.config.priority_max_ttl_seconds, manual_ttl + 0.5)
             elif key in (ord("u"), ord("U")):
                 manual_full = not manual_full
-            elif key in (ord("g"), ord("G")) and manual_full:
+                if not manual_full:
+                    manual_grid = False
+            elif key in (ord("g"), ord("G")):
+                # Grid mode is a view within the full-universe editor. Keep
+                # this key independent of channel-gate handling and make the
+                # transition explicit so a stale grid flag cannot hide the
+                # editor after toggling full-universe mode.
+                manual_full = True
                 manual_grid = not manual_grid
             elif key in (curses.KEY_ENTER, 10, 13) and controller.service:
                 try:

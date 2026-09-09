@@ -6,12 +6,27 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
-from wireless_dmx.config import load_config
+from wireless_dmx.config import load_config, save_config
 from wireless_dmx.models import ReceiverLinkState, ReceiverTelemetry
 from wireless_dmx.telemetry import TelemetryStore
 
 
 class ConfigTelemetryTests(unittest.TestCase):
+    def test_channel_gates_round_trip(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.toml"
+            config = load_config()
+            config = config.__class__(**{**config.__dict__,
+                "management_only_channels": (1, 7), "locked_channels": (100, 101)})
+            save_config(config, str(path))
+            loaded = load_config(str(path))
+            self.assertEqual(tuple(loaded.management_only_channels), (1, 7))
+            self.assertEqual(tuple(loaded.locked_channels), (100, 101))
+
+    def test_channel_gate_lists_must_not_overlap(self):
+        config = load_config()
+        with self.assertRaises(ValueError):
+            config.__class__(**{**config.__dict__, "management_only_channels": (1,), "locked_channels": (1,)}).validate()
     def test_toml_config_loads_nested_settings(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.toml"
