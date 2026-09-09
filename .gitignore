@@ -35,6 +35,7 @@ env/
 
 # Local scratch work and internal-only material
 .work/
+/Testing/
 internal/
 .internal/
 notes/
