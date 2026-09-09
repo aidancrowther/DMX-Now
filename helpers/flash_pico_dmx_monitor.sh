@@ -4,9 +4,10 @@
 
 set -eu
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
 PORT="/dev/ttyACM0"
 FLASH=false
-SKETCH_DIR="${SCRIPT_DIR}/tests/pico_dmx_refresh_monitor"
+SKETCH_DIR="${PROJECT_ROOT}/tests/pico_dmx_refresh_monitor"
 FQBN="rp2040:rp2040:rpipico"
 
 while [[ $# -gt 0 ]]; do

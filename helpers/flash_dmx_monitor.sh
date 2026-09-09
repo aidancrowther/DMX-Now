@@ -22,6 +22,7 @@
 # (esptool is for the ESP8266 TX/RX builds only).
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
 ARDUINO_CLI="arduino-cli"
 
 # Defaults
@@ -29,7 +30,7 @@ PORT="/dev/ttyUSB1"
 FLASH=false
 
 # Paths
-SKETCH_DIR="${SCRIPT_DIR}/tests/dmx_refresh_monitor"
+SKETCH_DIR="${PROJECT_ROOT}/tests/dmx_refresh_monitor"
 BINARY="${SKETCH_DIR}/build/arduino.avr.mega/dmx_refresh_monitor.ino.hex"
 
 # Parse arguments

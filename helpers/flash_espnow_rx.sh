@@ -9,6 +9,7 @@
 #   ./flash_espnow_rx.sh --define -DTEST_INJECT_MALFORMED          # enable a test hook (Feature 6)
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
 ARDUINO_CLI="arduino-cli"
 
 # Defaults
@@ -17,9 +18,9 @@ FLASH=false
 EXTRA_FLAGS=()   # extra -D defines (e.g. Feature 6 test hooks)
 
 # Paths
-LIBRARY_DIR="${SCRIPT_DIR}/libraries/QuickESPNow"
-PROTOCOL_LIB="${SCRIPT_DIR}/libraries/WirelessDMX"
-SKETCH_DIR="${SCRIPT_DIR}/tests/espnow_universe_rx"
+LIBRARY_DIR="${PROJECT_ROOT}/libraries/QuickESPNow"
+PROTOCOL_LIB="${PROJECT_ROOT}/libraries/WirelessDMX"
+SKETCH_DIR="${PROJECT_ROOT}/tests/espnow_universe_rx"
 BINARY="${SKETCH_DIR}/build/esp8266.esp8266.generic/espnow_universe_rx.ino.bin"
 
 # Parse arguments

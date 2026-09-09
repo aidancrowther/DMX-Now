@@ -15,6 +15,7 @@
 #   - WirelessDMX  (shared protocol header: wireless_protocol.h)
 # 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
 ARDUINO_CLI="arduino-cli"
 
 # Defaults
@@ -23,9 +24,9 @@ FLASH=false
 EXTRA_FLAGS=()   # extra -D defines (e.g. future test hooks)
 
 # Paths
-QESPNOW_LIB="${SCRIPT_DIR}/libraries/QuickESPNow"
-PROTOCOL_LIB="${SCRIPT_DIR}/libraries/WirelessDMX"
-SKETCH_DIR="${SCRIPT_DIR}/transmitter"
+QESPNOW_LIB="${PROJECT_ROOT}/libraries/QuickESPNow"
+PROTOCOL_LIB="${PROJECT_ROOT}/libraries/WirelessDMX"
+SKETCH_DIR="${PROJECT_ROOT}/transmitter"
 BINARY="${SKETCH_DIR}/build/esp8266.esp8266.generic/transmitter.ino.bin"
 
 # Parse arguments
