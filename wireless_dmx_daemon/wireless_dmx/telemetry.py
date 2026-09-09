@@ -19,7 +19,25 @@ class TelemetryStore:
 
     def update(self, telemetry: ReceiverTelemetry) -> None:
         with self._lock:
+            previous = self._items.get(telemetry.receiver_id)
+            if previous is not None:
+                previous_sequence = previous[0].telemetry_sequence
+                if telemetry.telemetry_sequence == previous_sequence:
+                    # The transmitter may be republishing a cached record;
+                    # update displayed data but do not refresh liveness.
+                    self._items[telemetry.receiver_id] = (telemetry, previous[1])
+                    return
+                if ((telemetry.telemetry_sequence - previous_sequence) & 0xFFFFFFFF) >= 0x80000000:
+                    # Receiver firmware starts telemetrySequence at zero after
+                    # reboot. A simultaneous uptime regression distinguishes
+                    # that fresh boot from an old/out-of-order cached record.
+                    if telemetry.uptime_seconds >= previous[0].uptime_seconds:
+                        return
             self._items[telemetry.receiver_id] = (telemetry, time.monotonic())
+
+    def clear(self) -> None:
+        with self._lock:
+            self._items.clear()
 
     def update_report(self, parts: tuple[TelemetryReportPart, ...]) -> bool:
         """Publish one complete, internally consistent multipart report."""

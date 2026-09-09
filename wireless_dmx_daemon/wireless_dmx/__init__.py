@@ -8,6 +8,7 @@ from .models import (
     ReceiverLinkState,
     ReceiverTelemetry,
     TelemetryStatus,
+    PriorityStatus,
 )
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     "ReceiverLinkState",
     "ReceiverTelemetry",
     "TelemetryStatus",
+    "PriorityStatus",
 ]

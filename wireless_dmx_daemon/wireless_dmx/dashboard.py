@@ -83,9 +83,33 @@ def receiver_display_segments(receiver) -> tuple[str, str, str, str, str]:
     )
 
 
-MAIN_COMMANDS = "[d] daemon  [r] telemetry  [s] SETTINGS  [x] advanced  [l] logs  [q] quit"
+MAIN_COMMANDS = "[d] daemon  [r] telemetry  [s] SETTINGS  [u] MANUAL DMX  [x] advanced  [l] logs  [q] quit"
 SETUP_COMMANDS = "[↑/↓/j/k] select  [e] edit  [w] write config  [x] cancel"
 ADVANCED_COMMANDS = "[m] Mega  [a] acceptance  [b] abort Mega  [x] main  [q] quit"
+MANUAL_COMMANDS = "[↑/↓/j/k] move  [←/→] grid  [a] jump  [e] value  [+/-] nudge  [n/p] priority  [Enter] send  [c] clear  [u] full  [g] grid  [x] main"
+
+
+def grid_position(channel: int, columns: int = 16) -> tuple[int, int]:
+    """Return zero-based row/column for a 1-based DMX channel."""
+    if not 1 <= channel <= 512 or columns < 1:
+        raise ValueError("channel must be 1..512 and columns must be positive")
+    index = channel - 1
+    return index // columns, index % columns
+
+
+def _read_line_blocking(stdscr, y: int, x: int, width: int) -> str:
+    """Read editable text while temporarily overriding dashboard nonblocking mode."""
+    curses.echo()
+    curses.curs_set(1)
+    stdscr.nodelay(False)
+    stdscr.timeout(-1)
+    try:
+        return stdscr.getstr(y, x, width).decode(errors="replace")
+    finally:
+        curses.noecho()
+        curses.curs_set(0)
+        stdscr.nodelay(True)
+        stdscr.timeout(250)
 
 
 class MegaMonitorController:
@@ -316,7 +340,8 @@ def render(stdscr, controller: DashboardController, show_logs: bool) -> None:
     _safe_add(stdscr, height - 2, 2, MAIN_COMMANDS, color_attr("accent", True))
     telemetry = snapshot.telemetry
     telemetry_state = "WAITING" if telemetry.request_in_flight else "ACTIVE" if telemetry.enabled else "OFF"
-    _safe_add(stdscr, height - 1, 2, f"TELEMETRY: {telemetry_state} req={telemetry.requests_sent} reports={telemetry.reports_received} failures={telemetry.consecutive_failures}  MEGA: {mega['state']}", curses.A_DIM)
+    cache_state = "CLEAR-ACK" if telemetry.cache_clear_acknowledged else "CLEAR-WAIT"
+    _safe_add(stdscr, height - 1, 2, f"TELEMETRY: {telemetry_state} {cache_state} req={telemetry.requests_sent} reports={telemetry.reports_received} failures={telemetry.consecutive_failures}  MEGA: {mega['state']}", curses.A_DIM)
     stdscr.refresh()
 
 
@@ -362,6 +387,56 @@ def render_setup(stdscr, controller: DashboardController, selected: int, message
     stdscr.refresh()
 
 
+def render_manual(stdscr, controller: DashboardController, channel: int, priority: bool,
+                  repeat_count: int, ttl_seconds: float, full_mode: bool, grid_mode: bool,
+                  message: str) -> None:
+    stdscr.erase()
+    height, width = stdscr.getmaxyx()
+    _safe_add(stdscr, 0, 2, "WIRELESS DMX MANUAL TRANSMISSION", color_attr("accent", True) | curses.A_REVERSE)
+    service = controller.service
+    universe = service.manual_universe_snapshot() if service else bytes(512)
+    mode = "HIGH PRIORITY" if priority else "NORMAL"
+    mode_color = "warning" if priority else "healthy"
+    _safe_add(stdscr, 1, 2, f"Mode: {mode}   Repeat: {repeat_count}   TTL: {ttl_seconds:.1f}s   "
+              f"Priority queue: {service.snapshot().priority.queue_depth if service else 0}", color_attr(mode_color, True))
+    if priority:
+        _safe_add(stdscr, 2, 2, "WARNING: priority mode uses the bounded priority scheduler; receiver confirmation is not enabled yet.", color_attr("warning", True))
+    if full_mode and grid_mode:
+        _box(stdscr, 4, 1, max(5, height - 4), width - 2, "FULL UNIVERSE HEX GRID")
+        columns = 16
+        cell_width = max(5, min(8, (width - 8) // columns))
+        visible_rows = max(1, height - 8)
+        selected_row, _ = grid_position(channel, columns)
+        first_row = max(0, min(selected_row - visible_rows // 2, 32 - visible_rows))
+        for grid_row in range(first_row, min(32, first_row + visible_rows)):
+            y = 5 + grid_row - first_row
+            _safe_add(stdscr, y, 3, f"{grid_row * columns + 1:03d}: ", curses.A_DIM)
+            for grid_col in range(columns):
+                index = grid_row * columns + grid_col
+                if index >= 512:
+                    break
+                attr = color_attr("accent", True) if index == channel - 1 else 0
+                _safe_add(stdscr, y, 8 + grid_col * cell_width,
+                          f"{universe[index]:02X}", attr, cell_width - 1)
+    elif full_mode:
+        _box(stdscr, 4, 1, max(5, height - 4), width - 2, "FULL UNIVERSE")
+        visible = max(1, height - 8)
+        first = max(0, min(channel - 1 - visible // 2, 512 - visible))
+        for row, index in enumerate(range(first, first + visible), 5):
+            attr = color_attr("accent", True) if index == channel - 1 else 0
+            _safe_add(stdscr, row, 4, f"{index + 1:03d}       {universe[index]:03d}       0x{universe[index]:02X}", attr)
+    else:
+        _box(stdscr, 4, 1, 12, width - 2, "CHANNEL EDITOR")
+        _safe_add(stdscr, 6, 4, f"Channel: {channel:03d} / 512", color_attr("accent", True))
+        _safe_add(stdscr, 7, 4, f"Value:   {universe[channel - 1]:03d}")
+        _safe_add(stdscr, 8, 4, f"Hex:     0x{universe[channel - 1]:02X}")
+        _safe_add(stdscr, 10, 4, "Enter sends the complete 512-channel manual universe.")
+    if message:
+        _safe_add(stdscr, height - 3, 2, message, color_attr("warning", True))
+    _safe_add(stdscr, height - 2, 2, MANUAL_COMMANDS, color_attr("accent", True))
+    stdscr.refresh()
+
+
 def run_dashboard(stdscr, controller: DashboardController) -> None:
     curses.curs_set(0)
     init_colors()
@@ -372,9 +447,20 @@ def run_dashboard(stdscr, controller: DashboardController) -> None:
     setup = False
     setup_selected = 0
     setup_message = ""
+    manual = False
+    manual_channel = 1
+    manual_priority = False
+    manual_repeat = controller.config.priority_default_repeat_count
+    manual_ttl = controller.config.priority_default_ttl_seconds
+    manual_full = False
+    manual_grid = False
+    manual_message = ""
     controller.start_daemon()
     while True:
-        if setup:
+        if manual:
+            render_manual(stdscr, controller, manual_channel, manual_priority, manual_repeat,
+                          manual_ttl, manual_full, manual_grid, manual_message)
+        elif setup:
             render_setup(stdscr, controller, setup_selected, setup_message)
         elif advanced:
             render_advanced(stdscr, controller)
@@ -383,10 +469,14 @@ def run_dashboard(stdscr, controller: DashboardController) -> None:
         key = stdscr.getch()
         if key < 0:
             continue
+        height, width = stdscr.getmaxyx()
         if key in (ord("q"), ord("Q")):
             return
         if key in (ord("x"), ord("X")):
-            if setup:
+            if manual:
+                manual = False
+                manual_message = ""
+            elif setup:
                 setup = False
                 setup_message = "changes discarded"
             else:
@@ -396,6 +486,65 @@ def run_dashboard(stdscr, controller: DashboardController) -> None:
             setup = True
             setup_selected = 0
             setup_message = ""
+            continue
+        if key in (ord("u"), ord("U")) and not advanced and not setup and not manual:
+            manual = True
+            manual_message = ""
+            continue
+        if manual:
+            if key in (curses.KEY_UP, ord("k")):
+                manual_channel = max(1, manual_channel - (16 if manual_full and manual_grid else 1))
+            elif key in (curses.KEY_DOWN, ord("j")):
+                manual_channel = min(512, manual_channel + (16 if manual_full and manual_grid else 1))
+            elif key == curses.KEY_LEFT and manual_full and manual_grid:
+                manual_channel = max(1, manual_channel - 1)
+            elif key == curses.KEY_RIGHT and manual_full and manual_grid:
+                manual_channel = min(512, manual_channel + 1)
+            elif key in (ord("a"), ord("A")):
+                _safe_add(stdscr, height - 1, 2, "Jump to channel 1-512: "); stdscr.refresh()
+                try:
+                    target = int(_read_line_blocking(stdscr, height - 1, 23, 3))
+                    if not 1 <= target <= 512:
+                        raise ValueError("channel must be 1-512")
+                    manual_channel = target
+                    manual_message = f"jumped to channel {target}"
+                except (ValueError, curses.error) as exc:
+                    manual_message = f"invalid channel: {exc}"
+            elif key in (ord("+"), ord("=")) and controller.service:
+                controller.service.set_manual_channel(manual_channel, min(255, controller.service.manual_universe[manual_channel - 1] + 1))
+            elif key in (ord("-"), ord("_")) and controller.service:
+                controller.service.set_manual_channel(manual_channel, max(0, controller.service.manual_universe[manual_channel - 1] - 1))
+            elif key in (ord("n"), ord("N")):
+                manual_priority = False
+            elif key in (ord("p"), ord("P")):
+                manual_priority = True
+            elif key in (ord("c"), ord("C")) and controller.service:
+                controller.service.clear_manual_universe()
+                manual_message = "manual universe cleared"
+            elif key in (ord("r"), ord("R")):
+                manual_repeat = manual_repeat % controller.config.priority_max_repeat_count + 1
+            elif key in (ord("t"), ord("T")):
+                manual_ttl = 0.5 if manual_ttl >= controller.config.priority_max_ttl_seconds else min(controller.config.priority_max_ttl_seconds, manual_ttl + 0.5)
+            elif key in (ord("u"), ord("U")):
+                manual_full = not manual_full
+            elif key in (ord("g"), ord("G")) and manual_full:
+                manual_grid = not manual_grid
+            elif key in (curses.KEY_ENTER, 10, 13) and controller.service:
+                try:
+                    priority_id = controller.service.send_manual(manual_priority, manual_repeat, manual_ttl)
+                    manual_message = f"sent {'priority ' + str(priority_id) if manual_priority else 'normal'} universe"
+                except Exception as exc:
+                    manual_message = f"send failed: {exc}"
+            elif key in (ord("e"), ord("E")) and controller.service:
+                _safe_add(stdscr, height - 1, 2, "Enter value 0-255: "); stdscr.refresh()
+                try:
+                    value = int(_read_line_blocking(stdscr, height - 1, 22, 3))
+                    controller.service.set_manual_channel(manual_channel, value)
+                    manual_message = f"channel {manual_channel} set to {value}"
+                except (ValueError, curses.error) as exc:
+                    manual_message = f"invalid value: {exc}"
+                finally:
+                    pass
             continue
         if setup:
             if key in (curses.KEY_UP, ord("k")):

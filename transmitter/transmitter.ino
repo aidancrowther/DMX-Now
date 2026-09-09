@@ -76,6 +76,25 @@ static TelemetrySlot telemetryRing[TELEMETRY_RING_SIZE];
 static volatile uint8_t telemetryHead = 0;
 static volatile uint8_t telemetryTail = 0;
 static unsigned long telemetryPacketsDropped = 0;
+static unsigned long priorityCompletionsReceived = 0;
+static unsigned long priorityCompletionDuplicates = 0;
+static unsigned long priorityCompletionInvalid = 0;
+static unsigned long priorityCompletionDropped = 0;
+
+#define PRIORITY_ACK_RING_SIZE 32U
+struct PriorityAckSlot {
+    PriorityCompletionPacket packet;
+    uint32_t receivedAtMs;
+    uint16_t ackDelayMs;
+};
+static PriorityAckSlot priorityAckRing[PRIORITY_ACK_RING_SIZE];
+static uint8_t priorityAckHead = 0;
+static uint8_t priorityAckTail = 0;
+static uint32_t priorityAckReportSequence = 0;
+static bool priorityAckReportPending = false;
+static uint32_t lastPriorityTransmitId = 0;
+static uint8_t lastPriorityTransmitAttempt = 0;
+static unsigned long lastPriorityTransmitFinishedMs = 0;
 
 /* Feature 11: bounded cache retained for the host management interface. */
 #ifndef MAX_TELEMETRY_RECEIVERS
@@ -120,6 +139,14 @@ static uint16_t managementLength = 0;
 static uint16_t managementIndex = 0;
 static uint16_t managementReceivedCrc = 0;
 static uint8_t managementPayload[32];
+static bool priorityNextUniverse = false;
+static uint32_t priorityIdForNextUniverse = 0;
+static uint8_t priorityRepeatCountForNextUniverse = 1;
+static uint8_t priorityAttemptForNextUniverse = 1;
+static uint32_t prioritySequenceForCurrentFrame = 0;
+static uint8_t priorityRepeatsRemaining = 0;
+static bool currentFrameIsPriority = false;
+static uint8_t priorityAttempt = 1;
 
 static bool telemetryReportPending = false;
 static uint8_t telemetryReportPart = 0;
@@ -128,6 +155,15 @@ static uint8_t telemetryReportRecordIndex = 0;
 static uint8_t telemetryReportRecordCount = 0;
 static uint32_t telemetryReportActiveSequence = 0;
 static unsigned long telemetryReportLastStartMs = 0;
+
+static void clearReceiverCache(void) {
+    memset(receiverTable, 0, sizeof(receiverTable));
+    telemetryHead = 0;
+    telemetryTail = 0;
+    telemetryReportPending = false;
+    telemetryReportRecordIndex = 0;
+    telemetryReportRecordCount = 0;
+}
 
 static uint16_t managementCrc16(const uint8_t* data, uint16_t length) {
     uint16_t crc = 0xFFFFU;
@@ -174,7 +210,8 @@ static void cacheTelemetry(const ReceiverTelemetryPacket& packet, int8_t rssi) {
         if (index < 0) index = oldest;
     } else if (receiverTable[index].valid &&
                !sequenceIsNewer(packet.telemetrySequence,
-                                receiverTable[index].telemetry.telemetrySequence)) {
+                                receiverTable[index].telemetry.telemetrySequence) &&
+               packet.uptimeSeconds >= receiverTable[index].telemetry.uptimeSeconds) {
         return;
     }
 
@@ -243,6 +280,13 @@ static void commitEnttecUniverse(void) {
 
     memset(g_universe, 0, sizeof(g_universe));
     memcpy(g_universe, enttecPayload + 1, enttecLength - 1);
+    if (priorityNextUniverse) {
+        prioritySequenceForCurrentFrame = priorityIdForNextUniverse;
+        priorityRepeatsRemaining = priorityRepeatCountForNextUniverse;
+        priorityNextUniverse = false;
+    } else {
+        priorityRepeatsRemaining = 0;
+    }
     if (enttecValidFrames < 0xFFFFFFFFUL) enttecValidFrames++;
 }
 
@@ -373,6 +417,36 @@ static void serviceEnttecInput(void) {
                         telemetryReportLastStartMs = now;
                     }
                 }
+                if (managementVersion == MANAGEMENT_PROTO_VERSION &&
+                    managementCrc16(crcInput, (uint16_t)(4 + managementLength)) == managementReceivedCrc &&
+                    managementOpcode == MANAGEMENT_GET_PRIORITY_ACKS && managementLength == 0) {
+                    priorityAckReportPending = true;
+                }
+                if (managementVersion == MANAGEMENT_PROTO_VERSION &&
+                    managementCrc16(crcInput, (uint16_t)(4 + managementLength)) == managementReceivedCrc &&
+                    managementOpcode == MANAGEMENT_CLEAR_RECEIVER_CACHE && managementLength == 0) {
+                    clearReceiverCache();
+                    uint8_t response[8] = {MANAGEMENT_SYNC_1, MANAGEMENT_SYNC_2,
+                                           MANAGEMENT_PROTO_VERSION, MANAGEMENT_CACHE_CLEARED,
+                                           0, 0, 0, 0};
+                    const uint16_t responseCrc = managementCrc16(response + 2, 4);
+                    response[6] = (uint8_t)responseCrc;
+                    response[7] = (uint8_t)(responseCrc >> 8);
+                    Serial.write(response, sizeof(response));
+                }
+                if (managementVersion == MANAGEMENT_PROTO_VERSION &&
+                    managementCrc16(crcInput, (uint16_t)(4 + managementLength)) == managementReceivedCrc &&
+                    managementOpcode == MANAGEMENT_MARK_NEXT_PRIORITY &&
+                    managementLength == sizeof(PriorityTransmitRequest)) {
+                    PriorityTransmitRequest request;
+                    memcpy(&request, managementPayload, sizeof(request));
+                    if (request.repeatCount >= 1) {
+                        priorityNextUniverse = true;
+                        priorityIdForNextUniverse = request.priorityId;
+                        priorityRepeatCountForNextUniverse = request.repeatCount;
+                        priorityAttemptForNextUniverse = request.attempt;
+                    }
+                }
                 managementState = MGMT_WAIT_SYNC_1;
                 break;
             }
@@ -384,6 +458,42 @@ static void onTelemetryReceived(uint8_t* address, uint8_t* data, uint8_t len,
                                 signed int rssi, bool broadcast) {
     (void)address;
     (void)broadcast;
+    if (len == sizeof(PriorityCompletionPacket)) {
+        PriorityCompletionPacket completion;
+        memcpy(&completion, data, sizeof(completion));
+        if (completion.magic != DMX_PACKET_MAGIC ||
+            completion.protocolVersion != DMX_PROTO_VERSION ||
+            completion.packetType != PRIORITY_COMPLETION_PACKET_TYPE ||
+            completion.universeId != DMX_UNIVERSE_ID) {
+            if (priorityCompletionInvalid < 0xFFFFFFFFUL) priorityCompletionInvalid++;
+            return;
+        }
+        if (completion.completionStatus == PRIORITY_COMPLETE_ACCEPTED) {
+            if (priorityCompletionsReceived < 0xFFFFFFFFUL) priorityCompletionsReceived++;
+        } else if (completion.completionStatus == PRIORITY_COMPLETE_DUPLICATE) {
+            if (priorityCompletionDuplicates < 0xFFFFFFFFUL) priorityCompletionDuplicates++;
+        } else if (priorityCompletionInvalid < 0xFFFFFFFFUL) {
+            priorityCompletionInvalid++;
+        }
+        const uint8_t next = (uint8_t)((priorityAckHead + 1U) % PRIORITY_ACK_RING_SIZE);
+        if (next == priorityAckTail) {
+            if (priorityCompletionDropped < 0xFFFFFFFFUL) priorityCompletionDropped++;
+        } else {
+            memcpy(&priorityAckRing[priorityAckHead].packet, &completion, sizeof(completion));
+            priorityAckRing[priorityAckHead].receivedAtMs = millis();
+            priorityAckRing[priorityAckHead].ackDelayMs =
+                (completion.priorityId == lastPriorityTransmitId &&
+                 completion.attempt == lastPriorityTransmitAttempt)
+                ? (uint16_t)min(65535UL, millis() - lastPriorityTransmitFinishedMs) : 65535U;
+            priorityAckRing[priorityAckHead].ackDelayMs =
+                (completion.priorityId == lastPriorityTransmitId &&
+                 completion.attempt == lastPriorityTransmitAttempt)
+                ? (uint16_t)min(65535UL, millis() - lastPriorityTransmitFinishedMs) : 65535U;
+            priorityAckHead = next;
+        }
+        (void)rssi;
+        return;
+    }
     if (len != sizeof(ReceiverTelemetryPacket)) return;
     ReceiverTelemetryPacket packet;
     memcpy(&packet, data, sizeof(packet));
@@ -508,6 +618,7 @@ static void serviceTelemetryReport(void) {
         record.firmwareVersion = source.telemetry.firmwareVersion;
         record.protocolVersion = source.telemetry.protocolVersion;
         record.reserved = 0;
+        record.telemetrySequence = source.telemetry.telemetrySequence;
         memcpy(packet + offset, &record, sizeof(record));
         offset += sizeof(record);
     }
@@ -523,6 +634,44 @@ static void serviceTelemetryReport(void) {
     telemetryReportPart++;
     if (telemetryReportPart >= telemetryReportPartCount || header.recordCount == 0)
         telemetryReportPending = false;
+}
+
+static void servicePriorityAckReport(void) {
+    if (!priorityAckReportPending) return;
+    uint8_t packet[6 + sizeof(PriorityAckReportHeader) + 9 * sizeof(PriorityAckReportRecord) + 2];
+    uint16_t offset = 0;
+    packet[offset++] = MANAGEMENT_SYNC_1;
+    packet[offset++] = MANAGEMENT_SYNC_2;
+    packet[offset++] = MANAGEMENT_PROTO_VERSION;
+    packet[offset++] = MANAGEMENT_PRIORITY_ACKS;
+    const uint8_t count = (uint8_t)((priorityAckHead >= priorityAckTail)
+        ? (priorityAckHead - priorityAckTail)
+        : (PRIORITY_ACK_RING_SIZE - priorityAckTail + priorityAckHead));
+    const uint8_t records = count > 9U ? 9U : count;
+    const uint16_t payloadLength = sizeof(PriorityAckReportHeader) +
+                                   records * sizeof(PriorityAckReportRecord);
+    packet[offset++] = (uint8_t)payloadLength;
+    packet[offset++] = (uint8_t)(payloadLength >> 8);
+    PriorityAckReportHeader header = {1U, records, priorityAckReportSequence++,
+        (uint32_t)priorityCompletionsReceived, (uint32_t)priorityCompletionDuplicates,
+        (uint32_t)priorityCompletionInvalid, (uint32_t)priorityCompletionDropped};
+    memcpy(packet + offset, &header, sizeof(header));
+    offset += sizeof(header);
+    for (uint8_t i = 0; i < records; i++) {
+        PriorityAckSlot& source = priorityAckRing[priorityAckTail];
+        PriorityAckReportRecord record = {source.packet.priorityId, source.packet.receiverId,
+            source.packet.frameSequence, source.packet.attempt, source.packet.completionStatus,
+            source.packet.attemptsObserved, source.packet.lastRssi, source.receivedAtMs,
+            source.ackDelayMs};
+        memcpy(packet + offset, &record, sizeof(record));
+        offset += sizeof(record);
+        priorityAckTail = (uint8_t)((priorityAckTail + 1U) % PRIORITY_ACK_RING_SIZE);
+    }
+    const uint16_t crc = managementCrc16(packet + 2, (uint16_t)(4 + payloadLength));
+    packet[offset++] = (uint8_t)crc;
+    packet[offset++] = (uint8_t)(crc >> 8);
+    Serial.write(packet, offset);
+    priorityAckReportPending = false;
 }
 
 /* --------------------------------------------------------------------------
@@ -626,6 +775,29 @@ static void submitFragment(uint32_t seq, uint8_t fragIdx) {
 
 }
 
+static void submitPriorityFragment(uint32_t seq, uint8_t fragIdx) {
+    const uint16_t offset = (uint16_t)fragIdx * PRIORITY_PAYLOAD_SIZE;
+    const uint8_t payloadLength = (offset + PRIORITY_PAYLOAD_SIZE <= DMX_UNIVERSE_SIZE)
+        ? PRIORITY_PAYLOAD_SIZE : (uint8_t)(DMX_UNIVERSE_SIZE - offset);
+    uint8_t packetBuffer[ESP_NOW_MAX_DATA_LEN];
+    DmxPriorityFragmentPacket pkt;
+    pkt.magic = DMX_PACKET_MAGIC;
+    pkt.protocolVersion = DMX_PROTO_VERSION;
+    pkt.packetType = DMX_PRIORITY_PACKET_TYPE;
+    pkt.universeId = DMX_UNIVERSE_ID;
+    pkt.frameSequence = seq;
+    pkt.priorityId = prioritySequenceForCurrentFrame;
+    pkt.attempt = priorityAttempt;
+    pkt.repeatCount = priorityRepeatCountForNextUniverse;
+    pkt.fragmentIndex = fragIdx;
+    pkt.fragmentCount = 3U;
+    pkt.dataOffset = offset;
+    pkt.payloadLength = payloadLength;
+    memcpy(packetBuffer, &pkt, sizeof(pkt));
+    memcpy(packetBuffer + PRIORITY_HEADER_SIZE, g_txUniverse + offset, payloadLength);
+    quickEspNow.sendBcast(packetBuffer, (uint16_t)(PRIORITY_HEADER_SIZE + payloadLength));
+}
+
 void setup(void) {
     /* ENTTEC-compatible host input at 115200 baud, 8 data bits, no parity,
      * 2 stops. This supports the full-universe input bandwidth needed when the
@@ -713,6 +885,10 @@ static constexpr unsigned long TX_INTERVAL_MS =
     (WIRELESS_REFRESH_INTERVAL_MS > WIRELESS_TX_OVERHEAD_MS)
         ? (WIRELESS_REFRESH_INTERVAL_MS - WIRELESS_TX_OVERHEAD_MS)
         : 0UL;
+static constexpr unsigned long PRIORITY_TX_INTERVAL_MS =
+    (WIRELESS_PRIORITY_REFRESH_INTERVAL_MS > WIRELESS_TX_OVERHEAD_MS)
+        ? (WIRELESS_PRIORITY_REFRESH_INTERVAL_MS - WIRELESS_TX_OVERHEAD_MS)
+        : 0UL;
 
 /* TEST HOOK (Feature 6, Test 6): late-fragment state. */
 #if defined(TEST_DELAYED_FRAGMENT)
@@ -727,14 +903,17 @@ static const unsigned long TEST_DELAYED_FRAGMENT_DELAY_MS = 2500UL;
 
 void loop(void) {
     const unsigned long now = millis();
+    const unsigned long activeInterval = priorityRepeatsRemaining > 0
+        ? PRIORITY_TX_INTERVAL_MS : TX_INTERVAL_MS;
 
     serviceEnttecInput();
     reportTelemetry();
     serviceTelemetryReport();
+    servicePriorityAckReport();
 
     switch (txState) {
         case TX_IDLE:
-            if (now - lastFrameGenerationTime >= TX_INTERVAL_MS) {
+            if (now - lastFrameGenerationTime >= activeInterval) {
                 txState = TX_GENERATING;
                 stateEnteredTime = now;
             TX_LOG("TX GENERATE: starting new frame\n");
@@ -745,15 +924,26 @@ void loop(void) {
             memcpy(g_txUniverse, g_universe, sizeof(g_txUniverse));
             currentFragment = 0;
             g_sendConfirmations = 0;   /* reset before the sends so all are counted */
-            TX_LOG("TX FRAME seq=%u fragments=%u\n",
-                          g_frameSequence, txSlotCount);
+            currentFrameIsPriority = priorityRepeatsRemaining > 0;
+            if (currentFrameIsPriority) {
+                priorityAttempt = priorityAttemptForNextUniverse;
+                lastPriorityTransmitId = prioritySequenceForCurrentFrame;
+                lastPriorityTransmitAttempt = priorityAttempt;
+                lastPriorityTransmitFinishedMs = now;
+            }
+            TX_LOG("TX FRAME seq=%u fragments=%u priority=%u\n",
+                          g_frameSequence, txSlotCount, currentFrameIsPriority ? 1U : 0U);
             txState = TX_SENDING;
             stateEnteredTime = now;
             break;
 
         case TX_SENDING:
             if (currentFragment < txSlotCount) {
-                submitFragment(g_frameSequence, txSlotList[currentFragment]);
+                if (currentFrameIsPriority) {
+                    submitPriorityFragment(g_frameSequence, currentFragment);
+                } else {
+                    submitFragment(g_frameSequence, txSlotList[currentFragment]);
+                }
                 currentFragment++;
             } else {
                 /* All fragments queued - wait for the queue to drain. */
@@ -765,7 +955,21 @@ void loop(void) {
         case TX_DRAIN:
             if (g_sendConfirmations >= txSlotCount ||
                 (now - stateEnteredTime >= WIRELESS_TX_DRAIN_TIMEOUT_MS)) {
+                if (currentFrameIsPriority && priorityRepeatsRemaining > 1) {
+                    priorityRepeatsRemaining--;
+                    currentFragment = 0;
+                    g_sendConfirmations = 0;
+                    /* Return through TX_IDLE so the priority-specific 1 Hz
+                     * interval is honored between physical repeats. */
+                    lastFrameGenerationTime = now;
+                    txState = TX_IDLE;
+                    stateEnteredTime = now;
+                    break;
+                }
                 /* Frame fully transmitted; advance to the next one. */
+                const bool completedPriority = currentFrameIsPriority;
+                currentFrameIsPriority = false;
+                priorityRepeatsRemaining = 0;
                 g_frameSequence++;
                 lastFrameGenerationTime = now;
 #if defined(TEST_DELAYED_FRAGMENT)

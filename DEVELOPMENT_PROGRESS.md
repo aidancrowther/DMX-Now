@@ -1178,7 +1178,7 @@ Expected approximate sequence:
 11. Status/management interface ✓ (substantially complete for current Linux/20 Hz deployment)
 12. Reliability and throughput testing
 13. Hardware-specific cleanup and fail-safe refinement
-14. Implement a high priority transmission flag
+14. High-priority transmission ✓ (daemon-only stage; receiver firmware ACK stage pending)
 
 This ordering may change as hardware testing reveals constraints.
 

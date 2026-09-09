@@ -28,6 +28,51 @@ class ConfigTelemetryTests(unittest.TestCase):
         time.sleep(0.05)
         self.assertEqual(store.snapshot()[0].link_state, ReceiverLinkState.OFFLINE)
 
+    def test_cached_same_sequence_does_not_refresh_liveness(self):
+        store = TelemetryStore(stale_seconds=0.01, offline_seconds=0.03)
+        record = ReceiverTelemetry(1, "00:00:00:00:00:01", ReceiverLinkState.UNKNOWN, False,
+                                   -1, -1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 7)
+        store.update(record)
+        time.sleep(0.02)
+        store.update(record)
+        time.sleep(0.02)
+        self.assertEqual(store.snapshot()[0].link_state, ReceiverLinkState.OFFLINE)
+
+    def test_new_sequence_refreshes_liveness(self):
+        store = TelemetryStore(stale_seconds=0.01, offline_seconds=0.03)
+        first = ReceiverTelemetry(1, "00:00:00:00:00:01", ReceiverLinkState.UNKNOWN, False,
+                                  -1, -1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 7)
+        second = ReceiverTelemetry(1, "00:00:00:00:00:01", ReceiverLinkState.UNKNOWN, False,
+                                   -1, -1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 8)
+        store.update(first)
+        time.sleep(0.02)
+        store.update(second)
+        self.assertEqual(store.snapshot()[0].link_state, ReceiverLinkState.ONLINE)
+
+    def test_receiver_reboot_with_uptime_regression_refreshes_liveness(self):
+        store = TelemetryStore(stale_seconds=0.01, offline_seconds=0.03)
+        before_reset = ReceiverTelemetry(1, "00:00:00:00:00:01", ReceiverLinkState.UNKNOWN, False,
+                                         -1, -1, 120, 0, 100, 0, 0, 0, 0, 1, 1, 400)
+        after_reset = ReceiverTelemetry(1, "00:00:00:00:00:01", ReceiverLinkState.UNKNOWN, False,
+                                        -1, -1, 2, 0, 0, 0, 0, 0, 0, 1, 1, 0)
+        store.update(before_reset)
+        time.sleep(0.02)
+        store.update(after_reset)
+        snapshot = store.snapshot()
+        self.assertEqual(snapshot[0].link_state, ReceiverLinkState.ONLINE)
+        self.assertEqual(snapshot[0].telemetry_sequence, 0)
+
+    def test_lower_sequence_without_uptime_regression_is_rejected(self):
+        store = TelemetryStore(stale_seconds=0.01, offline_seconds=0.03)
+        current = ReceiverTelemetry(1, "00:00:00:00:00:01", ReceiverLinkState.UNKNOWN, False,
+                                    -1, -1, 120, 0, 100, 0, 0, 0, 0, 1, 1, 400)
+        old = ReceiverTelemetry(1, "00:00:00:00:00:01", ReceiverLinkState.UNKNOWN, False,
+                                -1, -1, 121, 0, 101, 0, 0, 0, 0, 1, 1, 3)
+        store.update(current)
+        time.sleep(0.04)
+        store.update(old)
+        self.assertEqual(store.snapshot()[0].link_state, ReceiverLinkState.OFFLINE)
+
 
 if __name__ == "__main__":
     unittest.main()

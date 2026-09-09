@@ -22,6 +22,14 @@ EDITABLE_FIELDS = (
     ("Pacer rate Hz", "pacer_rate_hz", float),
     ("Telemetry enabled", "telemetry_enabled", bool),
     ("Telemetry interval seconds", "telemetry_interval_seconds", float),
+    ("Priority enabled", "priority_enabled", bool),
+    ("Priority queue depth", "priority_max_queue_depth", int),
+    ("Priority repeat count", "priority_default_repeat_count", int),
+    ("Priority default TTL seconds", "priority_default_ttl_seconds", float),
+    ("Priority lead-in ms", "priority_lead_in_ms", int),
+    ("Priority lead-out ms", "priority_lead_out_ms", int),
+    ("Priority confirmation window ms", "priority_confirmation_window_ms", int),
+    ("Priority max consecutive events", "priority_max_consecutive_events", int),
 )
 
 

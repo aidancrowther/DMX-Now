@@ -44,6 +44,69 @@ class DmxStatistics:
     artnet_source_frames: int = 0
     serial_source_frames: int = 0
     source_frames_rejected: int = 0
+    priority_received: int = 0
+    priority_queued: int = 0
+    priority_frames_submitted: int = 0
+    priority_completed: int = 0
+    priority_expired: int = 0
+    priority_cancelled: int = 0
+    priority_rejected_queue_full: int = 0
+    priority_burst_limit_hits: int = 0
+    normal_frames_during_priority: int = 0
+    priority_queue_depth: int = 0
+
+
+@dataclass(frozen=True)
+class PriorityStatus:
+    enabled: bool = True
+    state: str = "idle"
+    queue_depth: int = 0
+    queue_capacity: int = 4
+    priority_id: int | None = None
+    reason: str = ""
+    attempt: int = 0
+    repeat_index: int = 0
+    repeat_count: int = 0
+    confirmed_receivers: int = 0
+    known_receivers: int = 0
+    last_result: str = ""
+    ack_accepted: int = 0
+    ack_duplicates: int = 0
+    ack_invalid: int = 0
+    ack_unknown: int = 0
+    ack_duplicate_records: int = 0
+    ack_dropped: int = 0
+    ack_window_failures: int = 0
+    ack_records_received: int = 0
+    retry_attempts: int = 0
+    retry_recovered: int = 0
+    retry_failures: int = 0
+
+
+@dataclass(frozen=True)
+class PriorityAck:
+    priority_id: int
+    receiver_id: int
+    frame_sequence: int
+    attempt: int
+    completion_status: int
+    attempts_observed: int
+    last_rssi: int
+    received_at_ms: int
+    ack_delay_ms: int
+    received_monotonic: float
+
+
+@dataclass(frozen=True)
+class PriorityAckSummary:
+    accepted_count: int = 0
+    duplicate_count: int = 0
+    invalid_count: int = 0
+    dropped_count: int = 0
+    records_received: int = 0
+    unknown_priority_count: int = 0
+    duplicate_record_count: int = 0
+    window_failure_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -55,6 +118,10 @@ class TelemetryStatus:
     consecutive_failures: int = 0
     last_request_age_ms: Optional[int] = None
     last_report_age_ms: Optional[int] = None
+    cache_clear_sent: int = 0
+    cache_clear_acknowledged: bool = False
+    cache_clear_age_ms: Optional[int] = None
+    cache_clear_retries: int = 0
 
 
 @dataclass(frozen=True)
@@ -109,6 +176,21 @@ class DaemonConfig:
     artnet_port: int = 6454
     artnet_universe: int = 0
     input_source_policy: str = "latest"
+    priority_enabled: bool = True
+    priority_max_queue_depth: int = 4
+    priority_default_repeat_count: int = 3
+    priority_max_repeat_count: int = 10
+    priority_default_ttl_seconds: float = 2.0
+    priority_max_ttl_seconds: float = 5.0
+    priority_lead_in_ms: int = 50
+    priority_lead_out_ms: int = 50
+    priority_confirmation_window_ms: int = 450
+    priority_max_attempts: int = 3
+    priority_retry_cooldown_min_seconds: float = 1.0
+    priority_retry_cooldown_max_seconds: float = 2.5
+    priority_normal_quiet_before_ms: int = 500
+    priority_normal_quiet_after_ms: int = 1000
+    priority_max_consecutive_events: int = 3
 
     def validate(self) -> None:
         if not self.transmitter_device:
@@ -148,6 +230,27 @@ class DaemonConfig:
             raise ValueError("artnet_universe must be between 0 and 32767")
         if self.input_source_policy not in ("latest", "serial", "artnet"):
             raise ValueError("input_source_policy must be latest, serial, or artnet")
+        if self.priority_max_queue_depth < 1:
+            raise ValueError("priority_max_queue_depth must be positive")
+        if not 1 <= self.priority_default_repeat_count <= self.priority_max_repeat_count:
+            raise ValueError("invalid priority repeat count defaults")
+        if self.priority_max_repeat_count > 255:
+            raise ValueError("priority_max_repeat_count must be <= 255")
+        if self.priority_default_ttl_seconds <= 0 or self.priority_max_ttl_seconds <= 0:
+            raise ValueError("priority TTL values must be positive")
+        if self.priority_default_ttl_seconds > self.priority_max_ttl_seconds:
+            raise ValueError("priority default TTL cannot exceed maximum TTL")
+        if min(self.priority_lead_in_ms, self.priority_lead_out_ms,
+               self.priority_confirmation_window_ms) < 0:
+            raise ValueError("priority timing values cannot be negative")
+        if self.priority_max_consecutive_events < 1:
+            raise ValueError("priority_max_consecutive_events must be positive")
+        if not 1 <= self.priority_max_attempts <= 255:
+            raise ValueError("priority_max_attempts must be between 1 and 255")
+        if self.priority_retry_cooldown_min_seconds < 0:
+            raise ValueError("priority_retry_cooldown_min_seconds must not be negative")
+        if self.priority_retry_cooldown_max_seconds < self.priority_retry_cooldown_min_seconds:
+            raise ValueError("priority retry cooldown maximum must not be below minimum")
         if self.telemetry_max_report_age_seconds <= 0:
             raise ValueError("telemetry_max_report_age_seconds must be positive")
 
@@ -163,4 +266,5 @@ class DaemonSnapshot:
     dmx: DmxStatistics = field(default_factory=DmxStatistics)
     receivers: Tuple[ReceiverTelemetry, ...] = ()
     telemetry: TelemetryStatus = field(default_factory=TelemetryStatus)
+    priority: PriorityStatus = field(default_factory=PriorityStatus)
     last_error: Optional[str] = None

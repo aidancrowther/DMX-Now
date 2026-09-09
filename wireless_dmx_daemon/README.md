@@ -150,7 +150,11 @@ substantially complete for the Linux/20 Hz deployment. The package has
 standard-library core models, a streaming ENTTEC parser, Feature 11 management
 codec, bounded latest-state pacer, reconnecting transmitter adapter, Linux PTY
 backend, TOML loading, CLI entry point, structured logging, and a systemd unit
-template. Native Windows/macOS virtual serial support, broader fault-injection
+template. Feature 14 daemon-level priority transmission is also implemented for
+manual complete-universe sends, with bounded queueing, repeat/TTL handling,
+lead-in/lead-out timing, starvation protection, and normal-stream resumption.
+Receiver-aware priority packets and completion acknowledgements remain a later
+firmware stage. Native Windows/macOS virtual serial support, broader fault-injection
 coverage, and a future GUI remain follow-up work.
 
 The host implementation has passed 21 automated tests and live validation on
@@ -308,6 +312,17 @@ atomically, and `x` to cancel. The editor validates each change before applying
 it and saves to the path selected by `--config-path` or the active configuration
 path. Restart the daemon after changing settings that affect sockets, PTYs, or
 the transmitter connection.
+
+Manual DMX value entry uses a temporary blocking input mode so typed values are
+accepted reliably even though the live dashboard normally uses non-blocking
+keyboard polling. In the full-universe manual view, press `g` to switch between
+the channel list and a 16-column hex-dump-style grid; the selected channel is
+highlighted in either view.
+
+In full-universe grid mode, the left/right arrows move horizontally by one
+channel and the up/down arrows move by one 16-channel row. In list and channel
+modes, left/right do nothing. Press `a` in any manual mode to jump directly to
+channel 1–512.
 
 ## Suggested future layout
 

@@ -42,7 +42,7 @@
  * -------------------------------------------------------------------------- */
 static const int PIN_DMX_DATA    = 1; // GPIO1 / UART0 TX -> DMX data / MAX3485 DI
 static const int PIN_DMX_ENABLE  = 2; // GPIO2 -> MAX3485 DE via inverting 2N2222
-static const int PIN_BATTERY_LOW = 3; // GPIO3 -> HIGH when battery is low
+static const int PIN_BATTERY_LOW = 3; // GPIO3 -> LOW when battery is low
 
 /* --------------------------------------------------------------------------
  * Reconstruction configuration
@@ -104,6 +104,38 @@ static uint8_t universeBufferB[DMX_UNIVERSE_SIZE];
 static uint8_t* stagingUniverse = universeBufferA; /* frame being assembled  */
 static uint8_t* activeUniverse  = universeBufferB; /* last complete universe */
 
+/* Feature 14 priority reconstruction. Priority traffic uses its own staging
+ * buffer so an incomplete urgent frame can never expose partial data. */
+static uint8_t priorityUniverse[DMX_UNIVERSE_SIZE];
+static uint8_t priorityCoverage[DMX_UNIVERSE_SIZE / 8];
+static bool priorityActive = false;
+static uint32_t priorityId = 0;
+static uint32_t priorityFrameSequence = 0;
+static uint8_t priorityAttempt = 0;
+static uint8_t priorityRepeatCount = 0;
+static uint8_t priorityFragmentCount = 0;
+static uint8_t priorityUniqueCount = 0;
+static uint32_t priorityReceivedMask = 0;
+static unsigned long priorityLastActivityMs = 0;
+#define PRIORITY_ACK_QUEUE_SIZE 8U
+struct PriorityAckEntry {
+    uint32_t id;
+    uint32_t frameSequence;
+    uint8_t attempt;
+    uint8_t attemptsObserved;
+    int8_t rssi;
+    unsigned long dueMs;
+    uint8_t sendRetries;
+};
+static PriorityAckEntry priorityAckQueue[PRIORITY_ACK_QUEUE_SIZE];
+static uint8_t priorityAckHead = 0;
+static uint8_t priorityAckTail = 0;
+static uint8_t priorityAckCount = 0;
+static bool priorityCompletedValid = false;
+static uint32_t priorityCompletedId = 0;
+static uint8_t priorityCompletedAttempt = 0;
+static unsigned long priorityCompletedUntilMs = 0;
+
 /* --------------------------------------------------------------------------
  * Callback -> loop handoff ring (single producer / single consumer).
  *   Producer : dataReceived() callback (ROM timer context)
@@ -143,7 +175,7 @@ static bool batteryInputHigh = false;
 static unsigned long batteryInputChangedMs = 0;
 
 static void updateBatteryLow(void) {
-    const bool inputHigh = (digitalRead(PIN_BATTERY_LOW) == HIGH);
+    const bool inputHigh = (digitalRead(PIN_BATTERY_LOW) == LOW);
     const unsigned long now = millis();
 
     if (inputHigh != batteryInputHigh) {
@@ -174,6 +206,13 @@ static unsigned long completeUniverses      = 0;
 static unsigned long integrityFailures      = 0;
 static unsigned long rxRingOverflow         = 0;
 static unsigned long resetRebaselined       = 0;
+static unsigned long priorityFramesAccepted = 0;
+static unsigned long priorityDuplicateFragments = 0;
+static unsigned long priorityMalformedPackets = 0;
+static unsigned long priorityCompletionsSent = 0;
+static unsigned long priorityAckSendFailures = 0;
+static unsigned long priorityAckSendRetries = 0;
+static unsigned long priorityAckQueueDrops = 0;
 
 /* Telemetry scheduling and identity.  These values are collected in loop()
  * context; no telemetry work is performed by the receive callback. */
@@ -296,6 +335,168 @@ static void coverageSet(uint16_t offset, uint8_t len) {
     for (uint16_t i = 0; i < len; i++) {
         const uint16_t idx = (uint16_t)(offset + i);
         stagingCoverage[idx / 8] |= (1u << (idx % 8));
+    }
+}
+
+static void priorityCoverageClear(void) {
+    memset(priorityCoverage, 0, sizeof(priorityCoverage));
+}
+
+static bool priorityCoverageFull(void) {
+    for (uint16_t i = 0; i < sizeof(priorityCoverage); i++)
+        if (priorityCoverage[i] != 0xFF) return false;
+    return true;
+}
+
+static bool prioritySeqIsDuplicate(uint32_t id, uint8_t attempt) {
+    for (uint8_t i = 0, slot = priorityAckTail; i < priorityAckCount; i++, slot = (uint8_t)((slot + 1U) % PRIORITY_ACK_QUEUE_SIZE)) {
+        if (priorityAckQueue[slot].id == id && priorityAckQueue[slot].attempt == attempt) return true;
+    }
+    return (priorityCompletedValid && millis() < priorityCompletedUntilMs &&
+            id == priorityCompletedId && attempt == priorityCompletedAttempt);
+}
+
+static uint32_t priorityHash(uint32_t value) {
+    value ^= value >> 16;
+    value *= 0x7FEB352DU;
+    value ^= value >> 15;
+    value *= 0x846CA68BU;
+    value ^= value >> 16;
+    return value;
+}
+
+static void schedulePriorityAck(uint32_t id, uint32_t seq, uint8_t attempt) {
+    if (priorityAckCount >= PRIORITY_ACK_QUEUE_SIZE) {
+        if (priorityAckQueueDrops < 0xFFFFFFFFUL) priorityAckQueueDrops++;
+        return;
+    }
+    const unsigned long slot = priorityHash(receiverId) % 32UL;
+    const unsigned long jitter = priorityHash(receiverId ^ id) % 4UL;
+    PriorityAckEntry& entry = priorityAckQueue[priorityAckHead];
+    entry.id = id;
+    entry.frameSequence = seq;
+    entry.attempt = attempt;
+    entry.attemptsObserved = priorityRepeatCount;
+    entry.rssi = lastRssi;
+    entry.dueMs = millis() + 10UL + slot * 12UL + jitter;
+    entry.sendRetries = 0;
+    priorityAckHead = (uint8_t)((priorityAckHead + 1U) % PRIORITY_ACK_QUEUE_SIZE);
+    priorityAckCount++;
+}
+
+static void transmitPriorityAck(void) {
+    if (priorityAckCount == 0 || (long)(millis() - priorityAckQueue[priorityAckTail].dueMs) < 0) return;
+    PriorityAckEntry& entry = priorityAckQueue[priorityAckTail];
+    PriorityCompletionPacket packet;
+    packet.magic = DMX_PACKET_MAGIC;
+    packet.protocolVersion = DMX_PROTO_VERSION;
+    packet.packetType = PRIORITY_COMPLETION_PACKET_TYPE;
+    packet.universeId = DMX_UNIVERSE_ID;
+    packet.receiverId = receiverId;
+    packet.priorityId = entry.id;
+    packet.frameSequence = entry.frameSequence;
+    packet.attempt = entry.attempt;
+    packet.completionStatus = PRIORITY_COMPLETE_ACCEPTED;
+    packet.attemptsObserved = entry.attemptsObserved;
+    packet.lastRssi = entry.rssi;
+    if (quickEspNow.readyToSendData() &&
+        quickEspNow.sendBcast(reinterpret_cast<const uint8_t*>(&packet), sizeof(packet)) == COMMS_SEND_OK) {
+        priorityCompletionsSent++;
+        priorityAckTail = (uint8_t)((priorityAckTail + 1U) % PRIORITY_ACK_QUEUE_SIZE);
+        priorityAckCount--;
+    } else {
+        if (priorityAckSendFailures < 0xFFFFFFFFUL) priorityAckSendFailures++;
+        if (entry.sendRetries < 255U) entry.sendRetries++;
+        if (priorityAckSendRetries < 0xFFFFFFFFUL) priorityAckSendRetries++;
+        entry.dueMs = millis() + 25UL + (priorityHash(entry.id ^ receiverId) % 25UL);
+    }
+}
+
+static bool priorityCanonicalTile(uint8_t index, uint16_t offset, uint8_t len,
+                                  uint16_t* expectedOffset, uint8_t* expectedLen) {
+    const uint16_t calculatedOffset = (uint16_t)index * PRIORITY_PAYLOAD_SIZE;
+    const uint8_t calculatedLen = (calculatedOffset + PRIORITY_PAYLOAD_SIZE <= DMX_UNIVERSE_SIZE)
+        ? PRIORITY_PAYLOAD_SIZE : (uint8_t)(DMX_UNIVERSE_SIZE - calculatedOffset);
+    if (offset != calculatedOffset || len != calculatedLen) return false;
+    *expectedOffset = calculatedOffset;
+    *expectedLen = calculatedLen;
+    return true;
+}
+
+static void processPriorityPacket(const uint8_t* pkt, uint8_t len, int8_t rssi) {
+    if (len < PRIORITY_HEADER_SIZE + 1U) {
+        priorityMalformedPackets++;
+        return;
+    }
+    DmxPriorityFragmentPacket hdr;
+    memcpy(&hdr, pkt, sizeof(hdr));
+    if (hdr.magic != DMX_PACKET_MAGIC || hdr.protocolVersion != DMX_PROTO_VERSION ||
+        hdr.packetType != DMX_PRIORITY_PACKET_TYPE || hdr.universeId != DMX_UNIVERSE_ID ||
+        hdr.fragmentCount != 3U || hdr.fragmentIndex >= hdr.fragmentCount ||
+        hdr.payloadLength < 1 || hdr.payloadLength > PRIORITY_PAYLOAD_SIZE ||
+        len != (uint8_t)(PRIORITY_HEADER_SIZE + hdr.payloadLength)) {
+        priorityMalformedPackets++;
+        return;
+    }
+    uint16_t offset;
+    uint8_t tileLen;
+    if (!priorityCanonicalTile(hdr.fragmentIndex, hdr.dataOffset, hdr.payloadLength,
+                               &offset, &tileLen)) {
+        priorityMalformedPackets++;
+        return;
+    }
+    if (prioritySeqIsDuplicate(hdr.priorityId, hdr.attempt)) {
+        priorityDuplicateFragments++;
+        return;
+    }
+    if (!priorityActive || hdr.priorityId != priorityId || hdr.attempt != priorityAttempt) {
+        priorityActive = true;
+        priorityId = hdr.priorityId;
+        priorityFrameSequence = hdr.frameSequence;
+        priorityAttempt = hdr.attempt;
+        priorityRepeatCount = hdr.repeatCount;
+        priorityFragmentCount = hdr.fragmentCount;
+        priorityUniqueCount = 0;
+        priorityReceivedMask = 0;
+        priorityCoverageClear();
+    }
+    if (hdr.frameSequence != priorityFrameSequence ||
+        hdr.fragmentCount != priorityFragmentCount) {
+        if (priorityReceivedMask & (1UL << hdr.fragmentIndex)) priorityDuplicateFragments++;
+        else priorityMalformedPackets++;
+        return;
+    }
+    const uint32_t bit = 1UL << hdr.fragmentIndex;
+    if (priorityReceivedMask & bit) {
+        priorityDuplicateFragments++;
+        return;
+    }
+    memcpy(priorityUniverse + offset, pkt + PRIORITY_HEADER_SIZE, tileLen);
+    priorityReceivedMask |= bit;
+    priorityUniqueCount++;
+    for (uint16_t i = 0; i < tileLen; i++) {
+        const uint16_t index = offset + i;
+        priorityCoverage[index / 8] |= (1U << (index % 8));
+    }
+    priorityLastActivityMs = millis();
+    lastRssi = rssi;
+    if (priorityUniqueCount == priorityFragmentCount && priorityCoverageFull()) {
+        dmxA.setChans(priorityUniverse, DMX_UNIVERSE_SIZE, 1);
+        lastActiveSequence = priorityFrameSequence;
+        hasActiveWirelessFrame = true;
+        lastCompletionTimeMs = millis();
+        priorityFramesAccepted++;
+        priorityCompletedValid = true;
+        priorityCompletedId = priorityId;
+        priorityCompletedAttempt = priorityAttempt;
+        // Suppress repeats of this event, but permit priority IDs to be reused
+        // after a daemon/transmitter restart or ID rollover.
+        priorityCompletedUntilMs = millis() + 1000UL;
+        schedulePriorityAck(priorityId, priorityFrameSequence, priorityAttempt);
+        priorityActive = false;
+        priorityReceivedMask = 0;
+        priorityUniqueCount = 0;
+        priorityCoverageClear();
     }
 }
 
@@ -499,7 +700,12 @@ static void acceptFragment(const uint8_t* pkt, uint32_t seq,
 static void processPacket(const uint8_t* pkt, uint8_t len, int8_t rssi) {
     /* Telemetry is intended for the transmitter; do not classify it as a
      * malformed DMX fragment when receivers hear one another. */
-    if (len >= 4 && pkt[3] == TELEMETRY_PACKET_TYPE) return;
+    if (len >= 4 && (pkt[3] == TELEMETRY_PACKET_TYPE ||
+                     pkt[3] == PRIORITY_COMPLETION_PACKET_TYPE)) return;
+    if (len >= PRIORITY_HEADER_SIZE && pkt[3] == DMX_PRIORITY_PACKET_TYPE) {
+        processPriorityPacket(pkt, len, rssi);
+        return;
+    }
 
     DmxFragmentPacket hdr;
     memcpy(&hdr, pkt, sizeof(hdr));
@@ -619,7 +825,7 @@ void setup(void) {
     WiFi.macAddress(receiverMac);
     randomSeed(receiverId ^ micros());
 
-    batteryInputHigh = (digitalRead(PIN_BATTERY_LOW) == HIGH);
+    batteryInputHigh = (digitalRead(PIN_BATTERY_LOW) == LOW);
     batteryInputChangedMs = millis();
 
     /* Keep MAX3485 disabled while everything initializes. */
@@ -675,13 +881,17 @@ void loop(void) {
     /* 1. Debounce the active-HIGH battery comparator input. */
     updateBatteryLow();
 
-    /* 2. Drain every pending fragment (bounded by RX_RING_SIZE). */
+    /* 2. Service queued priority ACKs before normal RX work so startup
+     * acknowledgements are not delayed behind a burst of fragments. */
+    transmitPriorityAck();
+
+    /* 3. Drain every pending fragment (bounded by RX_RING_SIZE). */
     while (popPendingFrag(rxWorkBuf, len, rssi)) {
         packetsReceived++;
         processPacket(rxWorkBuf, len, rssi);
     }
 
-    /* 3. Staging timeout: abandon a frame that stopped receiving fragments. */
+    /* 4. Staging timeout: abandon a frame that stopped receiving fragments. */
     if (stagingActive &&
         (millis() - stagingLastActivityMs) >= STAGING_TIMEOUT_MS) {
         if (abandonedTimeout < 0xFFFFFFFFUL) abandonedTimeout++;
@@ -694,4 +904,6 @@ void loop(void) {
     if ((long)(millis() - nextTelemetryMs) >= 0) {
         transmitTelemetry();
     }
+    /* Service ACKs again after processing the packet batch. */
+    transmitPriorityAck();
 }

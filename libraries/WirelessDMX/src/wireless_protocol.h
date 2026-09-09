@@ -48,6 +48,12 @@
 #define DMX_PROTO_VERSION      1U        /* Current protocol version */
 #define DMX_PACKET_TYPE        1U        /* Packet type: 1 = DMX fragment */
 #define TELEMETRY_PACKET_TYPE  2U        /* Packet type: 2 = receiver telemetry */
+#define DMX_PRIORITY_PACKET_TYPE 3U      /* Packet type: 3 = priority DMX fragment */
+#define PRIORITY_COMPLETION_PACKET_TYPE 4U /* Packet type: 4 = priority completion */
+#define PRIORITY_COMPLETE_ACCEPTED 1U
+#define PRIORITY_COMPLETE_DUPLICATE 2U
+#define PRIORITY_COMPLETE_INVALID 3U
+#define PRIORITY_COMPLETE_NOT_PROMOTED 4U
 #define DMX_UNIVERSE_ID        1U        /* Single universe for now; extendable later */
 #define DMX_UNIVERSE_SIZE      512U      /* 512 DMX channels */
 
@@ -58,7 +64,12 @@
 #define MANAGEMENT_SYNC_2      0x5AU
 #define MANAGEMENT_PROTO_VERSION 1U
 #define MANAGEMENT_GET_RECEIVER_TELEMETRY 0x01U
+#define MANAGEMENT_MARK_NEXT_PRIORITY    0x02U
+#define MANAGEMENT_GET_PRIORITY_ACKS     0x03U
+#define MANAGEMENT_CLEAR_RECEIVER_CACHE  0x04U
 #define MANAGEMENT_RECEIVER_TELEMETRY      0x81U
+#define MANAGEMENT_PRIORITY_ACKS           0x83U
+#define MANAGEMENT_CACHE_CLEARED           0x84U
 #define MANAGEMENT_ERROR                   0xE0U
 
 /* --------------------------------------------------------------------------
@@ -74,6 +85,11 @@
 #define WIRELESS_REFRESH_HZ    20U
 #endif
 static constexpr unsigned long WIRELESS_REFRESH_INTERVAL_MS = 1000UL / WIRELESS_REFRESH_HZ;
+#ifndef WIRELESS_PRIORITY_REFRESH_HZ
+#define WIRELESS_PRIORITY_REFRESH_HZ 1U
+#endif
+static constexpr unsigned long WIRELESS_PRIORITY_REFRESH_INTERVAL_MS =
+    1000UL / WIRELESS_PRIORITY_REFRESH_HZ;
 
 /* --------------------------------------------------------------------------
  * Packet sizes (derived from the QuickESPNow ESP8266 transmit limit)
@@ -81,6 +97,8 @@ static constexpr unsigned long WIRELESS_REFRESH_INTERVAL_MS = 1000UL / WIRELESS_
 static constexpr uint8_t DMX_HEADER_SIZE       = 14U;
 static constexpr uint8_t DMX_PAYLOAD_SIZE      = ESP_NOW_MAX_DATA_LEN - DMX_HEADER_SIZE; // 236
 static constexpr uint8_t DMX_TOTAL_PACKET_SIZE = DMX_HEADER_SIZE + DMX_PAYLOAD_SIZE;     // 250
+static constexpr uint8_t PRIORITY_HEADER_SIZE  = 20U;
+static constexpr uint8_t PRIORITY_PAYLOAD_SIZE = ESP_NOW_MAX_DATA_LEN - PRIORITY_HEADER_SIZE; // 230
 
 /* --------------------------------------------------------------------------
  * Fragment counts for a 512-byte universe in 236-byte payloads:
@@ -105,6 +123,35 @@ struct __attribute__((packed)) DmxFragmentPacket {
     uint8_t  payloadLength;   /* bytes of channel payload that follow the header */
 };
 
+struct __attribute__((packed)) DmxPriorityFragmentPacket {
+    uint16_t magic;
+    uint8_t  protocolVersion;
+    uint8_t  packetType;
+    uint8_t  universeId;
+    uint32_t frameSequence;
+    uint32_t priorityId;
+    uint8_t  attempt;
+    uint8_t  repeatCount;
+    uint8_t  fragmentIndex;
+    uint8_t  fragmentCount;
+    uint16_t dataOffset;
+    uint8_t  payloadLength;
+};
+
+struct __attribute__((packed)) PriorityCompletionPacket {
+    uint16_t magic;
+    uint8_t  protocolVersion;
+    uint8_t  packetType;
+    uint8_t  universeId;
+    uint32_t receiverId;
+    uint32_t priorityId;
+    uint32_t frameSequence;
+    uint8_t  attempt;
+    uint8_t  completionStatus;
+    uint8_t  attemptsObserved;
+    int8_t   lastRssi;
+};
+
 /* Receiver telemetry is deliberately separate from the DMX fragment format.
  * It is broadcast at a low rate so a future transmitter can collect status
  * from multiple receivers without requiring per-receiver pairing first. */
@@ -125,6 +172,34 @@ struct __attribute__((packed)) ReceiverTelemetryPacket {
     int8_t   lastRssi;
     uint16_t firmwareVersion;
     uint32_t telemetrySequence;
+};
+
+struct __attribute__((packed)) PriorityTransmitRequest {
+    uint32_t priorityId;
+    uint8_t  repeatCount;
+    uint8_t  attempt;
+};
+
+struct __attribute__((packed)) PriorityAckReportHeader {
+    uint8_t  reportVersion;
+    uint8_t  recordCount;
+    uint32_t reportSequence;
+    uint32_t acceptedCount;
+    uint32_t duplicateCount;
+    uint32_t invalidCount;
+    uint32_t droppedCount;
+};
+
+struct __attribute__((packed)) PriorityAckReportRecord {
+    uint32_t priorityId;
+    uint32_t receiverId;
+    uint32_t frameSequence;
+    uint8_t  attempt;
+    uint8_t  completionStatus;
+    uint8_t  attemptsObserved;
+    int8_t   lastRssi;
+    uint32_t receivedAtMs;
+    uint16_t ackDelayMs;
 };
 
 /* One multipart host response part. The payload consists of zero or more
@@ -156,6 +231,7 @@ struct __attribute__((packed)) TelemetryReportRecord {
     uint16_t firmwareVersion;
     uint8_t  protocolVersion;
     uint8_t  reserved;
+    uint32_t telemetrySequence;
 };
 
 /* --------------------------------------------------------------------------
@@ -166,12 +242,22 @@ static_assert(sizeof(DmxFragmentPacket) == DMX_HEADER_SIZE,
               "DmxFragmentPacket must be exactly 14 bytes (packed, no padding)");
 static_assert(sizeof(DmxFragmentPacket) <= ESP_NOW_MAX_DATA_LEN,
               "DmxFragmentPacket header must fit within ESP_NOW_MAX_DATA_LEN");
+static_assert(sizeof(DmxPriorityFragmentPacket) == PRIORITY_HEADER_SIZE,
+              "DmxPriorityFragmentPacket layout changed unexpectedly");
+static_assert(sizeof(DmxPriorityFragmentPacket) + PRIORITY_PAYLOAD_SIZE <= ESP_NOW_MAX_DATA_LEN,
+              "DmxPriorityFragmentPacket must fit within ESP_NOW_MAX_DATA_LEN");
+static_assert(sizeof(PriorityCompletionPacket) <= ESP_NOW_MAX_DATA_LEN,
+              "PriorityCompletionPacket must fit within ESP_NOW_MAX_DATA_LEN");
 static_assert(sizeof(ReceiverTelemetryPacket) <= ESP_NOW_MAX_DATA_LEN,
               "ReceiverTelemetryPacket must fit within ESP_NOW_MAX_DATA_LEN");
 static_assert(sizeof(TelemetryReportPartHeader) == 8,
               "TelemetryReportPartHeader layout changed unexpectedly");
-static_assert(sizeof(TelemetryReportRecord) == 46,
+static_assert(sizeof(TelemetryReportRecord) == 50,
               "TelemetryReportRecord layout changed unexpectedly");
+static_assert(sizeof(PriorityAckReportHeader) == 22,
+              "PriorityAckReportHeader layout changed unexpectedly");
+static_assert(sizeof(PriorityAckReportRecord) == 22,
+              "PriorityAckReportRecord layout changed unexpectedly");
 
 /* --------------------------------------------------------------------------
  * Helper: payload length a fragment at `offset` should carry (last gets remainder)

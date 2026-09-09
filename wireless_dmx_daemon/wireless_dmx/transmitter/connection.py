@@ -23,7 +23,7 @@ class TransmitterConnection:
         self._serial_factory = serial_factory or self._default_factory
         self._serial: SerialLike | None = None
         self._dmx_queue: queue.Queue[bytes] = queue.Queue(maxsize=1)
-        self._management_queue: queue.Queue[bytes] = queue.Queue(maxsize=1)
+        self._management_queue: queue.Queue[bytes] = queue.Queue(maxsize=32)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self.connected = False
@@ -59,16 +59,14 @@ class TransmitterConnection:
             self._dmx_queue.put_nowait(bytes(data))
 
     def send_immediate(self, data: bytes) -> None:
-        # Management traffic has its own one-item queue. It can be prioritized
-        # by the writer without evicting a pending latest-state DMX frame.
+        # Management commands are ordered: replacing a pending priority marker
+        # with a telemetry poll can silently turn a priority universe into a
+        # normal universe. The bounded queue is large enough for the polling
+        # cadence and preserves every marker.
         try:
             self._management_queue.put_nowait(bytes(data))
         except queue.Full:
-            try:
-                self._management_queue.get_nowait()
-            except queue.Empty:
-                pass
-            self._management_queue.put_nowait(bytes(data))
+            self.last_error = "management queue full"
 
     def _close(self) -> None:
         if self._serial is not None:

@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
-from wireless_dmx.dashboard import (ADVANCED_COMMANDS, MAIN_COMMANDS, SETUP_COMMANDS,
+from wireless_dmx.dashboard import (ADVANCED_COMMANDS, MAIN_COMMANDS, MANUAL_COMMANDS, SETUP_COMMANDS,
                                     DashboardController, bar, build_parser,
                                     receiver_display_segments, rssi_quality)
 from wireless_dmx.models import DaemonConfig, ReceiverLinkState, ReceiverTelemetry
@@ -47,6 +47,9 @@ class DashboardTests(unittest.TestCase):
     def test_all_dashboard_command_legends_include_settings(self):
         self.assertIn("[s]", MAIN_COMMANDS)
         self.assertIn("SETTINGS", MAIN_COMMANDS)
+        self.assertIn("[u]", MAIN_COMMANDS)
+        self.assertIn("MANUAL DMX", MAIN_COMMANDS)
+        self.assertIn("[a]", MANUAL_COMMANDS)
         self.assertIn("[w]", SETUP_COMMANDS)
         self.assertIn("[x]", ADVANCED_COMMANDS)
 

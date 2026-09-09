@@ -6,8 +6,12 @@ import unittest
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
 from wireless_dmx.models import ReceiverLinkState, ReceiverTelemetry
-from wireless_dmx.protocols import MANAGEMENT_RECEIVER_TELEMETRY, MANAGEMENT_SYNC, crc16_ccitt
-from wireless_dmx.transmitter.management import ManagementParser, PART_HEADER, RECORD, get_telemetry_request
+from wireless_dmx.models import PriorityAck
+from wireless_dmx.protocols import (MANAGEMENT_PRIORITY_ACKS, MANAGEMENT_RECEIVER_TELEMETRY,
+                                    MANAGEMENT_SYNC, crc16_ccitt)
+from wireless_dmx.transmitter.management import (ACK_HEADER, ACK_RECORD, ManagementParser,
+                                                 PART_HEADER, RECORD, get_priority_acks_request,
+                                                 clear_receiver_cache_request, get_telemetry_request)
 
 
 def make_part(sequence, index, count, records):
@@ -19,7 +23,8 @@ def make_part(sequence, index, count, records):
                                record.last_active_sequence, record.complete_universes,
                                record.incomplete_universes, record.malformed_packets,
                                record.time_since_last_universe_ms, record.transmitter_last_seen_ms,
-                               record.firmware_version, record.protocol_version, 0)
+                               record.firmware_version, record.protocol_version, 0,
+                               record.telemetry_sequence)
     body = bytes((1, MANAGEMENT_RECEIVER_TELEMETRY)) + struct.pack("<H", len(payload)) + payload
     return MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body))
 
@@ -30,9 +35,38 @@ class ManagementTests(unittest.TestCase):
         self.assertEqual(request[:2], MANAGEMENT_SYNC)
         self.assertEqual(crc16_ccitt(request[2:-2]), struct.unpack("<H", request[-2:])[0])
 
+    def test_priority_ack_request_has_valid_crc(self):
+        request = get_priority_acks_request()
+        self.assertEqual(request[:2], MANAGEMENT_SYNC)
+        self.assertEqual(crc16_ccitt(request[2:-2]), struct.unpack("<H", request[-2:])[0])
+
+    def test_clear_cache_request_has_valid_crc(self):
+        request = clear_receiver_cache_request()
+        self.assertEqual(request[:2], MANAGEMENT_SYNC)
+        self.assertEqual(crc16_ccitt(request[2:-2]), struct.unpack("<H", request[-2:])[0])
+
+    def test_clear_cache_response_is_parsed(self):
+        body = bytes((1, 0x84, 0, 0))
+        frame = MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body))
+        response = ManagementParser().feed(frame)[0]
+        self.assertTrue(response.acknowledged)
+
+    def test_priority_ack_report_round_trip(self):
+        record = ACK_RECORD.pack(42, 7, 99, 1, 1, 3, -41, 1234, 37)
+        payload = ACK_HEADER.pack(1, 1, 5, 8, 2, 1, 0) + record
+        body = bytes((1, MANAGEMENT_PRIORITY_ACKS)) + struct.pack("<H", len(payload)) + payload
+        frame = MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body))
+        report = ManagementParser().feed(frame)[0]
+        self.assertEqual(report.report_sequence, 5)
+        self.assertEqual(report.accepted_count, 8)
+        self.assertEqual(report.records[0].priority_id, 42)
+        self.assertEqual(report.records[0].receiver_id, 7)
+        self.assertEqual(report.records[0].received_at_ms, 1234)
+        self.assertEqual(report.records[0].ack_delay_ms, 37)
+
     def test_fragmented_multipart_response(self):
         record = ReceiverTelemetry(1, "18:fe:34:00:00:01", ReceiverLinkState.ONLINE, False,
-                                   -30, -31, 10, 2, 3, 0, 0, 2, 100, 1, 1, 0)
+                                   -30, -31, 10, 2, 3, 0, 0, 2, 100, 1, 1, 0x12345678)
         first = make_part(8, 0, 2, [record])
         second = make_part(8, 1, 2, [])
         parser = ManagementParser()
@@ -42,6 +76,7 @@ class ManagementTests(unittest.TestCase):
         self.assertEqual(len(parts), 2)
         self.assertEqual(parts[0].part_index, 0)
         self.assertEqual(parts[0].records[0].receiver_id, 1)
+        self.assertEqual(parts[0].records[0].telemetry_sequence, 0x12345678)
         self.assertEqual(parts[1].part_index, 1)
 
     def test_bad_crc_is_ignored(self):

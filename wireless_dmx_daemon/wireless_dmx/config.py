@@ -31,6 +31,7 @@ def load_config(path: str | None = None) -> DaemonConfig:
         values.update({"virtual_serial_enabled": data.get("virtual_port", {}).get("enabled", True)})
         values.update({"artnet_" + key: value for key, value in data.get("artnet", {}).items()})
         values.update({"input_source_policy": data.get("input", {}).get("source_policy", "latest")})
+        values.update({"priority_" + key: value for key, value in data.get("priority", {}).items()})
     aliases = {"device": "transmitter_device", "baud": "transmitter_baud",
                "data_bits": "transmitter_data_bits", "parity": "transmitter_parity",
                "stop_bits": "transmitter_stop_bits", "rate": "pacer_rate_hz",
@@ -54,6 +55,20 @@ def save_config(config: DaemonConfig, path: str = DEFAULT_CONFIG_PATH) -> None:
         "artnet": {"enabled": config.artnet_enabled, "bind_host": config.artnet_bind_host,
                     "port": config.artnet_port, "universe": config.artnet_universe},
         "input": {"source_policy": config.input_source_policy},
+        "priority": {"enabled": config.priority_enabled, "max_queue_depth": config.priority_max_queue_depth,
+                      "default_repeat_count": config.priority_default_repeat_count,
+                      "max_repeat_count": config.priority_max_repeat_count,
+                      "default_ttl_seconds": config.priority_default_ttl_seconds,
+                      "max_ttl_seconds": config.priority_max_ttl_seconds,
+                      "lead_in_ms": config.priority_lead_in_ms,
+                      "lead_out_ms": config.priority_lead_out_ms,
+                      "confirmation_window_ms": config.priority_confirmation_window_ms,
+                      "max_attempts": config.priority_max_attempts,
+                      "retry_cooldown_min_seconds": config.priority_retry_cooldown_min_seconds,
+                      "retry_cooldown_max_seconds": config.priority_retry_cooldown_max_seconds,
+                      "normal_quiet_before_ms": config.priority_normal_quiet_before_ms,
+                      "normal_quiet_after_ms": config.priority_normal_quiet_after_ms,
+                      "max_consecutive_events": config.priority_max_consecutive_events},
         "telemetry": {"enabled": config.telemetry_enabled, "interval_seconds": config.telemetry_interval_seconds,
                        "response_timeout_seconds": config.telemetry_response_timeout_seconds,
                        "stale_seconds": config.telemetry_stale_seconds,
