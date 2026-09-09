@@ -52,6 +52,7 @@
 #define PRIORITY_COMPLETION_PACKET_TYPE 4U /* Packet type: 4 = priority completion */
 #define PRIORITY_LIVENESS_REQUEST_PACKET_TYPE 5U
 #define PRIORITY_LIVENESS_RESPONSE_PACKET_TYPE 6U
+#define PRIORITY_GATE_METADATA_PACKET_TYPE 7U
 #define PRIORITY_COMPLETE_ACCEPTED 1U
 #define PRIORITY_COMPLETE_DUPLICATE 2U
 #define PRIORITY_COMPLETE_INVALID 3U
@@ -102,6 +103,7 @@ static constexpr uint8_t DMX_TOTAL_PACKET_SIZE = DMX_HEADER_SIZE + DMX_PAYLOAD_S
 static constexpr uint8_t PRIORITY_HEADER_SIZE  = 24U;
 static constexpr uint8_t PRIORITY_PAYLOAD_SIZE =
     ESP_NOW_MAX_DATA_LEN - PRIORITY_HEADER_SIZE; // 226 with the targeted header
+static constexpr uint16_t DMX_GATE_MASK_SIZE = DMX_UNIVERSE_SIZE / 8U;
 
 /* --------------------------------------------------------------------------
  * Fragment counts for a 512-byte universe in 236-byte payloads:
@@ -140,6 +142,17 @@ struct __attribute__((packed)) DmxPriorityFragmentPacket {
     uint8_t  fragmentCount;
     uint16_t dataOffset;
     uint8_t  payloadLength;
+};
+
+struct __attribute__((packed)) PriorityGateMetadataPacket {
+    uint16_t magic;
+    uint8_t  protocolVersion;
+    uint8_t  packetType;
+    uint8_t  universeId;
+    uint32_t targetReceiverId;
+    uint32_t priorityId;
+    uint8_t  attempt;
+    uint8_t  hardGateMask[DMX_GATE_MASK_SIZE];
 };
 
 struct __attribute__((packed)) PriorityCompletionPacket {
@@ -192,6 +205,8 @@ struct __attribute__((packed)) PriorityTransmitRequest {
     uint32_t targetReceiverId; /* zero means legacy broadcast */
     uint8_t  repeatCount;
     uint8_t  attempt;
+    uint8_t  gateMetadataPresent;
+    uint8_t  hardGateMask[DMX_GATE_MASK_SIZE];
 };
 
 struct __attribute__((packed)) PriorityAckReportHeader {
@@ -260,6 +275,8 @@ static_assert(sizeof(DmxPriorityFragmentPacket) == PRIORITY_HEADER_SIZE,
               "DmxPriorityFragmentPacket layout changed unexpectedly");
 static_assert(sizeof(DmxPriorityFragmentPacket) + PRIORITY_PAYLOAD_SIZE <= ESP_NOW_MAX_DATA_LEN,
               "DmxPriorityFragmentPacket must fit within ESP_NOW_MAX_DATA_LEN");
+static_assert(sizeof(PriorityGateMetadataPacket) <= ESP_NOW_MAX_DATA_LEN,
+              "PriorityGateMetadataPacket must fit within ESP_NOW_MAX_DATA_LEN");
 static_assert(sizeof(PriorityCompletionPacket) <= ESP_NOW_MAX_DATA_LEN,
               "PriorityCompletionPacket must fit within ESP_NOW_MAX_DATA_LEN");
 static_assert(sizeof(PriorityLivenessPacket) <= ESP_NOW_MAX_DATA_LEN,

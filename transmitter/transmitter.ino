@@ -138,12 +138,14 @@ static uint8_t managementOpcode = 0;
 static uint16_t managementLength = 0;
 static uint16_t managementIndex = 0;
 static uint16_t managementReceivedCrc = 0;
-static uint8_t managementPayload[32];
+static uint8_t managementPayload[sizeof(PriorityTransmitRequest)];
 static bool priorityNextUniverse = false;
 static uint32_t priorityIdForNextUniverse = 0;
 static uint32_t priorityTargetReceiverIdForNextUniverse = 0;
 static uint8_t priorityRepeatCountForNextUniverse = 1;
 static uint8_t priorityAttemptForNextUniverse = 1;
+static bool priorityGateMetadataForNextUniverse = false;
+static uint8_t priorityHardGateMaskForNextUniverse[DMX_GATE_MASK_SIZE];
 static uint32_t prioritySequenceForCurrentFrame = 0;
 static uint8_t priorityRepeatsRemaining = 0;
 static bool currentFrameIsPriority = false;
@@ -444,15 +446,19 @@ static void serviceEnttecInput(void) {
                 if (managementVersion == MANAGEMENT_PROTO_VERSION &&
                     managementCrc16(crcInput, (uint16_t)(4 + managementLength)) == managementReceivedCrc &&
                     managementOpcode == MANAGEMENT_MARK_NEXT_PRIORITY &&
-                    managementLength == sizeof(PriorityTransmitRequest)) {
+                    (managementLength == sizeof(PriorityTransmitRequest) || managementLength == 10U)) {
                     PriorityTransmitRequest request;
-                    memcpy(&request, managementPayload, sizeof(request));
+                    memset(&request, 0, sizeof(request));
+                    memcpy(&request, managementPayload, managementLength);
                     if (request.repeatCount >= 1) {
                         priorityNextUniverse = true;
                         priorityIdForNextUniverse = request.priorityId;
                         priorityTargetReceiverIdForNextUniverse = request.targetReceiverId;
                         priorityRepeatCountForNextUniverse = request.repeatCount;
                         priorityAttemptForNextUniverse = request.attempt;
+                        priorityGateMetadataForNextUniverse = request.gateMetadataPresent != 0;
+                        memcpy(priorityHardGateMaskForNextUniverse, request.hardGateMask,
+                               sizeof(priorityHardGateMaskForNextUniverse));
                         TX_LOG("TX PRIORITY MARK id=%lu target=%08lX attempt=%u repeats=%u\n",
                                (unsigned long)request.priorityId,
                                (unsigned long)request.targetReceiverId,
@@ -844,6 +850,34 @@ static void submitPriorityFragment(uint32_t seq, uint8_t fragIdx) {
     }
 }
 
+static void submitPriorityGateMetadata(void) {
+    if (!priorityGateMetadataForNextUniverse) return;
+    PriorityGateMetadataPacket packet;
+    packet.magic = DMX_PACKET_MAGIC;
+    packet.protocolVersion = DMX_PROTO_VERSION;
+    packet.packetType = PRIORITY_GATE_METADATA_PACKET_TYPE;
+    packet.universeId = DMX_UNIVERSE_ID;
+    packet.targetReceiverId = priorityTargetReceiverIdForNextUniverse;
+    packet.priorityId = prioritySequenceForCurrentFrame;
+    packet.attempt = priorityAttemptForNextUniverse;
+    memcpy(packet.hardGateMask, priorityHardGateMaskForNextUniverse,
+           sizeof(packet.hardGateMask));
+    const uint16_t packetSize = sizeof(packet);
+    if (packet.targetReceiverId == 0U) {
+        quickEspNow.sendBcast(reinterpret_cast<const uint8_t*>(&packet), packetSize);
+        return;
+    }
+    uint8_t destination[6];
+    for (uint8_t i = 0; i < MAX_TELEMETRY_RECEIVERS; i++) {
+        if (receiverTable[i].valid &&
+            receiverTable[i].telemetry.receiverId == packet.targetReceiverId) {
+            memcpy(destination, receiverTable[i].macAddress, sizeof(destination));
+            quickEspNow.send(destination, reinterpret_cast<const uint8_t*>(&packet), packetSize);
+            return;
+        }
+    }
+}
+
 void setup(void) {
     /* ENTTEC-compatible host input at 115200 baud, 8 data bits, no parity,
      * 2 stops. This supports the full-universe input bandwidth needed when the
@@ -972,6 +1006,7 @@ void loop(void) {
             g_sendConfirmations = 0;   /* reset before the sends so all are counted */
             currentFrameIsPriority = priorityRepeatsRemaining > 0;
             if (currentFrameIsPriority) {
+                if (priorityGateMetadataForNextUniverse) submitPriorityGateMetadata();
                 priorityAttempt = priorityAttemptForNextUniverse;
                 lastPriorityTransmitId = prioritySequenceForCurrentFrame;
                 lastPriorityTransmitAttempt = priorityAttempt;

@@ -120,6 +120,13 @@ static uint8_t priorityFragmentCount = 0;
 static uint8_t priorityUniqueCount = 0;
 static uint32_t priorityReceivedMask = 0;
 static unsigned long priorityLastActivityMs = 0;
+static uint8_t normalWriteAllowed[DMX_UNIVERSE_SIZE];
+static bool hardGatesActive = false;
+static bool priorityGateMetadataActive = false;
+static uint32_t priorityGateMetadataId = 0;
+static uint8_t priorityGateMetadataAttempt = 0;
+static uint8_t stagedHardGateMask[DMX_GATE_MASK_SIZE];
+static unsigned long priorityGateMetadataLastActivityMs = 0;
 #define PRIORITY_ACK_QUEUE_SIZE 8U
 #ifndef PRIORITY_STAGING_TIMEOUT_MS
 #define PRIORITY_STAGING_TIMEOUT_MS 500UL
@@ -379,6 +386,32 @@ static bool priorityCoverageFull(void) {
     return true;
 }
 
+static void clearPriorityGateMetadata(void) {
+    priorityGateMetadataActive = false;
+    priorityGateMetadataId = 0;
+    priorityGateMetadataAttempt = 0;
+    priorityGateMetadataLastActivityMs = 0;
+    memset(stagedHardGateMask, 0, sizeof(stagedHardGateMask));
+}
+
+static void stagePriorityGateMetadata(const PriorityGateMetadataPacket& packet) {
+    if (packet.targetReceiverId != 0U && packet.targetReceiverId != receiverId) return;
+    priorityGateMetadataActive = true;
+    priorityGateMetadataId = packet.priorityId;
+    priorityGateMetadataAttempt = packet.attempt;
+    priorityGateMetadataLastActivityMs = millis();
+    memcpy(stagedHardGateMask, packet.hardGateMask, sizeof(stagedHardGateMask));
+}
+
+static void applyHardGateMask(const uint8_t* mask) {
+    hardGatesActive = false;
+    for (uint16_t channel = 0; channel < DMX_UNIVERSE_SIZE; channel++) {
+        const bool locked = (mask[channel / 8] & (1U << (channel % 8))) != 0;
+        normalWriteAllowed[channel] = locked ? 0U : 1U;
+        hardGatesActive = hardGatesActive || locked;
+    }
+}
+
 static bool prioritySeqIsDuplicate(uint32_t id, uint8_t attempt) {
     for (uint8_t i = 0, slot = priorityAckTail; i < priorityAckCount; i++, slot = (uint8_t)((slot + 1U) % PRIORITY_ACK_QUEUE_SIZE)) {
         if (priorityAckQueue[slot].id == id && priorityAckQueue[slot].attempt == attempt) return true;
@@ -538,7 +571,13 @@ static void processPriorityPacket(const uint8_t* pkt, uint8_t len, int8_t rssi,
     priorityLastActivityMs = millis();
     lastRssi = rssi;
     if (priorityUniqueCount == priorityFragmentCount && priorityCoverageFull()) {
-        dmxA.setChans(priorityUniverse, DMX_UNIVERSE_SIZE, 1);
+        memcpy(activeUniverse, priorityUniverse, DMX_UNIVERSE_SIZE);
+        if (priorityGateMetadataActive && priorityGateMetadataId == priorityId &&
+            priorityGateMetadataAttempt == priorityAttempt) {
+            applyHardGateMask(stagedHardGateMask);
+            clearPriorityGateMetadata();
+        }
+        dmxA.setChans(activeUniverse, DMX_UNIVERSE_SIZE, 1);
         lastActiveSequence = priorityFrameSequence;
         hasActiveWirelessFrame = true;
         lastCompletionTimeMs = millis();
@@ -667,6 +706,13 @@ static uint16_t fullIntegrityCheck(uint32_t seq) {
  * so this is safe with pointer-swap promotion (no aliasing). espDMX then
  * self-refreshes this universe continuously at ~44 Hz+. */
 static void promoteActive(uint32_t seq) {
+    if (hardGatesActive) {
+        for (uint16_t channel = 0; channel < DMX_UNIVERSE_SIZE; channel++) {
+            if (!normalWriteAllowed[channel]) {
+                stagingUniverse[channel] = activeUniverse[channel];
+            }
+        }
+    }
     uint8_t* oldActive = activeUniverse;
     activeUniverse  = stagingUniverse;
     stagingUniverse = oldActive;
@@ -766,6 +812,17 @@ static void processPacket(const uint8_t* pkt, uint8_t len, int8_t rssi,
                      pkt[3] == PRIORITY_COMPLETION_PACKET_TYPE)) return;
     if (len >= PRIORITY_HEADER_SIZE && pkt[3] == DMX_PRIORITY_PACKET_TYPE) {
         processPriorityPacket(pkt, len, rssi, sourceMac);
+        return;
+    }
+    if (len == sizeof(PriorityGateMetadataPacket) &&
+        pkt[3] == PRIORITY_GATE_METADATA_PACKET_TYPE) {
+        PriorityGateMetadataPacket metadata;
+        memcpy(&metadata, pkt, sizeof(metadata));
+        if (metadata.magic == DMX_PACKET_MAGIC &&
+            metadata.protocolVersion == DMX_PROTO_VERSION &&
+            metadata.universeId == DMX_UNIVERSE_ID) {
+            stagePriorityGateMetadata(metadata);
+        }
         return;
     }
 
@@ -910,6 +967,9 @@ void setup(void) {
     activeUniverse  = universeBufferB;
     hasActiveWirelessFrame = false;
     stagingActive = false;
+    memset(normalWriteAllowed, 1, sizeof(normalWriteAllowed));
+    hardGatesActive = false;
+    clearPriorityGateMetadata();
 
     /* Initialize espDMX on UART0/GPIO1 (this takes over the console). */
     dmxA.begin();
@@ -970,6 +1030,11 @@ void loop(void) {
         priorityReceivedMask = 0;
         priorityUniqueCount = 0;
         priorityCoverageClear();
+    }
+
+    if (priorityGateMetadataActive &&
+        (millis() - priorityGateMetadataLastActivityMs) >= PRIORITY_STAGING_TIMEOUT_MS) {
+        clearPriorityGateMetadata();
     }
 
     if ((long)(millis() - nextTelemetryMs) >= 0) {

@@ -23,6 +23,7 @@ MANAGEMENT_RECEIVER_TELEMETRY: Final[int] = 0x81
 MANAGEMENT_PRIORITY_ACKS: Final[int] = 0x83
 MANAGEMENT_CACHE_CLEARED: Final[int] = 0x84
 MANAGEMENT_ERROR: Final[int] = 0xE0
+DMX_GATE_MASK_SIZE: Final[int] = DMX_UNIVERSE_SIZE // 8
 
 
 class ProtocolError(ValueError):

@@ -11,7 +11,8 @@ from wireless_dmx.protocols import (MANAGEMENT_PRIORITY_ACKS, MANAGEMENT_RECEIVE
                                     MANAGEMENT_SYNC, crc16_ccitt)
 from wireless_dmx.transmitter.management import (ACK_HEADER, ACK_RECORD, ManagementParser,
                                                  PART_HEADER, RECORD, get_priority_acks_request,
-                                                 clear_receiver_cache_request, get_telemetry_request)
+                                                  clear_receiver_cache_request, get_telemetry_request,
+                                                  mark_next_priority)
 
 
 def make_part(sequence, index, count, records):
@@ -38,6 +39,12 @@ class ManagementTests(unittest.TestCase):
     def test_priority_ack_request_has_valid_crc(self):
         request = get_priority_acks_request()
         self.assertEqual(request[:2], MANAGEMENT_SYNC)
+        self.assertEqual(crc16_ccitt(request[2:-2]), struct.unpack("<H", request[-2:])[0])
+
+    def test_priority_marker_can_carry_gate_mask(self):
+        request = mark_next_priority(42, 3, 2, 7, bytes([0x01]) + bytes(63))
+        self.assertEqual(request[:2], MANAGEMENT_SYNC)
+        self.assertEqual(struct.unpack_from("<H", request, 4)[0], 75)
         self.assertEqual(crc16_ccitt(request[2:-2]), struct.unpack("<H", request[-2:])[0])
 
     def test_clear_cache_request_has_valid_crc(self):
