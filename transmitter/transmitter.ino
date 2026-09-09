@@ -146,6 +146,7 @@ static uint8_t priorityRepeatCountForNextUniverse = 1;
 static uint8_t priorityAttemptForNextUniverse = 1;
 static bool priorityGateMetadataForNextUniverse = false;
 static uint8_t priorityHardGateMaskForNextUniverse[DMX_GATE_MASK_SIZE];
+static bool priorityMetadataPending = false;
 static uint32_t prioritySequenceForCurrentFrame = 0;
 static uint8_t priorityRepeatsRemaining = 0;
 static bool currentFrameIsPriority = false;
@@ -850,8 +851,8 @@ static void submitPriorityFragment(uint32_t seq, uint8_t fragIdx) {
     }
 }
 
-static void submitPriorityGateMetadata(void) {
-    if (!priorityGateMetadataForNextUniverse) return;
+static bool submitPriorityGateMetadata(void) {
+    if (!priorityGateMetadataForNextUniverse) return true;
     PriorityGateMetadataPacket packet;
     packet.magic = DMX_PACKET_MAGIC;
     packet.protocolVersion = DMX_PROTO_VERSION;
@@ -864,18 +865,17 @@ static void submitPriorityGateMetadata(void) {
            sizeof(packet.hardGateMask));
     const uint16_t packetSize = sizeof(packet);
     if (packet.targetReceiverId == 0U) {
-        quickEspNow.sendBcast(reinterpret_cast<const uint8_t*>(&packet), packetSize);
-        return;
+        return quickEspNow.sendBcast(reinterpret_cast<const uint8_t*>(&packet), packetSize) == COMMS_SEND_OK;
     }
     uint8_t destination[6];
     for (uint8_t i = 0; i < MAX_TELEMETRY_RECEIVERS; i++) {
         if (receiverTable[i].valid &&
             receiverTable[i].telemetry.receiverId == packet.targetReceiverId) {
             memcpy(destination, receiverTable[i].macAddress, sizeof(destination));
-            quickEspNow.send(destination, reinterpret_cast<const uint8_t*>(&packet), packetSize);
-            return;
+            return quickEspNow.send(destination, reinterpret_cast<const uint8_t*>(&packet), packetSize) == COMMS_SEND_OK;
         }
     }
+    return false;
 }
 
 void setup(void) {
@@ -934,6 +934,7 @@ enum TxState {
     TX_IDLE,
     TX_GENERATING,
     TX_SENDING,
+    TX_PRIORITY_METADATA,
     TX_DRAIN
 #if defined(TEST_DELAYED_FRAGMENT)
     , TX_LATE
@@ -1006,7 +1007,16 @@ void loop(void) {
             g_sendConfirmations = 0;   /* reset before the sends so all are counted */
             currentFrameIsPriority = priorityRepeatsRemaining > 0;
             if (currentFrameIsPriority) {
-                if (priorityGateMetadataForNextUniverse) submitPriorityGateMetadata();
+                priorityMetadataPending = priorityGateMetadataForNextUniverse;
+                if (priorityMetadataPending) {
+                    g_sendConfirmations = 0;
+                    if (submitPriorityGateMetadata()) {
+                        txState = TX_PRIORITY_METADATA;
+                    } else {
+                        txState = TX_IDLE;
+                        lastFrameGenerationTime = now + 50UL;
+                    }
+                }
                 priorityAttempt = priorityAttemptForNextUniverse;
                 lastPriorityTransmitId = prioritySequenceForCurrentFrame;
                 lastPriorityTransmitAttempt = priorityAttempt;
@@ -1014,8 +1024,16 @@ void loop(void) {
             }
             TX_LOG("TX FRAME seq=%u fragments=%u priority=%u\n",
                           g_frameSequence, txSlotCount, currentFrameIsPriority ? 1U : 0U);
-            txState = TX_SENDING;
+            if (!priorityMetadataPending) txState = TX_SENDING;
             stateEnteredTime = now;
+            break;
+
+        case TX_PRIORITY_METADATA:
+            if (g_sendConfirmations >= 1) {
+                g_sendConfirmations = 0;
+                priorityMetadataPending = false;
+                txState = TX_SENDING;
+            }
             break;
 
         case TX_SENDING:

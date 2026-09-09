@@ -19,6 +19,7 @@ from .transmitter.management import (CacheClearedResponse, ManagementParser, Pri
                                      clear_receiver_cache_request, get_priority_acks_request, get_telemetry_request,
                                      mark_next_priority)
 from .protocols import DMX_GATE_MASK_SIZE
+from .protocols import PRIORITY_COMPLETE_GATE_APPLIED
 from .virtual_serial.linux_pty import LinuxPtyBackend
 
 
@@ -439,7 +440,11 @@ class WirelessDmxService:
                     event.setdefault("first_attempt_ack_receivers", set()).add(received.receiver_id)
                 expected = event["expected_receivers"]
                 state = event.get("receiver_states", {}).get(received.receiver_id)
-                if state is not None:
+                gate_ack_valid = (
+                    event.get("hard_gate_mask") is None or
+                    received.completion_status == PRIORITY_COMPLETE_GATE_APPLIED
+                )
+                if state is not None and gate_ack_valid:
                     state["ack"] = True
                     state["failed"] = False
                     if event.get("current_receiver") == received.receiver_id:

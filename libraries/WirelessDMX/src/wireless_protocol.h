@@ -57,6 +57,8 @@
 #define PRIORITY_COMPLETE_DUPLICATE 2U
 #define PRIORITY_COMPLETE_INVALID 3U
 #define PRIORITY_COMPLETE_NOT_PROMOTED 4U
+#define PRIORITY_COMPLETE_GATE_APPLIED 5U
+#define PRIORITY_COMPLETE_GATE_MISSING 6U
 #define DMX_UNIVERSE_ID        1U        /* Single universe for now; extendable later */
 #define DMX_UNIVERSE_SIZE      512U      /* 512 DMX channels */
 

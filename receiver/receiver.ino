@@ -123,6 +123,7 @@ static unsigned long priorityLastActivityMs = 0;
 static uint8_t normalWriteAllowed[DMX_UNIVERSE_SIZE];
 static bool hardGatesActive = false;
 static bool priorityGateMetadataActive = false;
+static bool priorityGateMetadataExpected = false;
 static uint32_t priorityGateMetadataId = 0;
 static uint8_t priorityGateMetadataAttempt = 0;
 static uint8_t stagedHardGateMask[DMX_GATE_MASK_SIZE];
@@ -145,6 +146,7 @@ struct PriorityAckEntry {
     uint32_t frameSequence;
     uint8_t attempt;
     uint8_t attemptsObserved;
+    uint8_t completionStatus;
     int8_t rssi;
     unsigned long dueMs;
     unsigned long scheduledMs;
@@ -241,6 +243,12 @@ static unsigned long priorityCompletionsSent = 0;
 static unsigned long priorityAckSendFailures = 0;
 static unsigned long priorityAckSendRetries = 0;
 static unsigned long priorityAckQueueDrops = 0;
+static unsigned long priorityMetadataSeen = 0;
+static unsigned long priorityMetadataAccepted = 0;
+static unsigned long priorityMetadataTargetMismatch = 0;
+static unsigned long priorityMetadataExpired = 0;
+static unsigned long priorityMetadataApplied = 0;
+static unsigned long priorityMetadataMissingAtCompletion = 0;
 
 /* Telemetry scheduling and identity.  These values are collected in loop()
  * context; no telemetry work is performed by the receive callback. */
@@ -394,13 +402,23 @@ static void clearPriorityGateMetadata(void) {
     memset(stagedHardGateMask, 0, sizeof(stagedHardGateMask));
 }
 
+static bool priorityGateMetadataForPriority(uint32_t id, uint8_t attempt) {
+    return priorityGateMetadataActive && priorityGateMetadataId == id &&
+           priorityGateMetadataAttempt == attempt;
+}
+
 static void stagePriorityGateMetadata(const PriorityGateMetadataPacket& packet) {
-    if (packet.targetReceiverId != 0U && packet.targetReceiverId != receiverId) return;
+    priorityMetadataSeen++;
+    if (packet.targetReceiverId != 0U && packet.targetReceiverId != receiverId) {
+        priorityMetadataTargetMismatch++;
+        return;
+    }
     priorityGateMetadataActive = true;
     priorityGateMetadataId = packet.priorityId;
     priorityGateMetadataAttempt = packet.attempt;
     priorityGateMetadataLastActivityMs = millis();
     memcpy(stagedHardGateMask, packet.hardGateMask, sizeof(stagedHardGateMask));
+    priorityMetadataAccepted++;
 }
 
 static void applyHardGateMask(const uint8_t* mask) {
@@ -430,7 +448,7 @@ static uint32_t priorityHash(uint32_t value) {
 }
 
 static void schedulePriorityAck(uint32_t id, uint32_t seq, uint8_t attempt,
-                                const uint8_t* sourceMac) {
+                                const uint8_t* sourceMac, uint8_t completionStatus) {
     if (priorityAckCount >= PRIORITY_ACK_QUEUE_SIZE) {
         if (priorityAckQueueDrops < 0xFFFFFFFFUL) priorityAckQueueDrops++;
         return;
@@ -441,7 +459,9 @@ static void schedulePriorityAck(uint32_t id, uint32_t seq, uint8_t attempt,
     entry.id = id;
     entry.frameSequence = seq;
     entry.attempt = attempt;
+    entry.completionStatus = completionStatus;
     entry.attemptsObserved = priorityRepeatCount;
+    entry.completionStatus = completionStatus;
     entry.rssi = lastRssi;
     if (sourceMac) memcpy(entry.sourceMac, sourceMac, 6);
     entry.dueMs = millis() + 10UL + slot * 12UL + jitter;
@@ -572,10 +592,15 @@ static void processPriorityPacket(const uint8_t* pkt, uint8_t len, int8_t rssi,
     lastRssi = rssi;
     if (priorityUniqueCount == priorityFragmentCount && priorityCoverageFull()) {
         memcpy(activeUniverse, priorityUniverse, DMX_UNIVERSE_SIZE);
+        bool gateApplied = false;
+        bool gateMissing = priorityGateMetadataActive;
         if (priorityGateMetadataActive && priorityGateMetadataId == priorityId &&
             priorityGateMetadataAttempt == priorityAttempt) {
             applyHardGateMask(stagedHardGateMask);
             clearPriorityGateMetadata();
+            priorityMetadataApplied++;
+            gateApplied = true;
+            gateMissing = false;
         }
         dmxA.setChans(activeUniverse, DMX_UNIVERSE_SIZE, 1);
         lastActiveSequence = priorityFrameSequence;
@@ -588,7 +613,10 @@ static void processPriorityPacket(const uint8_t* pkt, uint8_t len, int8_t rssi,
         // Suppress repeats of this event, but permit priority IDs to be reused
         // after a daemon/transmitter restart or ID rollover.
         priorityCompletedUntilMs = millis() + 1000UL;
-        schedulePriorityAck(priorityId, priorityFrameSequence, priorityAttempt, sourceMac);
+        schedulePriorityAck(priorityId, priorityFrameSequence, priorityAttempt, sourceMac,
+                            gateApplied ? PRIORITY_COMPLETE_GATE_APPLIED
+                                        : (gateMissing ? PRIORITY_COMPLETE_GATE_MISSING
+                                                        : PRIORITY_COMPLETE_ACCEPTED));
         priorityActive = false;
         priorityReceivedMask = 0;
         priorityUniqueCount = 0;
@@ -1034,6 +1062,7 @@ void loop(void) {
 
     if (priorityGateMetadataActive &&
         (millis() - priorityGateMetadataLastActivityMs) >= PRIORITY_STAGING_TIMEOUT_MS) {
+        priorityMetadataExpired++;
         clearPriorityGateMetadata();
     }
 
