@@ -107,6 +107,9 @@ class PriorityAck:
     received_monotonic: float
 
 
+PRIORITY_COMPLETE_GATE_APPLIED = 5
+
+
 @dataclass(frozen=True)
 class PriorityAckSummary:
     accepted_count: int = 0

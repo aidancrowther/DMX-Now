@@ -588,6 +588,8 @@ def run_dashboard(stdscr, controller: DashboardController) -> None:
                     value = int(_read_line_blocking(stdscr, height - 1, 22, 3))
                     controller.service.set_manual_channel(manual_channel, value)
                     manual_message = f"channel {manual_channel} set to {value}"
+                except PermissionError as exc:
+                    manual_message = f"edit blocked: {exc}"
                 except (ValueError, curses.error) as exc:
                     manual_message = f"invalid value: {exc}"
                 finally:

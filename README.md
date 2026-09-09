@@ -54,6 +54,41 @@ can be built for experimentation, but are not the production reliability
 target. The host daemon uses latest-state pacing to reduce faster input streams
 to the configured wireless rate.
 
+## Priority packets and channel gating
+
+Targeted priority packets are supported across the daemon, transmitter, and
+receiver. Priority transactions provide complete-universe delivery, receiver
+targeting, bounded retries, repeat/TTL handling, and completion acknowledgements.
+
+Receiver hard gating is runtime-only and is applied atomically with a priority
+transaction. A hard-gated channel:
+
+* Can be written by a priority packet.
+* Is protected inside the receiver from subsequent normal DMX packets.
+* Can be updated and unlocked only by a later priority transaction.
+* Resets to normal write permission after receiver reboot.
+
+Normal DMX packet formats and the normal 20 Hz path are unchanged. The receiver
+uses a 512-byte write-permission table and a no-gates fast path so ordinary
+operation avoids per-channel gate checks when no hard gates are active. Priority
+gate metadata is sent separately, staged by the receiver, and applied only when
+the complete priority universe has been reconstructed. Completion ACKs report
+whether gate metadata was applied.
+
+The current host acceptance evidence includes a single Mega-connected receiver:
+
+```text
+baseline normal output:       266/266 pass
+priority gate establishment:  310/310 pass
+normal traffic while locked:  267/267 pass
+priority unlock:              311/311 pass
+normal output after unlock:   267/267 pass
+20-event priority soak:       20/20 first-attempt successes
+```
+
+The two-receiver gate acceptance remains pending until both receiver units are
+confirmed to be running the matching receiver firmware simultaneously.
+
 ## Host daemon
 
 The host daemon is located at:

@@ -1178,14 +1178,14 @@ Expected approximate sequence:
 11. Status/management interface ✓ (substantially complete for current Linux/20 Hz deployment)
 12. Reliability and throughput testing
 13. Hardware-specific cleanup and fail-safe refinement
-14. High-priority transmission ✓ (daemon-only stage; receiver firmware ACK stage pending)
-15. Channel gating — IN PROGRESS (daemon implementation and tests added)
+14. High-priority transmission ✓ (targeted receiver ACK and retry path hardware-validated)
+15. Channel gating ✓ (daemon filtering, receiver runtime hard-gate fail-safe, and Mega validation)
 
 This ordering may change as hardware testing reveals constraints.
 
 ### Feature 15: Channel Gating
 
-Status: IN PROGRESS (daemon implementation and automated tests added)
+Status: SUBSTANTIALLY COMPLETE (daemon, transmitter, receiver, and hardware validation complete for the current single-receiver qualification setup)
 
 The daemon now supports three per-channel states: `OPEN`, `MANAGEMENT_ONLY`,
 and `LOCKED`. Serial and Art-Net frames update only open channels; management
@@ -1198,6 +1198,27 @@ Gate assignments are persisted in TOML under `[channel_gates]` using
 cycle the selected channel's gate; `g` retains its existing grid command.
 Automated coverage includes source blocking, management permissions, locked
 value preservation, configuration round trips, validation, and dashboard help.
+
+The receiver-side fail-safe is implemented with a runtime 512-byte normal-write
+permission table and a no-gates fast path. Priority gate metadata is staged
+separately from the priority DMX fragments and is applied only after complete
+priority reconstruction. The transmitter waits for metadata queue/send
+confirmation before sending priority fragments, and receiver completion ACKs
+identify gate metadata application.
+
+The Mega-connected receiver was hardware-validated on 2026-09-09:
+
+* Normal baseline: 266/266 checks passed.
+* Priority gate establishment: 310/310 checks passed.
+* Normal traffic remained blocked at the locked priority value: 267/267 passed.
+* Priority unlock: 311/311 checks passed.
+* Normal output resumed after unlock: 267/267 passed.
+* A 20-event priority soak completed with 20/20 first-attempt successes,
+  zero failures, and zero invalid or unknown ACKs.
+
+Two-receiver hard-gate qualification remains pending until both receiver units
+are confirmed to run the matching firmware at the same time. Runtime-only
+locks reset to open on receiver reboot by design.
 
 ### Feature 11: Host Status and Management Interface
 

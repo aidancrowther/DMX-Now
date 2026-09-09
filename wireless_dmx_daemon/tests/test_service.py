@@ -185,6 +185,28 @@ class ServiceTests(unittest.TestCase):
             service.set_manual_channel(2, 201)
         self.assertEqual(service.stats.serial_channels_blocked, 2)
 
+    def test_locked_management_edit_is_rejected_without_mutating_value(self):
+        service = WirelessDmxService(
+            DaemonConfig(virtual_port_path="/tmp/wireless-dmx-locked-edit"),
+            serial_factory=lambda: FakeSerial(), virtual_backend=LinuxPtyBackend(),
+        )
+        service.set_manual_channel(1, 17)
+        service.set_channel_gate(1, ChannelGate.LOCKED)
+        with self.assertRaises(PermissionError):
+            service.set_manual_channel(1, 99)
+        self.assertEqual(service.manual_universe_snapshot()[0], 17)
+        self.assertEqual(service.stats.management_channels_rejected, 1)
+
+    def test_open_source_fast_path_copies_complete_universe(self):
+        service = WirelessDmxService(
+            DaemonConfig(virtual_port_path="/tmp/wireless-dmx-open-fast-path"),
+            serial_factory=lambda: FakeSerial(), virtual_backend=LinuxPtyBackend(),
+        )
+        universe = bytes(range(256)) * 2
+        service._accept_source_frame(universe, "serial")
+        self.assertFalse(service._has_source_blocked_channels)
+        self.assertEqual(service.manual_universe_snapshot(), universe)
+
     def test_clear_and_full_management_updates_preserve_locked_channels(self):
         service = WirelessDmxService(DaemonConfig(virtual_port_path="/tmp/wireless-dmx-gates-2"),
                                      serial_factory=lambda: FakeSerial(), virtual_backend=LinuxPtyBackend())

@@ -1,7 +1,7 @@
 # Targeted Priority Packet: Substantial Completion
 
 **Status:** Substantially complete and ready for feature-branch merge review  
-**Branch:** `packet_priority`  
+**Branch:** `channel_gating`
 **Date:** 2026-09-09
 
 ## Scope completed
@@ -17,6 +17,13 @@ transmitter, receiver, and shared protocol:
 - Added receiver-targeted transaction sequencing and per-receiver state.
 - Added receiver completion ACK handling, duplicate/invalid/unknown ACK
   accounting, and retry/recovery behavior.
+- Added runtime receiver hard-gate enforcement using a 512-byte write-permission
+  table and a no-gates fast path.
+- Added staged priority gate metadata with atomic application after complete
+  priority reconstruction.
+- Added queue-aware transmitter metadata delivery and explicit gate-application
+  completion status.
+- Fixed the management-interface crash when editing a hard-locked channel.
 - Added lead-in and lead-out timing so priority traffic is separated from the
   normal 20 Hz DMX stream.
 - Preserved normal latest-state DMX pacing outside priority transactions.
@@ -71,12 +78,41 @@ immediately at the end of the transaction and captured six transient settling
 frames. Extending the settle period makes the test distinguish a bounded
 transition from a persistent failure to resume normal DMX.
 
+### Receiver hard-gate transition
+
+The Mega-connected receiver was tested independently with the second receiver
+excluded from event construction to avoid stale telemetry ambiguity:
+
+```text
+normal baseline:        266 checks, 266 pass, 0 fail
+priority gate establish: 310 checks, 310 pass, 0 fail
+normal while locked:    267 checks, 267 pass, 0 fail
+priority unlock:        311 checks, 311 pass, 0 fail
+normal after unlock:    267 checks, 267 pass, 0 fail
+```
+
+The lock transaction and unlock transaction both completed with the expected
+receiver ACK. During the locked phase, normal packets carrying a different
+value were transmitted but the receiver continued outputting the priority
+value. After the all-clear priority transaction, normal output resumed.
+
+The current 20-event soak was also scoped to that receiver:
+
+```text
+events: 20
+first-attempt successes: 20
+failed events: 0
+unknown ACKs: 0
+invalid ACKs: 0
+retry failures: 0
+```
+
 ## Automated validation
 
 The host test suite currently passes in full:
 
 ```text
-60 passed
+63 passed
 ```
 
 The transition runner passes Python compilation and repository whitespace
@@ -103,10 +139,10 @@ complete the transaction.
 
 ## Remaining qualification
 
-This feature is substantially complete for merge into `master`, but a formal
-60-minute priority verification run has not been completed. That longer soak
-remains recommended post-merge qualification rather than a blocker for merging
-the implemented and hardware-validated feature.
+This feature is substantially complete for merge into `master`. A formal
+60-minute priority verification run remains recommended post-merge. A
+two-receiver hard-gate run is also pending until both receiver units are
+confirmed to be running the matching receiver firmware simultaneously.
 
 Other existing project follow-up items remain unchanged, including native
 Windows/macOS virtual serial support, broader fault-injection coverage, and a

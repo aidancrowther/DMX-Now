@@ -63,6 +63,16 @@ def main() -> int:
                 break
             time.sleep(0.1)
         snapshot = service.snapshot()
+        with service.telemetry._lock:
+            service.telemetry._items = {
+                receiver_id: item for receiver_id, item in service.telemetry._items.items()
+                if receiver_id in required
+            }
+        original_snapshot = service.telemetry.snapshot
+        service.telemetry.snapshot = lambda: tuple(
+            receiver for receiver in original_snapshot() if receiver.receiver_id in required
+        )
+        snapshot = service.snapshot()
         expected = required or (set(stable_sets[-1]) if stable_sets else set())
         if not expected:
             raise RuntimeError("no fresh online receivers discovered")

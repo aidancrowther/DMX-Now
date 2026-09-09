@@ -18,6 +18,8 @@ from .transmitter.connection import TransmitterConnection
 from .transmitter.management import (CacheClearedResponse, ManagementParser, PriorityAckReport,
                                      clear_receiver_cache_request, get_priority_acks_request, get_telemetry_request,
                                      mark_next_priority)
+from .protocols import DMX_GATE_MASK_SIZE
+from .protocols import PRIORITY_COMPLETE_GATE_APPLIED
 from .virtual_serial.linux_pty import LinuxPtyBackend
 
 
@@ -67,10 +69,13 @@ class WirelessDmxService:
         )
         self.manual_universe = bytearray(512)
         self._channel_gates = [ChannelGate.OPEN] * 512
+        self._has_source_blocked_channels = False
+        self._hard_gate_metadata_pending = bool(config.locked_channels)
         for channel in config.management_only_channels:
             self._channel_gates[channel - 1] = ChannelGate.MANAGEMENT_ONLY
         for channel in config.locked_channels:
             self._channel_gates[channel - 1] = ChannelGate.LOCKED
+        self._refresh_gate_fast_path()
         self._stop = Event()
         self._thread: Thread | None = None
         self._lock = Lock()
@@ -133,11 +138,19 @@ class WirelessDmxService:
     def set_channel_gate(self, channel: int, gate: ChannelGate) -> None:
         if not 1 <= channel <= 512:
             raise ValueError("channel must be 1..512")
+        previous = self._channel_gates[channel - 1]
         self._channel_gates[channel - 1] = ChannelGate(gate)
+        if previous != self._channel_gates[channel - 1] or gate == ChannelGate.LOCKED:
+            self._hard_gate_metadata_pending = True
+        self._refresh_gate_fast_path()
         management_only, locked = self.channel_gate_lists()
         self.config = replace(self.config, management_only_channels=management_only,
                               locked_channels=locked)
         self.stats.channel_gate_changes += 1
+
+    def _refresh_gate_fast_path(self) -> None:
+        self._has_source_blocked_channels = any(gate != ChannelGate.OPEN
+                                                for gate in self._channel_gates)
 
     def channel_gates_snapshot(self) -> tuple[ChannelGate, ...]:
         return tuple(self._channel_gates)
@@ -160,6 +173,14 @@ class WirelessDmxService:
                     ttl_seconds: float | None = None, reason: str = "manual dashboard") -> int | None:
         universe = bytes(self.manual_universe)
         if priority:
+            hard_gate_mask = None
+            if self._hard_gate_metadata_pending:
+                hard_gate_mask_buffer = bytearray(DMX_GATE_MASK_SIZE)
+                for index, gate in enumerate(self._channel_gates):
+                    if gate == ChannelGate.LOCKED:
+                        hard_gate_mask_buffer[index // 8] |= 1 << (index % 8)
+                hard_gate_mask = bytes(hard_gate_mask_buffer)
+                self._hard_gate_metadata_pending = False
             physical_repeat_count = repeat_count or self.config.priority_default_repeat_count
             self._normal_quiet_until = max(self._normal_quiet_until,
                 time.monotonic() + self.config.priority_normal_quiet_before_ms / 1000.0)
@@ -172,6 +193,7 @@ class WirelessDmxService:
             self._priority_submissions[priority_id] = time.monotonic()
             self._priority_events[priority_id] = {
                 "universe": universe, "repeat_count": physical_repeat_count,
+                "hard_gate_mask": hard_gate_mask,
                 "ttl_seconds": ttl_seconds or self.config.priority_default_ttl_seconds,
                 "reason": reason, "attempt": 1, "last_attempt_at": time.monotonic(),
                 "retry_count": 0, "terminal": False, "terminal_reason": None,
@@ -196,7 +218,7 @@ class WirelessDmxService:
                 # receiver telemetry is available (including unit-test and
                 # hardware-discovery bootstrap conditions).
                 self.transmitter.send_immediate(mark_next_priority(
-                    priority_id, physical_repeat_count))
+                    priority_id, physical_repeat_count, 1, 0, hard_gate_mask))
                 self.pacer.submit_priority(universe, repeat_count=1,
                                            ttl_seconds=event["ttl_seconds"],
                                            reason=event["reason"], priority_id=priority_id)
@@ -315,7 +337,8 @@ class WirelessDmxService:
             state["started_at"] = now
             event["current_receiver"] = receiver_id
             self.transmitter.send_immediate(mark_next_priority(
-                priority_id, event["repeat_count"], state["attempt"], receiver_id))
+                priority_id, event["repeat_count"], state["attempt"], receiver_id,
+                event["hard_gate_mask"]))
             self.pacer.submit_priority(event["universe"], repeat_count=1,
                                        ttl_seconds=event["ttl_seconds"],
                                        reason=event["reason"], priority_id=priority_id,
@@ -344,6 +367,14 @@ class WirelessDmxService:
             self.stats.artnet_source_frames += 1
         else:
             self.stats.serial_source_frames += 1
+        if not self._has_source_blocked_channels:
+            self.manual_universe[:] = universe
+            if self.config.pacer_enabled:
+                self.pacer.submit(bytes(universe))
+            else:
+                self._send_universe(bytes(universe))
+                self.stats.frames_submitted += 1
+            return
         merged = bytearray(self.manual_universe)
         blocked = 0
         for index, value in enumerate(universe):
@@ -409,7 +440,11 @@ class WirelessDmxService:
                     event.setdefault("first_attempt_ack_receivers", set()).add(received.receiver_id)
                 expected = event["expected_receivers"]
                 state = event.get("receiver_states", {}).get(received.receiver_id)
-                if state is not None:
+                gate_ack_valid = (
+                    event.get("hard_gate_mask") is None or
+                    received.completion_status == PRIORITY_COMPLETE_GATE_APPLIED
+                )
+                if state is not None and gate_ack_valid:
                     state["ack"] = True
                     state["failed"] = False
                     if event.get("current_receiver") == received.receiver_id:

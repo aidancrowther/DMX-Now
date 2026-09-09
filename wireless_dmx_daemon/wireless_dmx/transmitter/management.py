@@ -13,6 +13,7 @@ from ..protocols import (
     MANAGEMENT_CLEAR_RECEIVER_CACHE, MANAGEMENT_CACHE_CLEARED,
     MANAGEMENT_RECEIVER_TELEMETRY, MANAGEMENT_SYNC, ProtocolError, crc16_ccitt,
 )
+from ..protocols import DMX_GATE_MASK_SIZE
 
 PART_HEADER = struct.Struct("<BBBBI")
 RECORD = struct.Struct("<I6sBBbb7I HBBI".replace(" ", ""))
@@ -60,11 +61,19 @@ def clear_receiver_cache_request() -> bytes:
 
 
 def mark_next_priority(priority_id: int, repeat_count: int = 3, attempt: int = 1,
-                       target_receiver_id: int = 0) -> bytes:
+                       target_receiver_id: int = 0,
+                       hard_gate_mask: bytes | None = None) -> bytes:
     """Tell the transmitter to classify the next complete ENTTEC universe."""
-    payload = struct.pack("<IIBB", priority_id & 0xFFFFFFFF,
-                          target_receiver_id & 0xFFFFFFFF,
-                          repeat_count & 0xFF, attempt & 0xFF)
+    if hard_gate_mask is None:
+        payload = struct.pack("<IIBB", priority_id & 0xFFFFFFFF,
+                              target_receiver_id & 0xFFFFFFFF,
+                              repeat_count & 0xFF, attempt & 0xFF)
+    else:
+        if len(hard_gate_mask) != DMX_GATE_MASK_SIZE:
+            raise ValueError("hard gate mask must contain 64 bytes")
+        payload = struct.pack("<IIBBB", priority_id & 0xFFFFFFFF,
+                              target_receiver_id & 0xFFFFFFFF,
+                              repeat_count & 0xFF, attempt & 0xFF, 1) + hard_gate_mask
     body = bytes((MANAGEMENT_PROTO_VERSION, MANAGEMENT_MARK_NEXT_PRIORITY)) + struct.pack("<H", len(payload)) + payload
     return MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body))
 
