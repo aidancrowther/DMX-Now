@@ -140,6 +140,7 @@ struct PriorityAckEntry {
     unsigned long scheduledMs;
     uint8_t sendRetries;
     uint8_t transmissionsSent;
+    uint8_t sourceMac[6];
 };
 static PriorityAckEntry priorityAckQueue[PRIORITY_ACK_QUEUE_SIZE];
 static uint8_t priorityAckHead = 0;
@@ -160,6 +161,7 @@ struct RxFragSlot {
     uint8_t payload[RX_SLOT_MAX];
     uint8_t len;
     int8_t  rssi;
+    uint8_t sourceMac[6];
 };
 static RxFragSlot rxRing[RX_RING_SIZE];
 static volatile uint8_t ringHead = 0; /* written only by the callback */
@@ -379,7 +381,8 @@ static uint32_t priorityHash(uint32_t value) {
     return value;
 }
 
-static void schedulePriorityAck(uint32_t id, uint32_t seq, uint8_t attempt) {
+static void schedulePriorityAck(uint32_t id, uint32_t seq, uint8_t attempt,
+                                const uint8_t* sourceMac) {
     if (priorityAckCount >= PRIORITY_ACK_QUEUE_SIZE) {
         if (priorityAckQueueDrops < 0xFFFFFFFFUL) priorityAckQueueDrops++;
         return;
@@ -392,6 +395,7 @@ static void schedulePriorityAck(uint32_t id, uint32_t seq, uint8_t attempt) {
     entry.attempt = attempt;
     entry.attemptsObserved = priorityRepeatCount;
     entry.rssi = lastRssi;
+    if (sourceMac) memcpy(entry.sourceMac, sourceMac, 6);
     entry.dueMs = millis() + 10UL + slot * 12UL + jitter;
     entry.scheduledMs = millis();
     entry.sendRetries = 0;
@@ -420,8 +424,9 @@ static void transmitPriorityAck(void) {
     packet.completionStatus = PRIORITY_COMPLETE_ACCEPTED;
     packet.attemptsObserved = entry.attemptsObserved;
     packet.lastRssi = entry.rssi;
+    const uint8_t* destination = entry.sourceMac;
     if (quickEspNow.readyToSendData() &&
-        quickEspNow.sendBcast(reinterpret_cast<const uint8_t*>(&packet), sizeof(packet)) == COMMS_SEND_OK) {
+        quickEspNow.send(destination, reinterpret_cast<const uint8_t*>(&packet), sizeof(packet)) == COMMS_SEND_OK) {
         priorityCompletionsSent++;
         entry.transmissionsSent++;
         if (entry.transmissionsSent >= PRIORITY_ACK_REPEAT_COUNT) {
@@ -449,7 +454,8 @@ static bool priorityCanonicalTile(uint8_t index, uint16_t offset, uint8_t len,
     return true;
 }
 
-static void processPriorityPacket(const uint8_t* pkt, uint8_t len, int8_t rssi) {
+static void processPriorityPacket(const uint8_t* pkt, uint8_t len, int8_t rssi,
+                                  const uint8_t* sourceMac) {
     if (len < PRIORITY_HEADER_SIZE + 1U) {
         priorityMalformedPackets++;
         return;
@@ -464,6 +470,7 @@ static void processPriorityPacket(const uint8_t* pkt, uint8_t len, int8_t rssi) 
         priorityMalformedPackets++;
         return;
     }
+    if (hdr.targetReceiverId != 0U && hdr.targetReceiverId != receiverId) return;
     uint16_t offset;
     uint8_t tileLen;
     if (!priorityCanonicalTile(hdr.fragmentIndex, hdr.dataOffset, hdr.payloadLength,
@@ -518,7 +525,7 @@ static void processPriorityPacket(const uint8_t* pkt, uint8_t len, int8_t rssi) 
         // Suppress repeats of this event, but permit priority IDs to be reused
         // after a daemon/transmitter restart or ID rollover.
         priorityCompletedUntilMs = millis() + 1000UL;
-        schedulePriorityAck(priorityId, priorityFrameSequence, priorityAttempt);
+        schedulePriorityAck(priorityId, priorityFrameSequence, priorityAttempt, sourceMac);
         priorityActive = false;
         priorityReceivedMask = 0;
         priorityUniqueCount = 0;
@@ -558,6 +565,7 @@ void dataReceived(uint8_t* address, uint8_t* data, uint8_t len, signed int rssi,
         memcpy(rxRing[slotIdx].payload, data, len);
         rxRing[slotIdx].len  = len;
         rxRing[slotIdx].rssi = (int8_t)rssi;
+        memcpy(rxRing[slotIdx].sourceMac, address, 6);
         ringHead = next; /* publish: slot now valid, head advanced */
     }
     xt_wsr_ps(savedPS);
@@ -567,7 +575,8 @@ void dataReceived(uint8_t* address, uint8_t* data, uint8_t len, signed int rssi,
  * Ring consumer (loop context): copy one pending fragment out, if any.
  * Returns false if the ring is empty.
  * -------------------------------------------------------------------------- */
-static bool popPendingFrag(uint8_t* outBuf, uint8_t& outLen, int8_t& outRssi) {
+static bool popPendingFrag(uint8_t* outBuf, uint8_t& outLen, int8_t& outRssi,
+                           uint8_t* outSourceMac) {
     if (ringHead == ringTail) {
         return false;
     }
@@ -577,6 +586,7 @@ static bool popPendingFrag(uint8_t* outBuf, uint8_t& outLen, int8_t& outRssi) {
         memcpy(outBuf, rxRing[slotIdx].payload, rxRing[slotIdx].len);
         outLen  = rxRing[slotIdx].len;
         outRssi = rxRing[slotIdx].rssi;
+        memcpy(outSourceMac, rxRing[slotIdx].sourceMac, 6);
         ringTail = (uint8_t)((ringTail + 1) % RX_RING_SIZE);
         xt_wsr_ps(savedPS);
         return true;
@@ -723,13 +733,14 @@ static void acceptFragment(const uint8_t* pkt, uint32_t seq,
  * Validates structure, resolves sequence ordering (wrap-safe), and either
  * assembles into staging, flags stale/duplicate, supersedes, or re-baselines.
  * -------------------------------------------------------------------------- */
-static void processPacket(const uint8_t* pkt, uint8_t len, int8_t rssi) {
+static void processPacket(const uint8_t* pkt, uint8_t len, int8_t rssi,
+                          const uint8_t* sourceMac) {
     /* Telemetry is intended for the transmitter; do not classify it as a
      * malformed DMX fragment when receivers hear one another. */
     if (len >= 4 && (pkt[3] == TELEMETRY_PACKET_TYPE ||
                      pkt[3] == PRIORITY_COMPLETION_PACKET_TYPE)) return;
     if (len >= PRIORITY_HEADER_SIZE && pkt[3] == DMX_PRIORITY_PACKET_TYPE) {
-        processPriorityPacket(pkt, len, rssi);
+        processPriorityPacket(pkt, len, rssi, sourceMac);
         return;
     }
 
@@ -903,6 +914,7 @@ static uint8_t rxWorkBuf[RX_SLOT_MAX];
 void loop(void) {
     uint8_t len;
     int8_t  rssi;
+    uint8_t sourceMac[6];
 
     /* 1. Debounce the active-HIGH battery comparator input. */
     updateBatteryLow();
@@ -912,9 +924,9 @@ void loop(void) {
     transmitPriorityAck();
 
     /* 3. Drain every pending fragment (bounded by RX_RING_SIZE). */
-    while (popPendingFrag(rxWorkBuf, len, rssi)) {
+    while (popPendingFrag(rxWorkBuf, len, rssi, sourceMac)) {
         packetsReceived++;
-        processPacket(rxWorkBuf, len, rssi);
+        processPacket(rxWorkBuf, len, rssi, sourceMac);
     }
 
     /* 4. Staging timeout: abandon a frame that stopped receiving fragments. */

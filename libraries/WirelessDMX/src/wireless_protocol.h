@@ -50,6 +50,8 @@
 #define TELEMETRY_PACKET_TYPE  2U        /* Packet type: 2 = receiver telemetry */
 #define DMX_PRIORITY_PACKET_TYPE 3U      /* Packet type: 3 = priority DMX fragment */
 #define PRIORITY_COMPLETION_PACKET_TYPE 4U /* Packet type: 4 = priority completion */
+#define PRIORITY_LIVENESS_REQUEST_PACKET_TYPE 5U
+#define PRIORITY_LIVENESS_RESPONSE_PACKET_TYPE 6U
 #define PRIORITY_COMPLETE_ACCEPTED 1U
 #define PRIORITY_COMPLETE_DUPLICATE 2U
 #define PRIORITY_COMPLETE_INVALID 3U
@@ -97,7 +99,7 @@ static constexpr unsigned long WIRELESS_PRIORITY_REFRESH_INTERVAL_MS =
 static constexpr uint8_t DMX_HEADER_SIZE       = 14U;
 static constexpr uint8_t DMX_PAYLOAD_SIZE      = ESP_NOW_MAX_DATA_LEN - DMX_HEADER_SIZE; // 236
 static constexpr uint8_t DMX_TOTAL_PACKET_SIZE = DMX_HEADER_SIZE + DMX_PAYLOAD_SIZE;     // 250
-static constexpr uint8_t PRIORITY_HEADER_SIZE  = 20U;
+static constexpr uint8_t PRIORITY_HEADER_SIZE  = 24U;
 static constexpr uint8_t PRIORITY_PAYLOAD_SIZE = ESP_NOW_MAX_DATA_LEN - PRIORITY_HEADER_SIZE; // 230
 
 /* --------------------------------------------------------------------------
@@ -128,6 +130,7 @@ struct __attribute__((packed)) DmxPriorityFragmentPacket {
     uint8_t  protocolVersion;
     uint8_t  packetType;
     uint8_t  universeId;
+    uint32_t targetReceiverId;
     uint32_t frameSequence;
     uint32_t priorityId;
     uint8_t  attempt;
@@ -150,6 +153,15 @@ struct __attribute__((packed)) PriorityCompletionPacket {
     uint8_t  completionStatus;
     uint8_t  attemptsObserved;
     int8_t   lastRssi;
+};
+
+struct __attribute__((packed)) PriorityLivenessPacket {
+    uint16_t magic;
+    uint8_t  protocolVersion;
+    uint8_t  packetType;
+    uint32_t receiverId;
+    uint32_t priorityId;
+    uint8_t  attempt;
 };
 
 /* Receiver telemetry is deliberately separate from the DMX fragment format.
@@ -176,6 +188,7 @@ struct __attribute__((packed)) ReceiverTelemetryPacket {
 
 struct __attribute__((packed)) PriorityTransmitRequest {
     uint32_t priorityId;
+    uint32_t targetReceiverId; /* zero means legacy broadcast */
     uint8_t  repeatCount;
     uint8_t  attempt;
 };
@@ -248,6 +261,8 @@ static_assert(sizeof(DmxPriorityFragmentPacket) + PRIORITY_PAYLOAD_SIZE <= ESP_N
               "DmxPriorityFragmentPacket must fit within ESP_NOW_MAX_DATA_LEN");
 static_assert(sizeof(PriorityCompletionPacket) <= ESP_NOW_MAX_DATA_LEN,
               "PriorityCompletionPacket must fit within ESP_NOW_MAX_DATA_LEN");
+static_assert(sizeof(PriorityLivenessPacket) <= ESP_NOW_MAX_DATA_LEN,
+              "PriorityLivenessPacket must fit within ESP_NOW_MAX_DATA_LEN");
 static_assert(sizeof(ReceiverTelemetryPacket) <= ESP_NOW_MAX_DATA_LEN,
               "ReceiverTelemetryPacket must fit within ESP_NOW_MAX_DATA_LEN");
 static_assert(sizeof(TelemetryReportPartHeader) == 8,

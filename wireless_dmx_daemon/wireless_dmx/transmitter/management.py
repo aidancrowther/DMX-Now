@@ -59,9 +59,11 @@ def clear_receiver_cache_request() -> bytes:
     return MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body))
 
 
-def mark_next_priority(priority_id: int, repeat_count: int = 3, attempt: int = 1) -> bytes:
+def mark_next_priority(priority_id: int, repeat_count: int = 3, attempt: int = 1,
+                       target_receiver_id: int = 0) -> bytes:
     """Tell the transmitter to classify the next complete ENTTEC universe."""
-    payload = struct.pack("<IBB", priority_id & 0xFFFFFFFF,
+    payload = struct.pack("<IIBB", priority_id & 0xFFFFFFFF,
+                          target_receiver_id & 0xFFFFFFFF,
                           repeat_count & 0xFF, attempt & 0xFF)
     body = bytes((MANAGEMENT_PROTO_VERSION, MANAGEMENT_MARK_NEXT_PRIORITY)) + struct.pack("<H", len(payload)) + payload
     return MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body))

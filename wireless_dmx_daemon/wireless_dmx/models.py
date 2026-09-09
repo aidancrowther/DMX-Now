@@ -199,6 +199,7 @@ class DaemonConfig:
     priority_lead_out_ms: int = 500
     priority_confirmation_window_ms: int = 1500
     priority_max_attempts: int = 5
+    priority_receiver_budget_seconds: float = 1.0
     priority_retry_cooldown_min_seconds: float = 1.0
     priority_retry_cooldown_max_seconds: float = 2.5
     priority_normal_quiet_before_ms: int = 500

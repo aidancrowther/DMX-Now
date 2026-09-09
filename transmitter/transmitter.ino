@@ -141,6 +141,7 @@ static uint16_t managementReceivedCrc = 0;
 static uint8_t managementPayload[32];
 static bool priorityNextUniverse = false;
 static uint32_t priorityIdForNextUniverse = 0;
+static uint32_t priorityTargetReceiverIdForNextUniverse = 0;
 static uint8_t priorityRepeatCountForNextUniverse = 1;
 static uint8_t priorityAttemptForNextUniverse = 1;
 static uint32_t prioritySequenceForCurrentFrame = 0;
@@ -449,6 +450,7 @@ static void serviceEnttecInput(void) {
                     if (request.repeatCount >= 1) {
                         priorityNextUniverse = true;
                         priorityIdForNextUniverse = request.priorityId;
+                        priorityTargetReceiverIdForNextUniverse = request.targetReceiverId;
                         priorityRepeatCountForNextUniverse = request.repeatCount;
                         priorityAttemptForNextUniverse = request.attempt;
                     }
@@ -791,6 +793,8 @@ static void submitPriorityFragment(uint32_t seq, uint8_t fragIdx) {
     pkt.protocolVersion = DMX_PROTO_VERSION;
     pkt.packetType = DMX_PRIORITY_PACKET_TYPE;
     pkt.universeId = DMX_UNIVERSE_ID;
+    pkt.targetReceiverId = 0U; /* zero retains legacy broadcast behavior */
+    pkt.targetReceiverId = priorityTargetReceiverIdForNextUniverse;
     pkt.frameSequence = seq;
     pkt.priorityId = prioritySequenceForCurrentFrame;
     pkt.attempt = priorityAttempt;
@@ -801,7 +805,24 @@ static void submitPriorityFragment(uint32_t seq, uint8_t fragIdx) {
     pkt.payloadLength = payloadLength;
     memcpy(packetBuffer, &pkt, sizeof(pkt));
     memcpy(packetBuffer + PRIORITY_HEADER_SIZE, g_txUniverse + offset, payloadLength);
-    quickEspNow.sendBcast(packetBuffer, (uint16_t)(PRIORITY_HEADER_SIZE + payloadLength));
+    if (priorityTargetReceiverIdForNextUniverse == 0U) {
+        quickEspNow.sendBcast(packetBuffer, (uint16_t)(PRIORITY_HEADER_SIZE + payloadLength));
+    } else {
+        uint8_t destination[6];
+        bool found = false;
+        for (uint8_t i = 0; i < MAX_TELEMETRY_RECEIVERS; i++) {
+            if (receiverTable[i].valid &&
+                receiverTable[i].telemetry.receiverId == priorityTargetReceiverIdForNextUniverse) {
+                memcpy(destination, receiverTable[i].macAddress, sizeof(destination));
+                found = true;
+                break;
+            }
+        }
+        if (found) {
+            quickEspNow.send(destination, packetBuffer,
+                             (uint16_t)(PRIORITY_HEADER_SIZE + payloadLength));
+        }
+    }
 }
 
 void setup(void) {

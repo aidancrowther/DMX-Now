@@ -21,6 +21,7 @@ class PriorityItem:
     created: float
     repeat_index: int = 0
     attempt: int = 1
+    target_receiver_id: int = 0
 
 
 class DmxPacer:
@@ -72,7 +73,8 @@ class DmxPacer:
 
     def submit_priority(self, universe: bytes, repeat_count: int = 1,
                         ttl_seconds: float = 2.0, reason: str = "manual",
-                        priority_id: int | None = None, attempt: int = 1) -> int:
+                        priority_id: int | None = None, attempt: int = 1,
+                        target_receiver_id: int = 0) -> int:
         if not self.priority_enabled:
             raise RuntimeError("priority transmission is disabled")
         if len(universe) != 512:
@@ -92,7 +94,8 @@ class DmxPacer:
                 self._priority_id = (self._priority_id + 1) & 0xFFFFFFFF
             self._priority_queue.append(PriorityItem(bytes(universe), priority_id,
                                                      reason[:48], repeat_count, ttl_seconds,
-                                                      time.monotonic(), attempt=attempt))
+                                                       time.monotonic(), attempt=attempt,
+                                                       target_receiver_id=target_receiver_id))
             self.stats.priority_received += 1
             self.stats.priority_queued += 1
             self.stats.priority_queue_depth = len(self._priority_queue)
