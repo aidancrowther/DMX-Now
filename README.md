@@ -270,6 +270,19 @@ GPIO0           -> reserved for boot requirements
 The receiver keeps DMX output disabled during startup and enables it only after
 QuickESPNow, buffers, and espDMX have been initialized.
 
+### Receiver schematic
+
+The receiver hardware schematic is included in the repository at:
+
+```text
+./Hardware/1-Schematic_ESP DMX.json
+```
+
+This schematic documents the ESP-01/ESP8266 receiver, MAX3485 RS-485 DMX
+interface, power and charging circuitry, low-battery detection, and the control
+signals described above. Keep this hardware reference alongside the receiver
+firmware when building or modifying receiver boards.
+
 ## Building firmware
 
 The project uses Arduino ESP8266 and `arduino-cli`, not PlatformIO.
