@@ -150,16 +150,19 @@ substantially complete for the Linux/20 Hz deployment. The package has
 standard-library core models, a streaming ENTTEC parser, Feature 11 management
 codec, bounded latest-state pacer, reconnecting transmitter adapter, Linux PTY
 backend, TOML loading, CLI entry point, structured logging, and a systemd unit
-template. Feature 14 priority transmission is **IN PROGRESS**: manual
-complete-universe sends, bounded queueing, repeat/TTL handling, receiver ACKs,
-retry/recovery, lead-in/lead-out timing, and normal-stream resumption are
-implemented, but the receiver-confirmed priority path has not yet passed the
-60-minute verification requirement.
-The remaining Feature 14 work is long-run reliability and diagnostics for the
-receiver-confirmed path. Native Windows/macOS virtual serial support, broader
-fault-injection coverage, and a future GUI remain follow-up work.
+template. Feature 14 targeted priority transmission is **SUBSTANTIALLY
+COMPLETE**: manual complete-universe sends, bounded queueing, repeat/TTL
+handling, receiver ACKs, per-receiver retry/recovery, lead-in/lead-out timing,
+and normal-stream resumption are implemented and hardware-validated with both
+receivers. The detailed completion record is
+`../docs/priority-packet-substantial-completion.md`.
 
-The host implementation has passed 21 automated tests and live validation on
+The remaining Feature 14 qualification item is a formal 60-minute
+receiver-confirmed priority verification run. Native Windows/macOS virtual
+serial support, broader fault-injection coverage, and a future GUI remain
+follow-up work.
+
+The host implementation has passed 60 automated tests and live validation on
 2026-09-04. The live test opened the real transmitter at `/dev/ttyUSB0`, exposed
 a Linux PTY, forwarded a full ENTTEC universe, and received telemetry for two
 active receivers. The CLI status command also reported the same two receivers.
