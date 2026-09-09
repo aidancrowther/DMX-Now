@@ -1,5 +1,0 @@
-{
-  "name": "corrupt_1",
-  "passed": true,
-  "detail": "expected production limitation; RESULT seconds=3 checks=133 pass=0 fail=133 no_data=18ms"
-}

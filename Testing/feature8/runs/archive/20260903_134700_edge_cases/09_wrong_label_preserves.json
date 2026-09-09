@@ -1,5 +1,0 @@
-{
-  "name": "wrong_label_preserves",
-  "passed": true,
-  "detail": "RESULT seconds=2 checks=89 pass=89 fail=0 no_data=18ms"
-}

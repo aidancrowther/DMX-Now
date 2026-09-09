@@ -1,1 +1,0 @@
-"""ENTTEC protocol adapters."""

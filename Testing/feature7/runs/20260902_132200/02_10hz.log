@@ -1,9 +1,0 @@
-
-=== DMX refresh monitor (MEGA) ===
-DMX input : USART1 (pin 19 RX)  [DMX_USE_PORT1]
-Telemetry : USB Serial (pins 0/1) @ 115200
-Pattern   : channel c = (seq8 + c - 1) & 0xFF
-READY
-STATUS state=0
-ACK START settle=10 measure=60
-RESULT seconds=60 updates=600 rate=10.00 lost=2 gaps=2 loss=0.3% pat_err=0 max_gap=203 last_seq8=201 no_data=11ms

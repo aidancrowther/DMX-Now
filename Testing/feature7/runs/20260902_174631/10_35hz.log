@@ -1,3 +1,0 @@
-STATUS state=0
-ACK START settle=10 measure=60
-RESULT seconds=60 updates=1906 rate=31.77 lost=5 gaps=5 loss=0.3% pat_err=718 max_gap=91 last_seq8=186 no_data=12ms

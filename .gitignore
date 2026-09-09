@@ -1,0 +1,58 @@
+# Python bytecode, test caches, and local environments
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.venv/
+venv/
+ENV/
+env/
+*.egg-info/
+
+# Firmware and host build output
+**/build/
+*.bin
+*.elf
+*.eep
+*.hex
+*.map
+*.uf2
+
+# Generated acceptance, soak, and hardware-test evidence
+**/runs/
+*.log
+*.log.*
+*.jsonl
+*.pid
+*.exit
+*.out
+*.result
+
+# Local scratch work and internal-only material
+.work/
+internal/
+.internal/
+notes/
+*.internal.md
+*.local.md
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.local.toml
+*.local.conf
+
+# Editors and operating-system files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db

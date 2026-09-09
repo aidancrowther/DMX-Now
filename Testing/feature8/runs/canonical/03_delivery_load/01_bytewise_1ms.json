@@ -1,5 +1,0 @@
-{
-  "name": "bytewise_1ms",
-  "passed": true,
-  "detail": "elapsed=5.7s RESULT seconds=3 checks=133 pass=133 fail=0 no_data=16ms"
-}

@@ -1,3 +1,0 @@
-Traceback (most recent call last):
-  File "<stdin>", line 22, in <module>
-ValueError: bytes must be in range(0, 256)
