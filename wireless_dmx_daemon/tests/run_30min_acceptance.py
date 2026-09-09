@@ -171,10 +171,8 @@ def main() -> int:
 
             snapshot = service.snapshot()
             if priority_waiting_for is not None:
-                expected = len(snapshot.receivers)
-                received = sum(1 for key in service._priority_acks if key[0] == priority_waiting_for)
                 event = service._priority_events.get(priority_waiting_for, {})
-                if (expected > 0 and received >= expected) or event.get("terminal"):
+                if event.get("ack_complete") or event.get("terminal"):
                     priority_waiting_for = None
             # Record every newly visible receiver report in a compact JSONL
             # stream. The receiver telemetry itself is already normalized by

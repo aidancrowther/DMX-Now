@@ -2,10 +2,15 @@
 
 ## Current status
 
-The daemon-only stage is substantially implemented. It provides an explicit
-priority path without changing the deployed transmitter or receiver firmware.
-Priority submissions currently use the existing complete-universe DMX packet
-format, but are scheduled ahead of normal pending traffic by the host daemon.
+**IN PROGRESS** — receiver-confirmed priority delivery is implemented and
+hardware-tested, but not yet complete. A 20-event run with 15-second spacing
+completed all events successfully. The subsequent 60-minute verification was
+aborted at event 3 after five total attempts produced no ACKs from either
+receiver. The feature must remain in progress until a full 60-minute run passes.
+
+The daemon and coordinated firmware stages are implemented. Priority submissions
+use the priority DMX packet format, receiver reconstruction, completion ACKs,
+and daemon-side retry tracking. Long-run reliability remains under validation.
 
 ## Implemented behavior
 
@@ -56,18 +61,21 @@ priority scheduler is being used.
 
 ## Current protocol limitation
 
-Receiver-confirmed delivery is not enabled yet. Existing receiver firmware does
-not recognize a separate priority packet type or send priority completion ACKs.
-The current implementation therefore confirms only daemon-side submission.
+Receiver-confirmed delivery is now enabled through the priority packet and
+completion-ACK protocol. The daemon tracks ACK completion per receiver and
+supports retries, but intermittent complete event failures remain under long
+hardware runs. The current implementation therefore remains in progress rather
+than claiming production-complete delivery.
 
-The daemon does not claim that a priority event reached every receiver until
-the receiver-aware firmware stage has been implemented and validated.
+The daemon reports per-receiver ACK completion, but production completion remains
+blocked on passing the full long-run verification.
 
 ## Receiver flashing checkpoint
 
-No receiver flashing is required for the current daemon-only stage.
+Receiver and transmitter flashing is required for the receiver-confirmed stage and
+has been performed for the current hardware validation deployment.
 
-Receiver flashing becomes required when the following are implemented:
+The coordinated firmware checkpoint includes:
 
 * New priority DMX fragment packet type.
 * Receiver priority reconstruction state.

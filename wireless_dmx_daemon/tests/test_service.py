@@ -197,6 +197,7 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(service.snapshot().priority.retry_attempts, 1)
         self.assertEqual(service._priority_events[priority_id]["attempt"], 2)
         self.assertEqual(service._priority_events[priority_id]["expected_receivers"], set())
+        self.assertFalse(service._priority_events[priority_id]["ack_complete"])
 
     def test_priority_retry_waits_for_configured_cooldown(self):
         service = WirelessDmxService(
@@ -231,6 +232,8 @@ class ServiceTests(unittest.TestCase):
             "universe": bytes(512), "repeat_count": 1, "ttl_seconds": 1.0,
             "reason": "test", "attempt": 2, "last_attempt_at": time.monotonic(),
             "retry_count": 1, "terminal": False, "expected_receivers": {7},
+            "ack_complete": False, "ack_receivers": set(),
+            "first_attempt_ack_receivers": set(), "ack_completed_at": None,
         }
         record = ACK_RECORD.pack(42, 7, 101, 2, 1, 1, -41, 1234, 37)
         payload = ACK_HEADER.pack(1, 1, 7, 1, 0, 0, 0) + record
@@ -241,6 +244,8 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(priority.ack_records_received, 1)
         self.assertEqual(priority.retry_recovered, 1)
         self.assertEqual(priority.ack_duplicate_records, 0)
+        self.assertTrue(service._priority_events[42]["ack_complete"])
+        self.assertEqual(service._priority_events[42]["ack_receivers"], {7})
 
     def test_management_queue_does_not_evict_dmx(self):
         fake = FakeSerial()

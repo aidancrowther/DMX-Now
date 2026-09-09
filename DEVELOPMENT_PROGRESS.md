@@ -1179,6 +1179,7 @@ Expected approximate sequence:
 12. Reliability and throughput testing
 13. Hardware-specific cleanup and fail-safe refinement
 14. High-priority transmission ✓ (daemon-only stage; receiver firmware ACK stage pending)
+15. Channel gate implementation, block mistaken channel writes
 
 This ordering may change as hardware testing reveals constraints.
 

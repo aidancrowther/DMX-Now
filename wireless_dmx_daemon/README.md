@@ -150,12 +150,14 @@ substantially complete for the Linux/20 Hz deployment. The package has
 standard-library core models, a streaming ENTTEC parser, Feature 11 management
 codec, bounded latest-state pacer, reconnecting transmitter adapter, Linux PTY
 backend, TOML loading, CLI entry point, structured logging, and a systemd unit
-template. Feature 14 daemon-level priority transmission is also implemented for
-manual complete-universe sends, with bounded queueing, repeat/TTL handling,
-lead-in/lead-out timing, starvation protection, and normal-stream resumption.
-Receiver-aware priority packets and completion acknowledgements remain a later
-firmware stage. Native Windows/macOS virtual serial support, broader fault-injection
-coverage, and a future GUI remain follow-up work.
+template. Feature 14 priority transmission is **IN PROGRESS**: manual
+complete-universe sends, bounded queueing, repeat/TTL handling, receiver ACKs,
+retry/recovery, lead-in/lead-out timing, and normal-stream resumption are
+implemented, but the receiver-confirmed priority path has not yet passed the
+60-minute verification requirement.
+The remaining Feature 14 work is long-run reliability and diagnostics for the
+receiver-confirmed path. Native Windows/macOS virtual serial support, broader
+fault-injection coverage, and a future GUI remain follow-up work.
 
 The host implementation has passed 21 automated tests and live validation on
 2026-09-04. The live test opened the real transmitter at `/dev/ttyUSB0`, exposed

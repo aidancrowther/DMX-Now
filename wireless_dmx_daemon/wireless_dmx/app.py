@@ -89,7 +89,10 @@ class WirelessDmxService:
         # Frame sequence is diagnostic only: repeated priority fragments/events
         # can legitimately carry different wireless frame sequences.
         self._priority_events: dict[int, dict] = {}
-        self._priority_acks: dict[tuple[int, int], PriorityAck] = {}
+        # One ACK is retained per submitted event, receiver, and attempt.
+        # Retry attempts are distinct evidence and must not be discarded as
+        # duplicates of the initial attempt.
+        self._priority_acks: dict[tuple[int, int, int], PriorityAck] = {}
         self._priority_ack_summary = PriorityAckSummary()
         self._priority_retry_attempts = 0
         self._priority_retry_recovered = 0
@@ -139,7 +142,10 @@ class WirelessDmxService:
                 "universe": universe, "repeat_count": physical_repeat_count,
                 "ttl_seconds": ttl_seconds or self.config.priority_default_ttl_seconds,
                 "reason": reason, "attempt": 1, "last_attempt_at": time.monotonic(),
-                "retry_count": 0, "terminal": False,
+                "retry_count": 0, "terminal": False, "terminal_reason": None,
+                "transmission_complete": False, "ack_complete": False,
+                "first_attempt_ack_receivers": set(), "ack_receivers": set(),
+                "submitted_at": time.monotonic(), "ack_completed_at": None,
                 "expected_receivers": set(receiver.receiver_id for receiver in self.telemetry.snapshot()
                                            if receiver.link_state.value == "online"),
                 "retry_due_at": None,
@@ -300,7 +306,7 @@ class WirelessDmxService:
         window_failures = previous.window_failure_count
         for raw in report.records:
             received = PriorityAck(**{**raw.__dict__, "received_monotonic": time.monotonic()})
-            key = (received.priority_id, received.receiver_id)
+            key = (received.priority_id, received.receiver_id, received.attempt)
             if key in self._priority_acks:
                 duplicate_records += 1
                 continue
@@ -309,6 +315,14 @@ class WirelessDmxService:
             if event is not None and received.attempt > 1:
                 event["recovered"] = True
                 self._priority_retry_recovered += 1
+            if event is not None:
+                event.setdefault("ack_receivers", set()).add(received.receiver_id)
+                if received.attempt == 1:
+                    event.setdefault("first_attempt_ack_receivers", set()).add(received.receiver_id)
+                expected = event["expected_receivers"]
+                if expected and expected.issubset(event["ack_receivers"]):
+                    event["ack_complete"] = True
+                    event["ack_completed_at"] = event.get("ack_completed_at") or time.monotonic()
             submitted = self._priority_submissions.get(received.priority_id)
             if submitted is None:
                 unknown += 1
@@ -388,6 +402,9 @@ class WirelessDmxService:
                                 if receiver.link_state.value == "online")
             received_ids = {key[1] for key in self._priority_acks if key[0] == priority_id}
             if expected and expected.issubset(received_ids):
+                event["ack_complete"] = True
+                event["transmission_complete"] = True
+                event["terminal_reason"] = "ack_complete"
                 event["terminal"] = True
                 continue
             if event["retry_due_at"] is None:
@@ -417,5 +434,7 @@ class WirelessDmxService:
                     event["last_attempt_at"] = now
             else:
                 if now - event["last_attempt_at"] >= window * 2.0:
+                    event["transmission_complete"] = True
+                    event["terminal_reason"] = "ack_timeout"
                     event["terminal"] = True
                     self._priority_retry_failures += 1

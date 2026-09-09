@@ -182,10 +182,13 @@ class DaemonConfig:
     priority_max_repeat_count: int = 10
     priority_default_ttl_seconds: float = 2.0
     priority_max_ttl_seconds: float = 5.0
-    priority_lead_in_ms: int = 50
-    priority_lead_out_ms: int = 50
-    priority_confirmation_window_ms: int = 450
-    priority_max_attempts: int = 3
+    # The transmitter parses management markers from the same UART as ENTTEC
+    # data. Allow its byte-wise parser time to consume MARK_NEXT_PRIORITY before
+    # the priority universe is emitted.
+    priority_lead_in_ms: int = 500
+    priority_lead_out_ms: int = 500
+    priority_confirmation_window_ms: int = 1500
+    priority_max_attempts: int = 5
     priority_retry_cooldown_min_seconds: float = 1.0
     priority_retry_cooldown_max_seconds: float = 2.5
     priority_normal_quiet_before_ms: int = 500

@@ -160,6 +160,12 @@ static void clearReceiverCache(void) {
     memset(receiverTable, 0, sizeof(receiverTable));
     telemetryHead = 0;
     telemetryTail = 0;
+    /* A daemon restart must not receive ACK records belonging to a previous
+     * priority-ID namespace. Clear the exported ACK ring together with the
+     * receiver telemetry cache so a fresh seeded run cannot see stale IDs. */
+    priorityAckHead = 0;
+    priorityAckTail = 0;
+    priorityAckReportPending = false;
     telemetryReportPending = false;
     telemetryReportRecordIndex = 0;
     telemetryReportRecordCount = 0;

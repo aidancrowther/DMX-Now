@@ -118,6 +118,18 @@ static uint8_t priorityUniqueCount = 0;
 static uint32_t priorityReceivedMask = 0;
 static unsigned long priorityLastActivityMs = 0;
 #define PRIORITY_ACK_QUEUE_SIZE 8U
+#ifndef PRIORITY_STAGING_TIMEOUT_MS
+#define PRIORITY_STAGING_TIMEOUT_MS 500UL
+#endif
+#ifndef PRIORITY_ACK_REPEAT_COUNT
+#define PRIORITY_ACK_REPEAT_COUNT 3U
+#endif
+#ifndef PRIORITY_ACK_REPEAT_INTERVAL_MS
+#define PRIORITY_ACK_REPEAT_INTERVAL_MS 100UL
+#endif
+#ifndef PRIORITY_ACK_LIFETIME_MS
+#define PRIORITY_ACK_LIFETIME_MS 1000UL
+#endif
 struct PriorityAckEntry {
     uint32_t id;
     uint32_t frameSequence;
@@ -125,7 +137,9 @@ struct PriorityAckEntry {
     uint8_t attemptsObserved;
     int8_t rssi;
     unsigned long dueMs;
+    unsigned long scheduledMs;
     uint8_t sendRetries;
+    uint8_t transmissionsSent;
 };
 static PriorityAckEntry priorityAckQueue[PRIORITY_ACK_QUEUE_SIZE];
 static uint8_t priorityAckHead = 0;
@@ -379,7 +393,9 @@ static void schedulePriorityAck(uint32_t id, uint32_t seq, uint8_t attempt) {
     entry.attemptsObserved = priorityRepeatCount;
     entry.rssi = lastRssi;
     entry.dueMs = millis() + 10UL + slot * 12UL + jitter;
+    entry.scheduledMs = millis();
     entry.sendRetries = 0;
+    entry.transmissionsSent = 0;
     priorityAckHead = (uint8_t)((priorityAckHead + 1U) % PRIORITY_ACK_QUEUE_SIZE);
     priorityAckCount++;
 }
@@ -387,6 +403,11 @@ static void schedulePriorityAck(uint32_t id, uint32_t seq, uint8_t attempt) {
 static void transmitPriorityAck(void) {
     if (priorityAckCount == 0 || (long)(millis() - priorityAckQueue[priorityAckTail].dueMs) < 0) return;
     PriorityAckEntry& entry = priorityAckQueue[priorityAckTail];
+    if (millis() - entry.scheduledMs >= PRIORITY_ACK_LIFETIME_MS) {
+        priorityAckTail = (uint8_t)((priorityAckTail + 1U) % PRIORITY_ACK_QUEUE_SIZE);
+        priorityAckCount--;
+        return;
+    }
     PriorityCompletionPacket packet;
     packet.magic = DMX_PACKET_MAGIC;
     packet.protocolVersion = DMX_PROTO_VERSION;
@@ -402,8 +423,13 @@ static void transmitPriorityAck(void) {
     if (quickEspNow.readyToSendData() &&
         quickEspNow.sendBcast(reinterpret_cast<const uint8_t*>(&packet), sizeof(packet)) == COMMS_SEND_OK) {
         priorityCompletionsSent++;
-        priorityAckTail = (uint8_t)((priorityAckTail + 1U) % PRIORITY_ACK_QUEUE_SIZE);
-        priorityAckCount--;
+        entry.transmissionsSent++;
+        if (entry.transmissionsSent >= PRIORITY_ACK_REPEAT_COUNT) {
+            priorityAckTail = (uint8_t)((priorityAckTail + 1U) % PRIORITY_ACK_QUEUE_SIZE);
+            priorityAckCount--;
+        } else {
+            entry.dueMs = millis() + PRIORITY_ACK_REPEAT_INTERVAL_MS;
+        }
     } else {
         if (priorityAckSendFailures < 0xFFFFFFFFUL) priorityAckSendFailures++;
         if (entry.sendRetries < 255U) entry.sendRetries++;
@@ -899,6 +925,14 @@ void loop(void) {
         stagingReceivedMask = 0;
         stagingUniqueCount  = 0;
         coverageClear();
+    }
+
+    if (priorityActive &&
+        (millis() - priorityLastActivityMs) >= PRIORITY_STAGING_TIMEOUT_MS) {
+        priorityActive = false;
+        priorityReceivedMask = 0;
+        priorityUniqueCount = 0;
+        priorityCoverageClear();
     }
 
     if ((long)(millis() - nextTelemetryMs) >= 0) {
