@@ -92,7 +92,10 @@ static const unsigned long TRANSMITTER_RESET_RECOVERY_MS = 3000UL;
 /* Bounded callback->loop handoff ring. One more than QuickESPNow's own RX
  * queue depth (ESPNOW_QUEUE_SIZE = 3), so a tight 3-fragment burst is never
  * dropped by our own architecture. Static, bounded, no dynamic allocation. */
-static const uint8_t RX_RING_SIZE = 4;
+/* Priority delivery can arrive as a three-fragment burst while normal traffic
+ * is already in the callback handoff. Leave headroom so a timing variation in
+ * loop() cannot discard the targeted priority fragments. */
+static const uint8_t RX_RING_SIZE = 8;
 static const uint8_t RX_SLOT_MAX  = ESPNOW_MAX_MESSAGE_LENGTH; /* 255 */
 
 /* --------------------------------------------------------------------------
@@ -128,7 +131,7 @@ static unsigned long priorityLastActivityMs = 0;
 #define PRIORITY_ACK_REPEAT_INTERVAL_MS 100UL
 #endif
 #ifndef PRIORITY_ACK_LIFETIME_MS
-#define PRIORITY_ACK_LIFETIME_MS 1000UL
+#define PRIORITY_ACK_LIFETIME_MS 2500UL
 #endif
 struct PriorityAckEntry {
     uint32_t id;
@@ -223,6 +226,8 @@ static unsigned long integrityFailures      = 0;
 static unsigned long rxRingOverflow         = 0;
 static unsigned long resetRebaselined       = 0;
 static unsigned long priorityFramesAccepted = 0;
+static unsigned long priorityPacketsSeen = 0;
+static unsigned long radioPacketsSeen = 0;
 static unsigned long priorityDuplicateFragments = 0;
 static unsigned long priorityMalformedPackets = 0;
 static unsigned long priorityCompletionsSent = 0;
@@ -283,6 +288,16 @@ static void transmitTelemetry(void) {
     packet.lastRssi = lastRssi;
     packet.firmwareVersion = TELEMETRY_FIRMWARE_VERSION;
     packet.telemetrySequence = telemetrySequence++;
+    /* Priority counters are exported through the existing telemetry fields so
+     * targeted-delivery failures can be diagnosed without using UART0, which
+     * is owned by the DMX output driver. */
+    packet.completeUniverses = saturatingU32(priorityFramesAccepted);
+    packet.incompleteUniverses = saturatingU32(priorityMalformedPackets);
+    packet.malformedPackets = saturatingU32(priorityDuplicateFragments);
+    packet.lastActiveSequence = saturatingU32(priorityAckQueueDrops);
+    packet.timeSinceLastUniverseMs = saturatingU32(priorityCompletionsSent);
+    packet.uptimeSeconds = saturatingU32(priorityPacketsSeen);
+    packet.batteryLow = (uint8_t)(radioPacketsSeen > 255UL ? 255U : radioPacketsSeen);
 
     if (!quickEspNow.readyToSendData()) {
         telemetryRetryCount++;
@@ -425,8 +440,14 @@ static void transmitPriorityAck(void) {
     packet.attemptsObserved = entry.attemptsObserved;
     packet.lastRssi = entry.rssi;
     const uint8_t* destination = entry.sourceMac;
-    if (quickEspNow.readyToSendData() &&
-        quickEspNow.send(destination, reinterpret_cast<const uint8_t*>(&packet), sizeof(packet)) == COMMS_SEND_OK) {
+#if defined(PRIORITY_ACK_BROADCAST_DIAGNOSTIC)
+    const comms_send_error_t sendResult = quickEspNow.sendBcast(
+        reinterpret_cast<const uint8_t*>(&packet), sizeof(packet));
+#else
+    const comms_send_error_t sendResult = quickEspNow.send(
+        destination, reinterpret_cast<const uint8_t*>(&packet), sizeof(packet));
+#endif
+    if (sendResult == COMMS_SEND_OK) {
         priorityCompletionsSent++;
         entry.transmissionsSent++;
         if (entry.transmissionsSent >= PRIORITY_ACK_REPEAT_COUNT) {
@@ -439,7 +460,7 @@ static void transmitPriorityAck(void) {
         if (priorityAckSendFailures < 0xFFFFFFFFUL) priorityAckSendFailures++;
         if (entry.sendRetries < 255U) entry.sendRetries++;
         if (priorityAckSendRetries < 0xFFFFFFFFUL) priorityAckSendRetries++;
-        entry.dueMs = millis() + 25UL + (priorityHash(entry.id ^ receiverId) % 25UL);
+        entry.dueMs = millis() + 50UL + (priorityHash(entry.id ^ receiverId) % 50UL);
     }
 }
 
@@ -456,6 +477,7 @@ static bool priorityCanonicalTile(uint8_t index, uint16_t offset, uint8_t len,
 
 static void processPriorityPacket(const uint8_t* pkt, uint8_t len, int8_t rssi,
                                   const uint8_t* sourceMac) {
+    if (priorityPacketsSeen < 0xFFFFFFFFUL) priorityPacketsSeen++;
     if (len < PRIORITY_HEADER_SIZE + 1U) {
         priorityMalformedPackets++;
         return;
@@ -470,7 +492,9 @@ static void processPriorityPacket(const uint8_t* pkt, uint8_t len, int8_t rssi,
         priorityMalformedPackets++;
         return;
     }
+#if !defined(RX_IGNORE_PRIORITY_TARGET_DIAGNOSTIC)
     if (hdr.targetReceiverId != 0U && hdr.targetReceiverId != receiverId) return;
+#endif
     uint16_t offset;
     uint8_t tileLen;
     if (!priorityCanonicalTile(hdr.fragmentIndex, hdr.dataOffset, hdr.payloadLength,
@@ -541,6 +565,7 @@ static void processPriorityPacket(const uint8_t* pkt, uint8_t len, int8_t rssi,
 void dataReceived(uint8_t* address, uint8_t* data, uint8_t len, signed int rssi, bool broadcast) {
     (void)address;
     (void)broadcast;
+    if (radioPacketsSeen < 0xFFFFFFFFUL) radioPacketsSeen++;
 
     /* Drop anything that cannot be a valid fragment (header + >=1 payload byte). */
     if (len < (DMX_HEADER_SIZE + 1) || len > RX_SLOT_MAX) {

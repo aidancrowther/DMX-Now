@@ -411,12 +411,16 @@ class WirelessDmxService:
                 state = event.get("receiver_states", {}).get(received.receiver_id)
                 if state is not None:
                     state["ack"] = True
+                    state["failed"] = False
                     if event.get("current_receiver") == received.receiver_id:
                         event["receiver_index"] += 1
                         self._start_priority_receiver(event, received.priority_id, time.monotonic())
                 if expected and expected.issubset(event["ack_receivers"]):
                     event["ack_complete"] = True
                     event["ack_completed_at"] = event.get("ack_completed_at") or time.monotonic()
+                    event["terminal"] = True
+                    event["transmission_complete"] = True
+                    event["terminal_reason"] = "ack_complete"
             submitted = self._priority_submissions.get(received.priority_id)
             if submitted is None:
                 unknown += 1
@@ -502,11 +506,26 @@ class WirelessDmxService:
                     self._start_priority_receiver(event, priority_id, now)
                     continue
                 started = state["started_at"] or event["submitted_at"]
-                if now - started >= self.config.priority_receiver_budget_seconds:
-                    state["failed"] = True
-                    event["receiver_index"] += 1
-                    event["current_receiver"] = None
-                    self._start_priority_receiver(event, priority_id, now)
+                receiver_deadline = (
+                    started + self.config.priority_receiver_budget_seconds +
+                    self.config.priority_lead_in_ms / 1000.0 +
+                    self.config.priority_confirmation_window_ms / 1000.0 +
+                    0.5
+                )
+                if now >= receiver_deadline:
+                    if state["attempt"] < self.config.priority_max_attempts:
+                        # Retry the same receiver inside its transaction budget;
+                        # do not mark it failed until all configured attempts
+                        # have been exhausted.
+                        state["started_at"] = now
+                        event["retry_count"] += 1
+                        event["last_attempt_at"] = now
+                        self._start_priority_receiver(event, priority_id, now)
+                    else:
+                        state["failed"] = True
+                        event["receiver_index"] += 1
+                        event["current_receiver"] = None
+                        self._start_priority_receiver(event, priority_id, now)
                 continue
             expected = event["expected_receivers"]
             if not expected:

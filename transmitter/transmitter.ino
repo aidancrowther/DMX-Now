@@ -453,6 +453,10 @@ static void serviceEnttecInput(void) {
                         priorityTargetReceiverIdForNextUniverse = request.targetReceiverId;
                         priorityRepeatCountForNextUniverse = request.repeatCount;
                         priorityAttemptForNextUniverse = request.attempt;
+                        TX_LOG("TX PRIORITY MARK id=%lu target=%08lX attempt=%u repeats=%u\n",
+                               (unsigned long)request.priorityId,
+                               (unsigned long)request.targetReceiverId,
+                               request.attempt, request.repeatCount);
                     }
                 }
                 managementState = MGMT_WAIT_SYNC_1;
@@ -805,8 +809,17 @@ static void submitPriorityFragment(uint32_t seq, uint8_t fragIdx) {
     pkt.payloadLength = payloadLength;
     memcpy(packetBuffer, &pkt, sizeof(pkt));
     memcpy(packetBuffer + PRIORITY_HEADER_SIZE, g_txUniverse + offset, payloadLength);
-    if (priorityTargetReceiverIdForNextUniverse == 0U) {
-        quickEspNow.sendBcast(packetBuffer, (uint16_t)(PRIORITY_HEADER_SIZE + payloadLength));
+    if (priorityTargetReceiverIdForNextUniverse == 0U
+#if defined(PRIORITY_FORCE_BROADCAST_DIAGNOSTIC)
+        || true
+#endif
+    ) {
+        const comms_send_error_t result = quickEspNow.sendBcast(
+            packetBuffer, (uint16_t)(PRIORITY_HEADER_SIZE + payloadLength));
+#if defined(TRANSMITTER_VERBOSE_LOGGING)
+        TX_LOG("TX PRIORITY broadcast frag=%u len=%u result=%d\n", fragIdx,
+               (unsigned)(PRIORITY_HEADER_SIZE + payloadLength), result);
+#endif
     } else {
         uint8_t destination[6];
         bool found = false;
@@ -819,8 +832,14 @@ static void submitPriorityFragment(uint32_t seq, uint8_t fragIdx) {
             }
         }
         if (found) {
-            quickEspNow.send(destination, packetBuffer,
-                             (uint16_t)(PRIORITY_HEADER_SIZE + payloadLength));
+            const comms_send_error_t result = quickEspNow.send(
+                destination, packetBuffer,
+                (uint16_t)(PRIORITY_HEADER_SIZE + payloadLength));
+#if defined(TRANSMITTER_VERBOSE_LOGGING)
+            TX_LOG("TX PRIORITY unicast target=%08lX frag=%u len=%u result=%d\n",
+                   (unsigned long)priorityTargetReceiverIdForNextUniverse,
+                   fragIdx, (unsigned)(PRIORITY_HEADER_SIZE + payloadLength), result);
+#endif
         }
     }
 }
@@ -966,6 +985,17 @@ void loop(void) {
 
         case TX_SENDING:
             if (currentFragment < txSlotCount) {
+                if (currentFrameIsPriority && !quickEspNow.readyToSendData()) {
+                    break;
+                }
+                if (currentFrameIsPriority && priorityTargetReceiverIdForNextUniverse != 0U &&
+                    g_sendConfirmations < currentFragment) {
+                    /* Targeted delivery is serialized fragment-by-fragment.
+                     * This gives the receiver a confirmed radio boundary before
+                     * the next fragment arrives instead of creating a burst in
+                     * the shared ESP-NOW queue. */
+                    break;
+                }
                 if (currentFrameIsPriority) {
                     submitPriorityFragment(g_frameSequence, currentFragment);
                 } else {
@@ -996,7 +1026,11 @@ void loop(void) {
                 /* Frame fully transmitted; advance to the next one. */
                 const bool completedPriority = currentFrameIsPriority;
                 currentFrameIsPriority = false;
-                priorityRepeatsRemaining = 0;
+                /* A MARK_NEXT_PRIORITY command may arrive while a normal frame
+                 * is draining. Do not erase the pending priority transaction;
+                 * only clear the repeat budget after a priority frame itself
+                 * has completed. */
+                if (completedPriority) priorityRepeatsRemaining = 0;
                 g_frameSequence++;
                 lastFrameGenerationTime = now;
 #if defined(TEST_DELAYED_FRAGMENT)

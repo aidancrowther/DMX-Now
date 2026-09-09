@@ -100,7 +100,8 @@ static constexpr uint8_t DMX_HEADER_SIZE       = 14U;
 static constexpr uint8_t DMX_PAYLOAD_SIZE      = ESP_NOW_MAX_DATA_LEN - DMX_HEADER_SIZE; // 236
 static constexpr uint8_t DMX_TOTAL_PACKET_SIZE = DMX_HEADER_SIZE + DMX_PAYLOAD_SIZE;     // 250
 static constexpr uint8_t PRIORITY_HEADER_SIZE  = 24U;
-static constexpr uint8_t PRIORITY_PAYLOAD_SIZE = ESP_NOW_MAX_DATA_LEN - PRIORITY_HEADER_SIZE; // 230
+static constexpr uint8_t PRIORITY_PAYLOAD_SIZE =
+    ESP_NOW_MAX_DATA_LEN - PRIORITY_HEADER_SIZE; // 226 with the targeted header
 
 /* --------------------------------------------------------------------------
  * Fragment counts for a 512-byte universe in 236-byte payloads:

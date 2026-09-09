@@ -272,6 +272,33 @@ class ServiceTests(unittest.TestCase):
         self.assertTrue(service._priority_events[42]["ack_complete"])
         self.assertEqual(service._priority_events[42]["ack_receivers"], {7})
 
+    def test_late_ack_upgrades_receiver_timeout_to_success(self):
+        service = WirelessDmxService(
+            DaemonConfig(virtual_port_path="/tmp/wireless-dmx-late-ack"),
+            serial_factory=lambda: FakeSerial(), virtual_backend=LinuxPtyBackend(),
+        )
+        service._priority_submissions[42] = time.monotonic()
+        service._priority_events[42] = {
+            "universe": bytes(512), "repeat_count": 1, "ttl_seconds": 1.0,
+            "reason": "test", "attempt": 1, "last_attempt_at": time.monotonic(),
+            "retry_count": 0, "terminal": True, "terminal_reason": "receiver_timeout",
+            "transmission_complete": True, "ack_complete": False,
+            "expected_receivers": {7}, "ack_receivers": set(),
+            "first_attempt_ack_receivers": set(), "ack_completed_at": None,
+            "receiver_states": {7: {"attempt": 1, "started_at": time.monotonic(),
+                                    "ack": False, "failed": True}},
+            "receiver_order": [7], "receiver_index": 1, "current_receiver": None,
+        }
+        record = ACK_RECORD.pack(42, 7, 101, 1, 1, 1, -41, 1234, 37)
+        payload = ACK_HEADER.pack(1, 1, 7, 1, 0, 0, 0) + record
+        body = bytes((1, MANAGEMENT_PRIORITY_ACKS)) + struct.pack("<H", len(payload)) + payload
+        frame = MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body))
+        service._on_transmitter_data(frame)
+        event = service._priority_events[42]
+        self.assertTrue(event["ack_complete"])
+        self.assertEqual(event["terminal_reason"], "ack_complete")
+        self.assertFalse(event["receiver_states"][7]["failed"])
+
     def test_management_queue_does_not_evict_dmx(self):
         fake = FakeSerial()
         from wireless_dmx.transmitter.connection import TransmitterConnection
