@@ -103,7 +103,8 @@ def receiver_display_segments(receiver) -> tuple[str, str, str, str, str]:
         receiver.link_state.value,
         "LOW" if receiver.battery_low else "OK",
         f"{receiver.transmitter_rssi:>3}dBm {quality:<4}{bar(quality_value, 1, 8)}",
-        f"{receiver.transmitter_last_seen_ms:>7}ms {receiver.complete_universes:>9} {receiver.incomplete_universes:>9}",
+        f"{receiver.transmitter_last_seen_ms:>7}ms {receiver.complete_universes:>9} {receiver.incomplete_universes:>9} "
+        f"FS:{receiver.failsafe_mode}{'*' if receiver.failsafe_active else ''}/{receiver.failsafe_timeout_seconds}s",
     )
 
 

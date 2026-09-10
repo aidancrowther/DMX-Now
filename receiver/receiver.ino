@@ -67,7 +67,7 @@ static const unsigned long TRANSMITTER_RESET_RECOVERY_MS = 3000UL;
 #ifndef TELEMETRY_RETRY_BACKOFF_MS
 #define TELEMETRY_RETRY_BACKOFF_MS 250UL
 #endif
-#define TELEMETRY_FIRMWARE_VERSION 1U
+#define TELEMETRY_FIRMWARE_VERSION 2U
 
 /* Battery comparator filtering.  Override either value with a compiler
  * definition when a different hardware debounce period is required. */
@@ -76,6 +76,12 @@ static const unsigned long TRANSMITTER_RESET_RECOVERY_MS = 3000UL;
 #endif
 #ifndef BATTERY_LOW_CLEAR_MS
 #define BATTERY_LOW_CLEAR_MS 5000UL
+#endif
+#ifndef RECEIVER_FAILSAFE_DEFAULT_MODE
+#define RECEIVER_FAILSAFE_DEFAULT_MODE RECEIVER_FAILSAFE_HOLD
+#endif
+#ifndef RECEIVER_FAILSAFE_DEFAULT_TIMEOUT_SECONDS
+#define RECEIVER_FAILSAFE_DEFAULT_TIMEOUT_SECONDS 60U
 #endif
 
 /* Feature 5 used a deterministic channel pattern to prove fragment assembly.
@@ -122,6 +128,12 @@ static uint32_t priorityReceivedMask = 0;
 static unsigned long priorityLastActivityMs = 0;
 static uint8_t normalWriteAllowed[DMX_UNIVERSE_SIZE];
 static bool hardGatesActive = false;
+static uint8_t failsafeMode = RECEIVER_FAILSAFE_DEFAULT_MODE;
+static uint16_t failsafeTimeoutSeconds = RECEIVER_FAILSAFE_DEFAULT_TIMEOUT_SECONDS;
+static uint32_t failsafeGeneration = 0;
+static bool failsafeActive = false;
+static uint32_t failsafeActivations = 0;
+static uint8_t failsafeBlackoutUniverse[DMX_UNIVERSE_SIZE];
 static bool priorityGateMetadataActive = false;
 static bool priorityGateMetadataExpected = false;
 static uint32_t priorityGateMetadataId = 0;
@@ -259,10 +271,31 @@ static uint32_t receiverId = 0;
 static uint8_t receiverMac[6];
 static uint32_t telemetrySequence = 0;
 static unsigned long nextTelemetryMs = 0;
+
+static void setDmxOutputEnabled(bool enabled);
+static void incrementCounter(unsigned long& counter);
 static uint16_t telemetryRetryCount = 0;
 
 static uint32_t saturatingU32(unsigned long value) {
     return (value > 0xFFFFFFFFUL) ? 0xFFFFFFFFUL : (uint32_t)value;
+}
+
+static void applyFailsafeOutput(void) {
+    if (failsafeActive || !hasActiveWirelessFrame ||
+        (millis() - lastCompletionTimeMs) < (unsigned long)failsafeTimeoutSeconds * 1000UL) return;
+    failsafeActive = true;
+    if (failsafeActivations < 0xFFFFFFFFUL) failsafeActivations++;
+    if (failsafeMode == RECEIVER_FAILSAFE_BLACKOUT) {
+        dmxA.setChans(failsafeBlackoutUniverse, DMX_UNIVERSE_SIZE, 1);
+    } else if (failsafeMode == RECEIVER_FAILSAFE_DISABLE_LINE) {
+        setDmxOutputEnabled(false);
+    }
+}
+
+static void recoverFailsafeOutput(void) {
+    if (!failsafeActive) return;
+    failsafeActive = false;
+    if (failsafeMode == RECEIVER_FAILSAFE_DISABLE_LINE) setDmxOutputEnabled(true);
 }
 
 static void incrementCounter(unsigned long& counter) {
@@ -306,16 +339,11 @@ static void transmitTelemetry(void) {
     packet.lastRssi = lastRssi;
     packet.firmwareVersion = TELEMETRY_FIRMWARE_VERSION;
     packet.telemetrySequence = telemetrySequence++;
-    /* Priority counters are exported through the existing telemetry fields so
-     * targeted-delivery failures can be diagnosed without using UART0, which
-     * is owned by the DMX output driver. */
-    packet.completeUniverses = saturatingU32(priorityFramesAccepted);
-    packet.incompleteUniverses = saturatingU32(priorityMalformedPackets);
-    packet.malformedPackets = saturatingU32(priorityDuplicateFragments);
-    packet.lastActiveSequence = saturatingU32(priorityAckQueueDrops);
-    packet.timeSinceLastUniverseMs = saturatingU32(priorityCompletionsSent);
-    packet.uptimeSeconds = saturatingU32(priorityPacketsSeen);
-    packet.batteryLow = (uint8_t)(radioPacketsSeen > 255UL ? 255U : radioPacketsSeen);
+    packet.failsafeMode = failsafeMode;
+    packet.failsafeActive = failsafeActive ? 1U : 0U;
+    packet.failsafeTimeoutSeconds = failsafeTimeoutSeconds;
+    packet.failsafeGeneration = failsafeGeneration;
+    packet.failsafeActivations = failsafeActivations;
 
     if (!quickEspNow.readyToSendData()) {
         telemetryRetryCount++;
@@ -755,6 +783,7 @@ static void promoteActive(uint32_t seq) {
 
     /* Load the newly active universe into the physical DMX output. */
     dmxA.setChans(activeUniverse, DMX_UNIVERSE_SIZE, 1);
+    recoverFailsafeOutput();
 
     /* Reset staging metadata for the next frame (do NOT clear the 512 bytes). */
     stagingActive       = false;
@@ -853,6 +882,34 @@ static void processPacket(const uint8_t* pkt, uint8_t len, int8_t rssi,
             metadata.protocolVersion == DMX_PROTO_VERSION &&
             metadata.universeId == DMX_UNIVERSE_ID) {
             stagePriorityGateMetadata(metadata);
+        }
+        return;
+    }
+    if (len == sizeof(ReceiverFailsafeConfigPacket) &&
+        pkt[3] == RECEIVER_FAILSAFE_CONFIG_PACKET_TYPE) {
+        ReceiverFailsafeConfigPacket config;
+        memcpy(&config, pkt, sizeof(config));
+        if (config.magic == DMX_PACKET_MAGIC &&
+            config.protocolVersion == DMX_PROTO_VERSION &&
+            config.universeId == DMX_UNIVERSE_ID &&
+            (config.targetReceiverId == 0U || config.targetReceiverId == receiverId) &&
+            config.mode <= RECEIVER_FAILSAFE_DISABLE_LINE &&
+            config.timeoutSeconds >= 30U && config.timeoutSeconds <= 3600U) {
+            const bool changed = failsafeMode != config.mode ||
+                                 failsafeTimeoutSeconds != config.timeoutSeconds ||
+                                 failsafeGeneration != config.generation;
+            failsafeMode = config.mode;
+            failsafeTimeoutSeconds = config.timeoutSeconds;
+            failsafeGeneration = config.generation;
+            if (changed && failsafeMode == RECEIVER_FAILSAFE_DISABLE_LINE && !hasActiveWirelessFrame) {
+                setDmxOutputEnabled(false);
+            } else if (changed && failsafeMode != RECEIVER_FAILSAFE_DISABLE_LINE && !failsafeActive) {
+                setDmxOutputEnabled(true);
+            }
+            if (changed && failsafeActive) {
+                failsafeActive = false;
+                if (failsafeMode == RECEIVER_FAILSAFE_DISABLE_LINE) setDmxOutputEnabled(true);
+            }
         }
         return;
     }
@@ -1011,7 +1068,7 @@ void setup(void) {
     /* Enable the physical MAX3485 output now that init is complete and a
      * valid (zero) universe is loaded. Left enabled: DMX output is
      * continuous, independent of wireless updates. */
-    setDmxOutputEnabled(true);
+    setDmxOutputEnabled(RECEIVER_FAILSAFE_DEFAULT_MODE != RECEIVER_FAILSAFE_DISABLE_LINE);
 
     delay(200);
 
@@ -1068,6 +1125,8 @@ void loop(void) {
         priorityMetadataExpired++;
         clearPriorityGateMetadata();
     }
+
+    applyFailsafeOutput();
 
     if ((long)(millis() - nextTelemetryMs) >= 0) {
         transmitTelemetry();

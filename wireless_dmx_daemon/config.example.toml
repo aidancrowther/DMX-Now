@@ -28,6 +28,10 @@ max_report_age_seconds = 5.0
 management_only = []
 locked = []
 
+[receiver_failsafe]
+mode = "hold"
+timeout_seconds = 60
+
 [artnet]
 enabled = true
 bind_host = "0.0.0.0"

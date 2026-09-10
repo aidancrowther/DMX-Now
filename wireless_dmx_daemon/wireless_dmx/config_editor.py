@@ -30,6 +30,8 @@ EDITABLE_FIELDS = (
     ("Priority lead-out ms", "priority_lead_out_ms", int),
     ("Priority confirmation window ms", "priority_confirmation_window_ms", int),
     ("Priority max consecutive events", "priority_max_consecutive_events", int),
+    ("Receiver fail-safe mode", "receiver_failsafe_mode", str),
+    ("Receiver fail-safe timeout seconds", "receiver_failsafe_timeout_seconds", int),
 )
 
 

@@ -9,7 +9,7 @@ import os
 import tempfile
 from pathlib import Path
 
-from .models import DaemonConfig
+from .models import DaemonConfig, ReceiverFailsafeMode
 
 
 DEFAULT_CONFIG_PATH = "default.conf"
@@ -35,6 +35,9 @@ def load_config(path: str | None = None) -> DaemonConfig:
         gates = data.get("channel_gates", {})
         values["management_only_channels"] = tuple(gates.get("management_only", ()))
         values["locked_channels"] = tuple(gates.get("locked", ()))
+        failsafe = data.get("receiver_failsafe", {})
+        values["receiver_failsafe_mode"] = ReceiverFailsafeMode(failsafe.get("mode", "hold"))
+        values["receiver_failsafe_timeout_seconds"] = failsafe.get("timeout_seconds", 60)
     aliases = {"device": "transmitter_device", "baud": "transmitter_baud",
                "data_bits": "transmitter_data_bits", "parity": "transmitter_parity",
                "stop_bits": "transmitter_stop_bits", "rate": "pacer_rate_hz",
@@ -80,6 +83,8 @@ def save_config(config: DaemonConfig, path: str = DEFAULT_CONFIG_PATH) -> None:
                        "max_report_age_seconds": config.telemetry_max_report_age_seconds},
         "channel_gates": {"management_only": list(config.management_only_channels),
                           "locked": list(config.locked_channels)},
+        "receiver_failsafe": {"mode": getattr(config.receiver_failsafe_mode, "value", config.receiver_failsafe_mode),
+                               "timeout_seconds": config.receiver_failsafe_timeout_seconds},
     }
     lines = ["# Wireless DMX daemon configuration\n"]
     for section, values in sections.items():

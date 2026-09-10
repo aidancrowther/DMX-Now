@@ -17,7 +17,7 @@ from .telemetry import TelemetryStore
 from .transmitter.connection import TransmitterConnection
 from .transmitter.management import (CacheClearedResponse, ManagementParser, PriorityAckReport,
                                      clear_receiver_cache_request, get_priority_acks_request, get_telemetry_request,
-                                     mark_next_priority)
+                                      mark_next_priority, set_receiver_failsafe_request)
 from .protocols import DMX_GATE_MASK_SIZE
 from .protocols import PRIORITY_COMPLETE_GATE_APPLIED
 from .virtual_serial.linux_pty import LinuxPtyBackend
@@ -110,7 +110,8 @@ class WirelessDmxService:
         self._priority_retry_failures = 0
         self._normal_quiet_until = 0.0
         self._priority_output_active = False
-        self._priority_output_active = False
+        self._failsafe_generation = int(time.time()) & 0xFFFFFFFF
+        self._last_failsafe_send = 0.0
         self._logger = logging.getLogger("wireless_dmx.service")
 
     def set_manual_channel(self, channel: int, value: int) -> None:
@@ -503,6 +504,12 @@ class WirelessDmxService:
                     # empty. Otherwise the first report can be old cache data.
                     time.sleep(0.001)
                     continue
+                if now - self._last_failsafe_send >= 1.0:
+                    self.transmitter.send_priority_management(set_receiver_failsafe_request(
+                        getattr(self.config.receiver_failsafe_mode, "value", self.config.receiver_failsafe_mode),
+                        self.config.receiver_failsafe_timeout_seconds,
+                        self._failsafe_generation))
+                    self._last_failsafe_send = now
                 for sequence, started in list(self._report_part_times.items()):
                     if now - started > self.config.telemetry_max_report_age_seconds:
                         self._report_parts.pop(sequence, None)

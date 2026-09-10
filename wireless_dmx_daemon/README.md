@@ -150,53 +150,53 @@ complete for the validated Linux/20 Hz deployment. The package has
 standard-library core models, a streaming ENTTEC parser, Feature 11 management
 codec, bounded latest-state pacer, reconnecting transmitter adapter, Linux PTY
 backend, TOML loading, CLI entry point, structured logging, and a systemd unit
-template. Feature 12 reliability/throughput testing, Feature 14 targeted
-priority transmission, and Feature 15 receiver hard gating are **COMPLETE for
-the validated Linux/20 Hz hardware configuration**: manual complete-universe sends,
+template. Feature 12 reliability/throughput testing, Feature 13 hardware
+fail-safe refinement, Feature 14 targeted priority transmission, and Feature 15
+receiver hard gating are **COMPLETE for the validated Linux/20 Hz hardware
+configuration**: manual complete-universe sends,
 bounded queueing, repeat/TTL handling, receiver ACKs, per-receiver
 retry/recovery, lead-in/lead-out timing, receiver-side runtime hard locks, and
 normal-stream resumption are implemented. The detailed priority completion
 record is
 `../docs/priority-packet-substantial-completion.md`.
-The current hardware qualification is complete for both receivers, including
-two-receiver hard-gate establishment/unlock, normal-packet blocking, normal
-resumption, receiver removal/reconnection, transmitter reset recovery, daemon
-restart recovery, PTY client disconnect/reconnection, and a 20-event
-first-attempt priority soak. Native Windows/macOS virtual serial support,
-broader platform/application coverage, and a future GUI remain follow-up work.
+The current hardware qualification covers dynamic receiver discovery, hard-gate
+establishment/unlock, normal-packet blocking, normal resumption, receiver
+removal/reconnection, transmitter reset recovery, daemon restart recovery, PTY
+client disconnect/reconnection, priority soak, and all three receiver fail-safe
+modes. Native Windows/macOS virtual serial support, broader platform/application
+coverage, and a future GUI remain follow-up work.
 
-The host implementation has passed 66 automated tests and live validation on
-2026-09-04. The live test opened the real transmitter at `/dev/ttyUSB0`, exposed
-a Linux PTY, forwarded a full ENTTEC universe, and received telemetry for two
-active receivers. The CLI status command also reported the same two receivers.
+The host implementation has passed the automated suite and live validation. The
+live path opens the configured transmitter, exposes a Linux PTY, forwards full
+ENTTEC universes, and receives telemetry from dynamically discovered receivers.
 The existing ESP8266/Mega 660-second acceptance run remains the authoritative
 physical DMX/RF evidence; the host daemon's live test confirms the additional
 PTY, parser, pacing, transmitter-serial, and telemetry integration path.
 
-### Feature 12 completion evidence
+### Feature 12 and Feature 13 completion evidence
 
-The final two-receiver acceptance completed with 36,000 DMX frames submitted
-at 20 Hz and 79,869/79,869 Mega checks passing. Thirty priority events produced
-60 receiver completions with zero event failures, retries, invalid ACKs, or
-unknown ACKs.
+The final lab acceptance completed with 36,000 DMX frames submitted at 20 Hz
+and 79,869/79,869 Mega checks passing. Priority events produced no failed,
+retried, invalid, or unknown completions.
 
-The final two-receiver hard-gate test passed both lock and unlock transactions:
+The hard-gate test passed lock and unlock transactions:
 
-* both expected receivers reported `PRIORITY_COMPLETE_GATE_APPLIED`;
+* all expected receivers reported `PRIORITY_COMPLETE_GATE_APPLIED`;
 * both transactions succeeded on the first attempt with zero retries;
 * normal traffic remained blocked at the locked priority value;
 * normal output resumed after the unlock transaction;
 * all Mega measurement windows had zero failures.
 
-The 20-event two-receiver soak produced 20/20 first-attempt successes, zero
+The priority soak produced 20/20 first-attempt successes, zero
 failed events, zero retry recoveries, zero invalid/unknown ACKs, and zero retry
 failures. The duplicate ACK records reported by the soak are expected repeated
 physical completion records and did not affect event completion.
 
 Hardware intervention coverage also passed: receiver removal/reconnection,
 transmitter reset with the daemon running, daemon restart, and PTY client
-disconnect/reconnection all recovered with valid normal DMX output. The host
-suite passed 66 tests after the final changes.
+disconnect/reconnection all recovered with valid normal DMX output. Feature 13
+fail-safe coverage passed `hold`, `blackout`, and `disable_line` with finite
+Mega measurements and automatic recovery. See `../docs/lab-validation.md`.
 
 The default command is:
 
@@ -255,21 +255,18 @@ is enabled, disabled, or used simultaneously. When both sources are enabled,
 `input_source_policy = "latest"` accepts the most recent valid frame;
 `"serial"` or `"artnet"` can enforce exclusive source ownership.
 
-The 30-minute end-to-end acceptance runner completed successfully on 2026-09-04
-with the real transmitter at `/dev/ttyUSB0`, the Arduino Mega monitor at
-`/dev/ttyUSB1`, and two active receivers. It submitted 36,000 full-universe DMX
-frames at 20 Hz with zero daemon pacer drops. The Mega performed 79,880 physical
-DMX checks, with 79,880 passes and zero failures; reported no-data time was
-19 ms. The daemon maintained transmitter and virtual-client connectivity and
-observed both receivers throughout. Evidence is retained under
-`runs/30min-acceptance/`.
+The end-to-end acceptance runner is intended for a host with a transmitter, a
+physical DMX monitor, and the expected receivers online. It submits complete
+universes at the configured rate, validates the physical monitor output, and
+logs daemon telemetry/progress. Setup-specific evidence is documented in
+`../docs/lab-validation.md`.
 
 The end-to-end acceptance runner is:
 
 ```bash
 python3 tests/run_30min_acceptance.py \
-  --tx-port /dev/ttyUSB0 \
-  --mega-port /dev/ttyUSB1 \
+  --tx-port <transmitter-device> \
+  --mega-port <monitor-device> \
   --seconds 1800 \
   --run-dir runs/30min-acceptance
 ```
@@ -290,13 +287,13 @@ python3 -m wireless_dmx --config config.example.toml status
 The single wrapper application is the curses dashboard:
 
 ```bash
-python3 wireless_dmx_dashboard.py --config config.example.toml --mega-port /dev/ttyUSB1
+python3 wireless_dmx_dashboard.py --config config.example.toml --mega-port <monitor-device>
 ```
 
 or, after installing the package:
 
 ```bash
-wireless-dmx-dashboard --config config.example.toml --mega-port /dev/ttyUSB1
+wireless-dmx-dashboard --config config.example.toml --mega-port <monitor-device>
 ```
 
 The dashboard owns one in-process `WirelessDmxService`, so it is the preferred
@@ -322,7 +319,7 @@ than normal release controls. Inside Advanced:
 
 | Key | Action |
 |---|---|
-| `m` | Connect to `/dev/ttyUSB1` and start a Mega measurement |
+| `m` | Connect to the configured monitor and start a Mega measurement |
 | `a` | Launch the external 30-minute acceptance runner |
 | `b` | Abort the active Mega measurement |
 | `x` | Return to the main dashboard |

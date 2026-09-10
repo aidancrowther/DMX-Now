@@ -52,6 +52,7 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("GOOD", rssi)
         self.assertNotIn("LOW", rssi)
         self.assertTrue(counters.startswith("      6ms"))
+        self.assertIn("FS:hold/60s", counters)
 
     def test_all_dashboard_command_legends_include_settings(self):
         self.assertIn("[s]", MAIN_COMMANDS)

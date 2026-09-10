@@ -111,7 +111,7 @@ static unsigned long lastPriorityTransmitFinishedMs = 0;
 #ifndef MANAGEMENT_MIN_REPORT_INTERVAL_MS
 #define MANAGEMENT_MIN_REPORT_INTERVAL_MS 1000UL
 #endif
-#define TELEMETRY_REPORT_RECORDS_PER_PART 4U
+#define TELEMETRY_REPORT_RECORDS_PER_PART 3U
 
 struct ReceiverTelemetryEntry {
     bool valid;
@@ -153,6 +153,8 @@ static uint32_t prioritySequenceForCurrentFrame = 0;
 static uint8_t priorityRepeatsRemaining = 0;
 static bool currentFrameIsPriority = false;
 static uint8_t priorityAttempt = 1;
+static ReceiverFailsafeConfigPacket pendingFailsafeConfig;
+static uint8_t pendingFailsafeConfigRepeats = 0;
 
 static bool telemetryReportPending = false;
 static uint8_t telemetryReportPart = 0;
@@ -186,6 +188,7 @@ static void clearReceiverCache(void) {
     currentFrameIsPriority = false;
     priorityAttempt = 1;
     g_sendConfirmations = 0;
+    pendingFailsafeConfigRepeats = 0;
     telemetryReportPending = false;
     telemetryReportRecordIndex = 0;
     telemetryReportRecordCount = 0;
@@ -444,6 +447,26 @@ static void serviceEnttecInput(void) {
                 }
                 if (managementVersion == MANAGEMENT_PROTO_VERSION &&
                     managementCrc16(crcInput, (uint16_t)(4 + managementLength)) == managementReceivedCrc &&
+                    managementOpcode == MANAGEMENT_SET_RECEIVER_FAILSAFE &&
+                    managementLength == 8U) {
+                    uint8_t mode = managementPayload[0];
+                    uint16_t timeoutSeconds = (uint16_t)managementPayload[2] |
+                                              ((uint16_t)managementPayload[3] << 8);
+                    if (mode <= RECEIVER_FAILSAFE_DISABLE_LINE &&
+                        timeoutSeconds >= 30U && timeoutSeconds <= 3600U) {
+                        pendingFailsafeConfig.magic = DMX_PACKET_MAGIC;
+                        pendingFailsafeConfig.protocolVersion = DMX_PROTO_VERSION;
+                        pendingFailsafeConfig.packetType = RECEIVER_FAILSAFE_CONFIG_PACKET_TYPE;
+                        pendingFailsafeConfig.universeId = DMX_UNIVERSE_ID;
+                        pendingFailsafeConfig.targetReceiverId = 0U;
+                        pendingFailsafeConfig.mode = mode;
+                        pendingFailsafeConfig.timeoutSeconds = timeoutSeconds;
+                        memcpy(&pendingFailsafeConfig.generation, managementPayload + 4, sizeof(uint32_t));
+                        pendingFailsafeConfigRepeats = 3U;
+                    }
+                }
+                if (managementVersion == MANAGEMENT_PROTO_VERSION &&
+                    managementCrc16(crcInput, (uint16_t)(4 + managementLength)) == managementReceivedCrc &&
                     managementOpcode == MANAGEMENT_GET_PRIORITY_ACKS && managementLength == 0) {
                     priorityAckReportPending = true;
                 }
@@ -654,6 +677,11 @@ static void serviceTelemetryReport(void) {
         record.protocolVersion = source.telemetry.protocolVersion;
         record.reserved = 0;
         record.telemetrySequence = source.telemetry.telemetrySequence;
+        record.failsafeMode = source.telemetry.failsafeMode;
+        record.failsafeActive = source.telemetry.failsafeActive;
+        record.failsafeTimeoutSeconds = source.telemetry.failsafeTimeoutSeconds;
+        record.failsafeGeneration = source.telemetry.failsafeGeneration;
+        record.failsafeActivations = source.telemetry.failsafeActivations;
         memcpy(packet + offset, &record, sizeof(record));
         offset += sizeof(record);
     }
@@ -1007,6 +1035,12 @@ void loop(void) {
     reportTelemetry();
     serviceTelemetryReport();
     servicePriorityAckReport();
+    if (pendingFailsafeConfigRepeats > 0 && quickEspNow.readyToSendData()) {
+        if (quickEspNow.sendBcast(reinterpret_cast<const uint8_t*>(&pendingFailsafeConfig),
+                                  sizeof(pendingFailsafeConfig)) == COMMS_SEND_OK) {
+            pendingFailsafeConfigRepeats--;
+        }
+    }
 
     switch (txState) {
         case TX_IDLE:
@@ -1066,9 +1100,17 @@ void loop(void) {
                     break;
                 }
                 if (currentFrameIsPriority) {
+#if defined(TEST_SUPPRESS_DMX_TRANSMISSION)
+                    currentFragment = txSlotCount;
+#else
                     submitPriorityFragment(g_frameSequence, currentFragment);
+#endif
                 } else {
+#if defined(TEST_SUPPRESS_DMX_TRANSMISSION)
+                    currentFragment = txSlotCount;
+#else
                     submitFragment(g_frameSequence, txSlotList[currentFragment]);
+#endif
                 }
                 currentFragment++;
             } else {

@@ -30,6 +30,12 @@ class ChannelGate(str, Enum):
     LOCKED = "locked"
 
 
+class ReceiverFailsafeMode(str, Enum):
+    HOLD = "hold"
+    BLACKOUT = "blackout"
+    DISABLE_LINE = "disable_line"
+
+
 @dataclass
 class DmxStatistics:
     """Counters and rates for normalized ENTTEC DMX input and pacing."""
@@ -157,6 +163,11 @@ class ReceiverTelemetry:
     firmware_version: int
     protocol_version: int
     telemetry_sequence: int
+    failsafe_mode: str = "hold"
+    failsafe_active: bool = False
+    failsafe_timeout_seconds: int = 60
+    failsafe_generation: int = 0
+    failsafe_activations: int = 0
 
 
 @dataclass(frozen=True)
@@ -210,6 +221,8 @@ class DaemonConfig:
     priority_max_consecutive_events: int = 3
     management_only_channels: tuple[int, ...] = ()
     locked_channels: tuple[int, ...] = ()
+    receiver_failsafe_mode: ReceiverFailsafeMode = ReceiverFailsafeMode.HOLD
+    receiver_failsafe_timeout_seconds: int = 60
 
     def validate(self) -> None:
         if not self.transmitter_device:
@@ -255,6 +268,12 @@ class DaemonConfig:
                 raise ValueError(f"{name} must contain unique channels from 1 through 512")
         if set(self.management_only_channels) & set(self.locked_channels):
             raise ValueError("channel gate lists must not overlap")
+        try:
+            ReceiverFailsafeMode(self.receiver_failsafe_mode)
+        except ValueError as exc:
+            raise ValueError("receiver_failsafe_mode must be hold, blackout, or disable_line") from exc
+        if not 30 <= self.receiver_failsafe_timeout_seconds <= 3600:
+            raise ValueError("receiver_failsafe_timeout_seconds must be between 30 and 3600")
         if self.priority_max_queue_depth < 1:
             raise ValueError("priority_max_queue_depth must be positive")
         if not 1 <= self.priority_default_repeat_count <= self.priority_max_repeat_count:

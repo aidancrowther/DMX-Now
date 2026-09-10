@@ -33,8 +33,8 @@ transmitter, receiver, and shared protocol:
 
 ## Acceptance evidence
 
-The following live hardware tests were completed with the normal firmware on
-the transmitter and both receivers:
+The following live hardware tests were completed with normal firmware on the
+transmitter and all expected receivers discovered during each run:
 
 ### Targeted priority test
 
@@ -45,7 +45,7 @@ the transmitter and both receivers:
 - 0 failed events.
 - 0 invalid or unknown ACKs.
 
-### Extended two-receiver soak
+### Extended priority soak
 
 - 20 events with 10-second spacing.
 - 20/20 first-attempt successes.
@@ -55,9 +55,8 @@ the transmitter and both receivers:
 - 0 invalid or unknown ACKs.
 - Process exit status: `0`.
 
-The final soak used receiver IDs `0x00DAFF38` and `0x00DB07D7`. It reported
-zero failed events, retry recoveries, invalid ACKs, unknown ACKs, and retry
-failures. Duplicate ACK records were expected repeated physical completion
+The final lab soak reported zero failed events, retry recoveries, invalid ACKs,
+unknown ACKs, and retry failures. Duplicate ACK records were expected repeated physical completion
 records from the receiver ACK-repeat mechanism.
 
 ### Priority-to-normal transition
@@ -83,10 +82,10 @@ immediately at the end of the transaction and captured six transient settling
 frames. Extending the settle period makes the test distinguish a bounded
 transition from a persistent failure to resume normal DMX.
 
-### Two-receiver hard-gate transition
+### Hard-gate transition
 
-Both receivers were included in event construction and required to report
-gate application. The Mega monitor validated the physical output through the
+All expected receivers were included in event construction and required to
+report gate application. The Mega monitor validated the physical output through the
 lock and unlock transitions:
 
 ```text
@@ -97,13 +96,13 @@ priority unlock:        267 checks, 267 pass, 0 fail
 normal after unlock:    266 checks, 266 pass, 0 fail
 ```
 
-Both lock and unlock transactions completed on the first attempt with
-`PRIORITY_COMPLETE_GATE_APPLIED` from both receivers and zero retries. During
+Lock and unlock transactions completed on the first attempt with
+`PRIORITY_COMPLETE_GATE_APPLIED` from all expected receivers and zero retries. During
 the locked phase, normal packets carrying a different value were transmitted
 but the receivers continued outputting the priority value. After the all-clear
 priority transaction, normal output resumed.
 
-The current 20-event soak was also scoped to that receiver:
+The current 20-event soak was scoped to the expected receiver set:
 
 ```text
 events: 20
@@ -116,10 +115,10 @@ retry failures: 0
 
 ## Automated validation
 
-The host test suite passes in full:
+The host test suite passes in full after the current implementation changes:
 
 ```text
-66 passed
+68 passed
 ```
 
 The transition runner passes Python compilation and repository whitespace
@@ -127,26 +126,25 @@ validation.
 
 ## Running the transition test
 
-With the transmitter on `/dev/ttyUSB0`, the Mega monitor on `/dev/ttyUSB1`, and
-both receivers online, run:
+With the transmitter and monitor connected to the selected host devices, and
+the expected receiver IDs discovered or supplied for the run, execute:
 
 ```bash
 cd wireless_dmx_daemon
 python tests/run_priority_transition.py \
   --tx-port /dev/ttyUSB0 \
   --mega-port /dev/ttyUSB1 \
-  --expected-receiver 0x00DAFF38 \
-  --expected-receiver 0x00DB07D7 \
+  --expected-receiver <receiver-id> \
   --output /tmp/priority-transition.json
 ```
 
 The command returns zero only when normal output is valid before and after the
-priority transaction, the priority output is observed, and both receivers
-complete the transaction.
+priority transaction, the priority output is observed, and every expected
+receiver completes the transaction.
 
 ## Hardware intervention and resilience validation
 
-The following recovery tests passed with both receivers powered and online:
+The following recovery tests passed with the expected receiver set powered and online:
 
 * receiver removal for 20 seconds followed by reconnection;
 * transmitter reset while the daemon remained running;
@@ -155,8 +153,8 @@ The following recovery tests passed with both receivers powered and online:
 
 Each recovery returned to valid normal DMX output. Fresh priority transactions
 after receiver reconnection, transmitter reset, daemon restart, and PTY
-reconnection completed with both receiver ACKs on the first attempt and zero
-retries.
+reconnection completed with all expected receiver ACKs on the first attempt and
+zero retries.
 
 Feature 12 is complete for the validated Linux/ESP8266/Mega deployment at the
 20 Hz production rate. Native Windows/macOS virtual serial support, broader

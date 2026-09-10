@@ -35,7 +35,7 @@ class FakeSerial:
 
 def telemetry_part():
     record = RECORD.pack(7, bytes.fromhex("18fe34000007"), 1, 0, -25, -30,
-                         100, 9, 10, 1, 0, 2, 100, 1, 1, 0, 4)
+                         100, 9, 10, 1, 0, 2, 100, 1, 1, 0, 4, 0, 0, 60, 0, 0)
     payload = PART_HEADER.pack(1, 0, 1, 1, 4) + record
     body = bytes((1, MANAGEMENT_RECEIVER_TELEMETRY)) + struct.pack("<H", len(payload)) + payload
     return MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body))

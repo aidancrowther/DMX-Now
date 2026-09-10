@@ -11,12 +11,13 @@ from ..protocols import (
     MANAGEMENT_MARK_NEXT_PRIORITY,
     MANAGEMENT_GET_PRIORITY_ACKS, MANAGEMENT_PRIORITY_ACKS,
     MANAGEMENT_CLEAR_RECEIVER_CACHE, MANAGEMENT_CACHE_CLEARED,
+    MANAGEMENT_SET_RECEIVER_FAILSAFE,
     MANAGEMENT_RECEIVER_TELEMETRY, MANAGEMENT_SYNC, ProtocolError, crc16_ccitt,
 )
 from ..protocols import DMX_GATE_MASK_SIZE
 
 PART_HEADER = struct.Struct("<BBBBI")
-RECORD = struct.Struct("<I6sBBbb7I HBBI".replace(" ", ""))
+RECORD = struct.Struct("<I6sBBbb7I HBBIBB HII".replace(" ", ""))
 ACK_HEADER = struct.Struct("<BBIIIII")
 ACK_RECORD = struct.Struct("<I I I BBBb I H".replace(" ", ""))
 
@@ -57,6 +58,15 @@ def get_priority_acks_request() -> bytes:
 
 def clear_receiver_cache_request() -> bytes:
     body = bytes((MANAGEMENT_PROTO_VERSION, MANAGEMENT_CLEAR_RECEIVER_CACHE, 0, 0))
+    return MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body))
+
+
+def set_receiver_failsafe_request(mode: str, timeout_seconds: int, generation: int) -> bytes:
+    modes = {"hold": 0, "blackout": 1, "disable_line": 2}
+    if mode not in modes:
+        raise ValueError("unsupported receiver fail-safe mode")
+    payload = struct.pack("<BBHI", modes[mode], 0, timeout_seconds, generation & 0xFFFFFFFF)
+    body = bytes((MANAGEMENT_PROTO_VERSION, MANAGEMENT_SET_RECEIVER_FAILSAFE)) + struct.pack("<H", len(payload)) + payload
     return MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body))
 
 
@@ -114,7 +124,7 @@ def parse_management_frame(frame: bytes) -> TelemetryReportPart:
     if length < PART_HEADER.size:
         raise ProtocolError("missing telemetry part header")
     report_version, index, count, record_count, sequence = PART_HEADER.unpack_from(frame, 6)
-    if count == 0 or index >= count or record_count > 4:
+    if count == 0 or index >= count or record_count > 3:
         raise ProtocolError("invalid telemetry part indexes")
     record_data = frame[6 + PART_HEADER.size:6 + length]
     if len(record_data) != record_count * RECORD.size:
@@ -130,9 +140,11 @@ def parse_management_frame(frame: bytes) -> TelemetryReportPart:
             incomplete_universes=f[9], malformed_packets=f[10], time_since_last_universe_ms=f[11],
             transmitter_last_seen_ms=f[12], firmware_version=f[13], protocol_version=f[14],
             # f[15] is the packed record's reserved byte; telemetrySequence is
-            # the final uint32 field at f[16]. Keeping this explicit prevents
+            # f[16]. The remaining fields are the receiver fail-safe status.
             # fresh receiver reports from being mistaken for sequence zero.
-            telemetry_sequence=f[16],
+            telemetry_sequence=f[16], failsafe_mode={0: "hold", 1: "blackout", 2: "disable_line"}.get(f[17], "hold"),
+            failsafe_active=bool(f[18]), failsafe_timeout_seconds=f[19],
+            failsafe_generation=f[20], failsafe_activations=f[21],
         ))
     return TelemetryReportPart(report_version, index, count, sequence, tuple(records))
 

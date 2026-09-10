@@ -53,6 +53,7 @@
 #define PRIORITY_LIVENESS_REQUEST_PACKET_TYPE 5U
 #define PRIORITY_LIVENESS_RESPONSE_PACKET_TYPE 6U
 #define PRIORITY_GATE_METADATA_PACKET_TYPE 7U
+#define RECEIVER_FAILSAFE_CONFIG_PACKET_TYPE 8U
 #define PRIORITY_COMPLETE_ACCEPTED 1U
 #define PRIORITY_COMPLETE_DUPLICATE 2U
 #define PRIORITY_COMPLETE_INVALID 3U
@@ -72,10 +73,14 @@
 #define MANAGEMENT_MARK_NEXT_PRIORITY    0x02U
 #define MANAGEMENT_GET_PRIORITY_ACKS     0x03U
 #define MANAGEMENT_CLEAR_RECEIVER_CACHE  0x04U
+#define MANAGEMENT_SET_RECEIVER_FAILSAFE 0x05U
 #define MANAGEMENT_RECEIVER_TELEMETRY      0x81U
 #define MANAGEMENT_PRIORITY_ACKS           0x83U
 #define MANAGEMENT_CACHE_CLEARED           0x84U
 #define MANAGEMENT_ERROR                   0xE0U
+#define RECEIVER_FAILSAFE_HOLD             0U
+#define RECEIVER_FAILSAFE_BLACKOUT         1U
+#define RECEIVER_FAILSAFE_DISABLE_LINE    2U
 
 /* --------------------------------------------------------------------------
  * Channel and refresh rate (test defaults; configurable)
@@ -200,6 +205,22 @@ struct __attribute__((packed)) ReceiverTelemetryPacket {
     int8_t   lastRssi;
     uint16_t firmwareVersion;
     uint32_t telemetrySequence;
+    uint8_t  failsafeMode;
+    uint8_t  failsafeActive;
+    uint16_t failsafeTimeoutSeconds;
+    uint32_t failsafeGeneration;
+    uint32_t failsafeActivations;
+};
+
+struct __attribute__((packed)) ReceiverFailsafeConfigPacket {
+    uint16_t magic;
+    uint8_t  protocolVersion;
+    uint8_t  packetType;
+    uint8_t  universeId;
+    uint32_t targetReceiverId;
+    uint8_t  mode;
+    uint16_t timeoutSeconds;
+    uint32_t generation;
 };
 
 struct __attribute__((packed)) PriorityTransmitRequest {
@@ -263,6 +284,11 @@ struct __attribute__((packed)) TelemetryReportRecord {
     uint8_t  protocolVersion;
     uint8_t  reserved;
     uint32_t telemetrySequence;
+    uint8_t  failsafeMode;
+    uint8_t  failsafeActive;
+    uint16_t failsafeTimeoutSeconds;
+    uint32_t failsafeGeneration;
+    uint32_t failsafeActivations;
 };
 
 /* --------------------------------------------------------------------------
@@ -285,9 +311,11 @@ static_assert(sizeof(PriorityLivenessPacket) <= ESP_NOW_MAX_DATA_LEN,
               "PriorityLivenessPacket must fit within ESP_NOW_MAX_DATA_LEN");
 static_assert(sizeof(ReceiverTelemetryPacket) <= ESP_NOW_MAX_DATA_LEN,
               "ReceiverTelemetryPacket must fit within ESP_NOW_MAX_DATA_LEN");
+static_assert(sizeof(ReceiverFailsafeConfigPacket) <= ESP_NOW_MAX_DATA_LEN,
+              "ReceiverFailsafeConfigPacket must fit within ESP_NOW_MAX_DATA_LEN");
 static_assert(sizeof(TelemetryReportPartHeader) == 8,
               "TelemetryReportPartHeader layout changed unexpectedly");
-static_assert(sizeof(TelemetryReportRecord) == 50,
+static_assert(sizeof(TelemetryReportRecord) == 62,
               "TelemetryReportRecord layout changed unexpectedly");
 static_assert(sizeof(PriorityAckReportHeader) == 22,
               "PriorityAckReportHeader layout changed unexpectedly");

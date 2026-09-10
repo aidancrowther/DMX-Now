@@ -12,7 +12,7 @@ from wireless_dmx.protocols import (MANAGEMENT_PRIORITY_ACKS, MANAGEMENT_RECEIVE
 from wireless_dmx.transmitter.management import (ACK_HEADER, ACK_RECORD, ManagementParser,
                                                  PART_HEADER, RECORD, get_priority_acks_request,
                                                   clear_receiver_cache_request, get_telemetry_request,
-                                                  mark_next_priority)
+                                                   mark_next_priority, set_receiver_failsafe_request)
 
 
 def make_part(sequence, index, count, records):
@@ -25,7 +25,10 @@ def make_part(sequence, index, count, records):
                                record.incomplete_universes, record.malformed_packets,
                                record.time_since_last_universe_ms, record.transmitter_last_seen_ms,
                                record.firmware_version, record.protocol_version, 0,
-                               record.telemetry_sequence)
+                               record.telemetry_sequence, {"hold": 0, "blackout": 1,
+                               "disable_line": 2}[record.failsafe_mode],
+                               int(record.failsafe_active), record.failsafe_timeout_seconds,
+                               record.failsafe_generation, record.failsafe_activations)
     body = bytes((1, MANAGEMENT_RECEIVER_TELEMETRY)) + struct.pack("<H", len(payload)) + payload
     return MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body))
 
@@ -50,6 +53,12 @@ class ManagementTests(unittest.TestCase):
     def test_clear_cache_request_has_valid_crc(self):
         request = clear_receiver_cache_request()
         self.assertEqual(request[:2], MANAGEMENT_SYNC)
+        self.assertEqual(crc16_ccitt(request[2:-2]), struct.unpack("<H", request[-2:])[0])
+
+    def test_failsafe_request_has_valid_crc(self):
+        request = set_receiver_failsafe_request("disable_line", 60, 17)
+        self.assertEqual(request[:2], MANAGEMENT_SYNC)
+        self.assertEqual(struct.unpack_from("<H", request, 4)[0], 8)
         self.assertEqual(crc16_ccitt(request[2:-2]), struct.unpack("<H", request[-2:])[0])
 
     def test_clear_cache_response_is_parsed(self):
@@ -85,6 +94,16 @@ class ManagementTests(unittest.TestCase):
         self.assertEqual(parts[0].records[0].receiver_id, 1)
         self.assertEqual(parts[0].records[0].telemetry_sequence, 0x12345678)
         self.assertEqual(parts[1].part_index, 1)
+
+    def test_extended_telemetry_record_round_trip(self):
+        record = ReceiverTelemetry(1, "18:fe:34:00:00:01", ReceiverLinkState.ONLINE, False,
+                                   -30, -31, 10, 2, 3, 0, 0, 2, 100, 2, 1, 0x12345678,
+                                   "blackout", True, 60, 9, 4)
+        frame = make_part(9, 0, 1, [record])
+        parsed = ManagementParser().feed(frame)[0].records[0]
+        self.assertEqual(parsed.failsafe_mode, "blackout")
+        self.assertTrue(parsed.failsafe_active)
+        self.assertEqual(parsed.failsafe_generation, 9)
 
     def test_bad_crc_is_ignored(self):
         parser = ManagementParser()
