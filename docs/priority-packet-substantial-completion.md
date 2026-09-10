@@ -1,8 +1,8 @@
-# Targeted Priority Packet: Substantial Completion
+# Targeted Priority Packet: Completion
 
-**Status:** Substantially complete and ready for feature-branch merge review  
-**Branch:** `channel_gating`
-**Date:** 2026-09-09
+**Status:** Complete for the validated Linux/20 Hz hardware configuration
+**Branch:** `master`
+**Date:** 2026-09-10
 
 ## Scope completed
 
@@ -47,13 +47,18 @@ the transmitter and both receivers:
 
 ### Extended two-receiver soak
 
-- 20 events with 15-second spacing.
+- 20 events with 10-second spacing.
 - 20/20 first-attempt successes.
 - Both receivers acknowledged every event.
 - 0 retry-recovered events.
 - 0 failed events.
 - 0 invalid or unknown ACKs.
 - Process exit status: `0`.
+
+The final soak used receiver IDs `0x00DAFF38` and `0x00DB07D7`. It reported
+zero failed events, retry recoveries, invalid ACKs, unknown ACKs, and retry
+failures. Duplicate ACK records were expected repeated physical completion
+records from the receiver ACK-repeat mechanism.
 
 ### Priority-to-normal transition
 
@@ -78,23 +83,25 @@ immediately at the end of the transaction and captured six transient settling
 frames. Extending the settle period makes the test distinguish a bounded
 transition from a persistent failure to resume normal DMX.
 
-### Receiver hard-gate transition
+### Two-receiver hard-gate transition
 
-The Mega-connected receiver was tested independently with the second receiver
-excluded from event construction to avoid stale telemetry ambiguity:
+Both receivers were included in event construction and required to report
+gate application. The Mega monitor validated the physical output through the
+lock and unlock transitions:
 
 ```text
 normal baseline:        266 checks, 266 pass, 0 fail
-priority gate establish: 310 checks, 310 pass, 0 fail
-normal while locked:    267 checks, 267 pass, 0 fail
-priority unlock:        311 checks, 311 pass, 0 fail
-normal after unlock:    267 checks, 267 pass, 0 fail
+priority gate establish: 266 checks, 266 pass, 0 fail
+normal while locked:    266 checks, 266 pass, 0 fail
+priority unlock:        267 checks, 267 pass, 0 fail
+normal after unlock:    266 checks, 266 pass, 0 fail
 ```
 
-The lock transaction and unlock transaction both completed with the expected
-receiver ACK. During the locked phase, normal packets carrying a different
-value were transmitted but the receiver continued outputting the priority
-value. After the all-clear priority transaction, normal output resumed.
+Both lock and unlock transactions completed on the first attempt with
+`PRIORITY_COMPLETE_GATE_APPLIED` from both receivers and zero retries. During
+the locked phase, normal packets carrying a different value were transmitted
+but the receivers continued outputting the priority value. After the all-clear
+priority transaction, normal output resumed.
 
 The current 20-event soak was also scoped to that receiver:
 
@@ -109,10 +116,10 @@ retry failures: 0
 
 ## Automated validation
 
-The host test suite currently passes in full:
+The host test suite passes in full:
 
 ```text
-63 passed
+66 passed
 ```
 
 The transition runner passes Python compilation and repository whitespace
@@ -137,12 +144,24 @@ The command returns zero only when normal output is valid before and after the
 priority transaction, the priority output is observed, and both receivers
 complete the transaction.
 
-## Remaining qualification
+## Hardware intervention and resilience validation
 
-This feature is substantially complete for merge into `master`. A formal
-60-minute priority verification run remains recommended post-merge. A
-two-receiver hard-gate run is also pending until both receiver units are
-confirmed to be running the matching receiver firmware simultaneously.
+The following recovery tests passed with both receivers powered and online:
+
+* receiver removal for 20 seconds followed by reconnection;
+* transmitter reset while the daemon remained running;
+* clean daemon stop/restart with cache clear and receiver rediscovery;
+* controlled PTY client disconnect for 10 seconds followed by reconnection.
+
+Each recovery returned to valid normal DMX output. Fresh priority transactions
+after receiver reconnection, transmitter reset, daemon restart, and PTY
+reconnection completed with both receiver ACKs on the first attempt and zero
+retries.
+
+Feature 12 is complete for the validated Linux/ESP8266/Mega deployment at the
+20 Hz production rate. Native Windows/macOS virtual serial support, broader
+lighting-application/platform coverage, and longer optional soak runs remain
+non-blocking follow-up work.
 
 Other existing project follow-up items remain unchanged, including native
 Windows/macOS virtual serial support, broader fault-injection coverage, and a

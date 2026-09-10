@@ -75,19 +75,20 @@ gate metadata is sent separately, staged by the receiver, and applied only when
 the complete priority universe has been reconstructed. Completion ACKs report
 whether gate metadata was applied.
 
-The current host acceptance evidence includes a single Mega-connected receiver:
+The current host acceptance evidence includes both wireless receivers:
 
 ```text
 baseline normal output:       266/266 pass
-priority gate establishment:  310/310 pass
-normal traffic while locked:  267/267 pass
-priority unlock:              311/311 pass
-normal output after unlock:   267/267 pass
+priority gate establishment:  266/266 pass
+normal traffic while locked:  266/266 pass
+priority unlock:              267/267 pass
+normal output after unlock:   266/266 pass
 20-event priority soak:       20/20 first-attempt successes
 ```
 
-The two-receiver gate acceptance remains pending until both receiver units are
-confirmed to be running the matching receiver firmware simultaneously.
+Both receivers reported gate-applied completion on lock and unlock, with zero
+retries. Receiver removal/reconnection, transmitter reset, daemon restart, and
+PTY client disconnect/reconnection also passed hardware recovery validation.
 
 ## Host daemon
 
@@ -333,8 +334,13 @@ Compile and flash the receiver:
 
 ```bash
 ./flash_receiver.sh
-./flash_receiver.sh -f --port /dev/ttyUSB1
+./flash_receiver.sh -f --port /dev/ttyUSB2
 ```
+
+In the validated Linux hardware setup, `/dev/ttyUSB0` is the transmitter,
+`/dev/ttyUSB1` is the Arduino Mega DMX monitor, and `/dev/ttyUSB2` is the
+USB-connected receiver/programming interface. The second receiver is wireless
+only and is not directly accessible from the host.
 
 Required local libraries are stored under:
 

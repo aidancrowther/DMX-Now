@@ -22,6 +22,21 @@ class Phase0Tests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "allow_experimental_rates"):
             DaemonConfig(pacer_maximum_rate_hz=40.0).validate()
 
+    def test_priority_timing_cannot_bypass_validated_minimums(self):
+        with self.assertRaisesRegex(ValueError, "lead-in"):
+            DaemonConfig(priority_lead_in_ms=499).validate()
+        with self.assertRaisesRegex(ValueError, "lead-out"):
+            DaemonConfig(priority_lead_out_ms=499).validate()
+        with self.assertRaisesRegex(ValueError, "confirmation"):
+            DaemonConfig(priority_confirmation_window_ms=1499).validate()
+        with self.assertRaisesRegex(ValueError, "receiver budget"):
+            DaemonConfig(priority_receiver_budget_seconds=3.99).validate()
+
+    def test_priority_receiver_budget_covers_one_hz_three_fragment_gate(self):
+        config = DaemonConfig()
+        self.assertGreaterEqual(config.priority_receiver_budget_seconds, 4.0)
+        self.assertGreaterEqual(config.priority_confirmation_window_ms, 1500)
+
     def test_invalid_freshness_thresholds_are_rejected(self):
         with self.assertRaisesRegex(ValueError, "stale threshold"):
             DaemonConfig(telemetry_stale_seconds=30, telemetry_offline_seconds=15).validate()

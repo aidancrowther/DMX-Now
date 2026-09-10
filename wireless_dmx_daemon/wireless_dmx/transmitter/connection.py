@@ -24,6 +24,7 @@ class TransmitterConnection:
         self._serial: SerialLike | None = None
         self._dmx_queue: queue.Queue[bytes] = queue.Queue(maxsize=1)
         self._management_queue: queue.Queue[bytes] = queue.Queue(maxsize=32)
+        self._priority_management_queue: queue.Queue[bytes] = queue.Queue(maxsize=8)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self.connected = False
@@ -58,15 +59,25 @@ class TransmitterConnection:
                 pass
             self._dmx_queue.put_nowait(bytes(data))
 
-    def send_immediate(self, data: bytes) -> None:
+    def send_immediate(self, data: bytes) -> bool:
         # Management commands are ordered: replacing a pending priority marker
         # with a telemetry poll can silently turn a priority universe into a
         # normal universe. The bounded queue is large enough for the polling
         # cadence and preserves every marker.
         try:
             self._management_queue.put_nowait(bytes(data))
+            return True
         except queue.Full:
             self.last_error = "management queue full"
+            return False
+
+    def send_priority_management(self, data: bytes) -> bool:
+        try:
+            self._priority_management_queue.put_nowait(bytes(data))
+            return True
+        except queue.Full:
+            self.last_error = "priority management queue full"
+            return False
 
     def _close(self) -> None:
         if self._serial is not None:
@@ -91,9 +102,12 @@ class TransmitterConnection:
             try:
                 try:
                     try:
-                        data = self._management_queue.get_nowait()
+                        data = self._priority_management_queue.get_nowait()
                     except queue.Empty:
-                        data = self._dmx_queue.get(timeout=0.02)
+                        try:
+                            data = self._management_queue.get_nowait()
+                        except queue.Empty:
+                            data = self._dmx_queue.get(timeout=0.02)
                     self._serial.write(data)
                 except queue.Empty:
                     pass

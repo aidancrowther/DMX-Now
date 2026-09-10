@@ -229,7 +229,7 @@ class ServiceTests(unittest.TestCase):
     def test_priority_retry_increments_attempt_without_changing_id(self):
         service = WirelessDmxService(
             DaemonConfig(virtual_port_path="/tmp/wireless-dmx-retry-test",
-                         priority_confirmation_window_ms=10,
+                         priority_confirmation_window_ms=1500,
                          priority_retry_cooldown_min_seconds=0,
                          priority_retry_cooldown_max_seconds=0),
             serial_factory=lambda: FakeSerial(),
@@ -238,7 +238,7 @@ class ServiceTests(unittest.TestCase):
         priority_id = service.send_manual(priority=True, repeat_count=1, ttl_seconds=1)
         event = service._priority_events[priority_id]
         service.pacer._priority_queue.clear()
-        now = event["last_attempt_at"] + 1
+        now = event["last_attempt_at"] + 2.0
         service._service_priority_retries(now)
         service._service_priority_retries(event["retry_due_at"])
         self.assertEqual(service.snapshot().priority.retry_attempts, 1)
@@ -249,7 +249,7 @@ class ServiceTests(unittest.TestCase):
     def test_priority_retry_waits_for_configured_cooldown(self):
         service = WirelessDmxService(
             DaemonConfig(virtual_port_path="/tmp/wireless-dmx-retry-cooldown",
-                         priority_confirmation_window_ms=10,
+                         priority_confirmation_window_ms=1500,
                          priority_retry_cooldown_min_seconds=2,
                          priority_retry_cooldown_max_seconds=2),
             serial_factory=lambda: FakeSerial(),
@@ -258,7 +258,7 @@ class ServiceTests(unittest.TestCase):
         priority_id = service.send_manual(priority=True, repeat_count=1, ttl_seconds=1)
         event = service._priority_events[priority_id]
         service.pacer._priority_queue.clear()
-        expired = event["last_attempt_at"] + 1
+        expired = event["last_attempt_at"] + 2.0
         service._service_priority_retries(expired)
         self.assertEqual(service.snapshot().priority.retry_attempts, 0)
         self.assertIsNotNone(event["retry_due_at"])
@@ -293,6 +293,30 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(priority.ack_duplicate_records, 0)
         self.assertTrue(service._priority_events[42]["ack_complete"])
         self.assertEqual(service._priority_events[42]["ack_receivers"], {7})
+
+    def test_gate_priority_requires_gate_applied_ack_status(self):
+        service = WirelessDmxService(
+            DaemonConfig(virtual_port_path="/tmp/wireless-dmx-gate-ack-status"),
+            serial_factory=lambda: FakeSerial(), virtual_backend=LinuxPtyBackend(),
+        )
+        service._priority_submissions[42] = time.monotonic()
+        service._priority_events[42] = {
+            "universe": bytes(512), "repeat_count": 1, "ttl_seconds": 5.0,
+            "reason": "gate", "attempt": 1, "last_attempt_at": time.monotonic(),
+            "retry_count": 0, "terminal": False, "terminal_reason": None,
+            "transmission_complete": True, "ack_complete": False,
+            "hard_gate_mask": bytes(64), "expected_receivers": {7},
+            "ack_receivers": set(), "gate_applied_receivers": set(),
+            "first_attempt_ack_receivers": set(), "ack_completed_at": None,
+            "receiver_states": {7: {"attempt": 1, "started_at": time.monotonic(),
+                                    "ack": False, "failed": False}},
+            "receiver_order": [7], "receiver_index": 0, "current_receiver": 7,
+        }
+        record = ACK_RECORD.pack(42, 7, 101, 1, 1, 1, -41, 1234, 37)
+        payload = ACK_HEADER.pack(1, 1, 7, 1, 0, 0, 0) + record
+        body = bytes((1, MANAGEMENT_PRIORITY_ACKS)) + struct.pack("<H", len(payload)) + payload
+        service._on_transmitter_data(MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body)))
+        self.assertFalse(service._priority_events[42]["ack_complete"])
 
     def test_late_ack_upgrades_receiver_timeout_to_success(self):
         service = WirelessDmxService(

@@ -202,8 +202,7 @@ class DaemonConfig:
     priority_lead_out_ms: int = 500
     priority_confirmation_window_ms: int = 1500
     priority_max_attempts: int = 5
-    priority_receiver_budget_seconds: float = 1.0
-    priority_receiver_budget_seconds: float = 1.0
+    priority_receiver_budget_seconds: float = 4.0
     priority_retry_cooldown_min_seconds: float = 1.0
     priority_retry_cooldown_max_seconds: float = 2.5
     priority_normal_quiet_before_ms: int = 500
@@ -266,15 +265,22 @@ class DaemonConfig:
             raise ValueError("priority TTL values must be positive")
         if self.priority_default_ttl_seconds > self.priority_max_ttl_seconds:
             raise ValueError("priority default TTL cannot exceed maximum TTL")
-        if min(self.priority_lead_in_ms, self.priority_lead_out_ms,
-               self.priority_confirmation_window_ms) < 0:
-            raise ValueError("priority timing values cannot be negative")
+        if self.priority_lead_in_ms < 500:
+            raise ValueError("priority lead-in must be at least 500 ms")
+        if self.priority_lead_out_ms < 500:
+            raise ValueError("priority lead-out must be at least 500 ms")
+        if self.priority_confirmation_window_ms < 1500:
+            raise ValueError("priority confirmation window must be at least 1500 ms")
+        if self.priority_normal_quiet_before_ms < 500:
+            raise ValueError("normal quiet-before must be at least 500 ms")
+        if self.priority_normal_quiet_after_ms < 1000:
+            raise ValueError("normal quiet-after must be at least 1000 ms")
         if self.priority_max_consecutive_events < 1:
             raise ValueError("priority_max_consecutive_events must be positive")
         if not 1 <= self.priority_max_attempts <= 255:
             raise ValueError("priority_max_attempts must be between 1 and 255")
-        if self.priority_receiver_budget_seconds <= 0:
-            raise ValueError("priority_receiver_budget_seconds must be positive")
+        if self.priority_receiver_budget_seconds < 4.0:
+            raise ValueError("priority receiver budget must be at least 4 seconds")
         if self.priority_retry_cooldown_min_seconds < 0:
             raise ValueError("priority_retry_cooldown_min_seconds must not be negative")
         if self.priority_retry_cooldown_max_seconds < self.priority_retry_cooldown_min_seconds:

@@ -146,33 +146,57 @@ and safe reconnect behavior.
 ## Current implementation status
 
 Phases 0–8 and the current Feature 11 host status/management scope are
-substantially complete for the Linux/20 Hz deployment. The package has
+complete for the validated Linux/20 Hz deployment. The package has
 standard-library core models, a streaming ENTTEC parser, Feature 11 management
 codec, bounded latest-state pacer, reconnecting transmitter adapter, Linux PTY
 backend, TOML loading, CLI entry point, structured logging, and a systemd unit
-template. Feature 14 targeted priority transmission and Feature 15 receiver
-hard gating are **SUBSTANTIALLY COMPLETE**: manual complete-universe sends,
+template. Feature 12 reliability/throughput testing, Feature 14 targeted
+priority transmission, and Feature 15 receiver hard gating are **COMPLETE for
+the validated Linux/20 Hz hardware configuration**: manual complete-universe sends,
 bounded queueing, repeat/TTL handling, receiver ACKs, per-receiver
 retry/recovery, lead-in/lead-out timing, receiver-side runtime hard locks, and
 normal-stream resumption are implemented. The detailed priority completion
 record is
 `../docs/priority-packet-substantial-completion.md`.
+The current hardware qualification is complete for both receivers, including
+two-receiver hard-gate establishment/unlock, normal-packet blocking, normal
+resumption, receiver removal/reconnection, transmitter reset recovery, daemon
+restart recovery, PTY client disconnect/reconnection, and a 20-event
+first-attempt priority soak. Native Windows/macOS virtual serial support,
+broader platform/application coverage, and a future GUI remain follow-up work.
 
-The current hardware qualification is complete for the single Mega-connected
-receiver, including gate establishment, normal-packet blocking, priority
-unlock, normal resumption, and a 20-event first-attempt soak. A two-receiver
-hard-gate run remains pending until both receiver units are confirmed to run
-the matching firmware. A formal 60-minute receiver-confirmed priority run is
-also recommended post-merge. Native Windows/macOS virtual serial support,
-broader fault-injection coverage, and a future GUI remain follow-up work.
-
-The host implementation has passed 63 automated tests and live validation on
+The host implementation has passed 66 automated tests and live validation on
 2026-09-04. The live test opened the real transmitter at `/dev/ttyUSB0`, exposed
 a Linux PTY, forwarded a full ENTTEC universe, and received telemetry for two
 active receivers. The CLI status command also reported the same two receivers.
 The existing ESP8266/Mega 660-second acceptance run remains the authoritative
 physical DMX/RF evidence; the host daemon's live test confirms the additional
 PTY, parser, pacing, transmitter-serial, and telemetry integration path.
+
+### Feature 12 completion evidence
+
+The final two-receiver acceptance completed with 36,000 DMX frames submitted
+at 20 Hz and 79,869/79,869 Mega checks passing. Thirty priority events produced
+60 receiver completions with zero event failures, retries, invalid ACKs, or
+unknown ACKs.
+
+The final two-receiver hard-gate test passed both lock and unlock transactions:
+
+* both expected receivers reported `PRIORITY_COMPLETE_GATE_APPLIED`;
+* both transactions succeeded on the first attempt with zero retries;
+* normal traffic remained blocked at the locked priority value;
+* normal output resumed after the unlock transaction;
+* all Mega measurement windows had zero failures.
+
+The 20-event two-receiver soak produced 20/20 first-attempt successes, zero
+failed events, zero retry recoveries, zero invalid/unknown ACKs, and zero retry
+failures. The duplicate ACK records reported by the soak are expected repeated
+physical completion records and did not affect event completion.
+
+Hardware intervention coverage also passed: receiver removal/reconnection,
+transmitter reset with the daemon running, daemon restart, and PTY client
+disconnect/reconnection all recovered with valid normal DMX output. The host
+suite passed 66 tests after the final changes.
 
 The default command is:
 

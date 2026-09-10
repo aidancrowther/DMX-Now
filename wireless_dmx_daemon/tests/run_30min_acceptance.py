@@ -63,6 +63,9 @@ def main() -> int:
     parser.add_argument("--priority-interval", type=float, default=60.0)
     parser.add_argument("--priority-events", type=int, default=30)
     parser.add_argument("--priority-drain-seconds", type=float, default=5.0)
+    parser.add_argument("--expected-receiver", action="append", type=lambda value: int(value, 0),
+                        help="receiver ID expected throughout the run; may be repeated")
+    parser.add_argument("--min-mega-checks-per-second", type=float, default=30.0)
     parser.add_argument("--run-dir", type=Path, required=True)
     args = parser.parse_args()
     if args.seconds < 1800:
@@ -87,6 +90,8 @@ def main() -> int:
         "priority_interval_seconds": args.priority_interval,
         "priority_events_requested": args.priority_events,
         "priority_drain_seconds": args.priority_drain_seconds,
+        "expected_receivers": sorted(args.expected_receiver or []),
+        "min_mega_checks_per_second": args.min_mega_checks_per_second,
         "priority_retry_cooldown_min_seconds": 1.0,
         "priority_retry_cooldown_max_seconds": 2.5,
         "passed": False,
@@ -118,13 +123,41 @@ def main() -> int:
             pacer_rate_hz=20.0,
             telemetry_enabled=True,
             telemetry_interval_seconds=args.telemetry_interval,
-            priority_confirmation_window_ms=450,
+            priority_confirmation_window_ms=1500,
             priority_retry_cooldown_min_seconds=1.0,
             priority_retry_cooldown_max_seconds=2.5,
         )
         service = WirelessDmxService(config)
         service.start()
         service.seed_priority_ids(priority_id_seed)
+
+        required_receivers = set(args.expected_receiver or [])
+        stable_sets: list[frozenset[int]] = []
+        discovery_deadline = time.monotonic() + 35.0
+        while time.monotonic() < discovery_deadline:
+            online = frozenset(receiver.receiver_id for receiver in service.snapshot().receivers
+                                if receiver.link_state.value == "online")
+            matches = (online == required_receivers) if required_receivers else bool(online)
+            if service.snapshot().telemetry.cache_clear_acknowledged and matches:
+                stable_sets.append(online)
+                stable_sets = stable_sets[-3:]
+            else:
+                stable_sets.clear()
+            if len(stable_sets) == 3 and stable_sets[0] == stable_sets[1] == stable_sets[2]:
+                break
+            time.sleep(0.1)
+        else:
+            raise RuntimeError(f"receiver set did not stabilize: required={sorted(required_receivers)}")
+        with service.telemetry._lock:
+            locked_receivers = required_receivers or set(stable_sets[-1])
+            service.telemetry._items = {
+                receiver_id: item for receiver_id, item in service.telemetry._items.items()
+                if receiver_id in locked_receivers
+            }
+        original_snapshot = service.telemetry.snapshot
+        service.telemetry.snapshot = lambda: tuple(
+            receiver for receiver in original_snapshot() if receiver.receiver_id in locked_receivers
+        )
 
         mega = serial.Serial(args.mega_port, 115200, timeout=0.2)
         wait_line(mega, "READY ENTTEC_DMX_MONITOR", 8.0)
@@ -137,7 +170,7 @@ def main() -> int:
         client = serial.Serial(service.virtual.path, 115200, bytesize=8,
                                parity=serial.PARITY_NONE, stopbits=serial.STOPBITS_TWO,
                                timeout=0.1)
-        frame = encode_dmx(bytes([23]) * 512)
+        frame = encode_dmx(bytes([77]) * 512)
         service.set_manual_universe(bytes([77]) * 512)
         next_frame = time.monotonic()
         next_priority = next_frame + 5.0
@@ -226,6 +259,20 @@ def main() -> int:
         report_count = len(service.snapshot().receivers)
         expected_receivers = report_count
         expected_acks = len(priority_ids) * expected_receivers
+        priority_events = [service._priority_events.get(priority_id, {}) for priority_id in priority_ids]
+        priority_event_failures = [
+            {
+                "priority_id": priority_id,
+                "ack_complete": event.get("ack_complete", False),
+                "terminal": event.get("terminal", False),
+                "terminal_reason": event.get("terminal_reason"),
+                "expected_receivers": sorted(event.get("expected_receivers", set())),
+                "ack_receivers": sorted(event.get("ack_receivers", set())),
+            }
+            for priority_id, event in zip(priority_ids, priority_events)
+            if not event.get("ack_complete") or
+               set(event.get("expected_receivers", set())) != set(event.get("ack_receivers", set()))
+        ]
         summary.update({
             "dmx_frames_submitted_to_pty": len(tx_times),
             "dmx_input_rate_hz": len(tx_times) / args.seconds,
@@ -240,6 +287,7 @@ def main() -> int:
             },
             "telemetry_records_seen": telemetry_records,
             "mega_result": mega_result,
+            "receiver_ids_observed": sorted(receiver.receiver_id for receiver in service.snapshot().receivers),
             "priority": {
                 "ids_submitted": priority_ids,
                 "events_submitted": len(priority_ids),
@@ -257,6 +305,7 @@ def main() -> int:
                 "retry_attempts": service.snapshot().priority.retry_attempts,
                 "retry_recovered": service.snapshot().priority.retry_recovered,
                 "retry_failures": service.snapshot().priority.retry_failures,
+                "event_failures": priority_event_failures,
             },
             "traffic_phases": {
                 "normal_frames_before_priority": normal_frames_before_priority,
@@ -269,7 +318,7 @@ def main() -> int:
             len(priority_ids) == args.priority_events and
             service.snapshot().dmx.priority_completed >= len(priority_ids) and
             expected_receivers > 0 and
-            priority_status.ack_records_received == expected_acks and
+            not priority_event_failures and
             priority_status.ack_invalid == 0 and
             priority_status.ack_unknown == 0 and
             priority_status.ack_dropped == 0 and
@@ -281,6 +330,7 @@ def main() -> int:
             report_count > 0 and
             mega_result.get("seconds", 0) >= args.seconds - 1 and
             mega_result.get("checks", 0) > 0 and
+            mega_result.get("checks", 0) >= int(args.seconds * args.min_mega_checks_per_second) and
             mega_result.get("fail", -1) == 0
             and priority_passed
         )

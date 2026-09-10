@@ -59,6 +59,8 @@ static uint8_t g_universe[DMX_UNIVERSE_SIZE];
  * while this frame's fragments are still being queued; keeping a snapshot
  * prevents a wireless frame from containing bytes from two universes. */
 static uint8_t g_txUniverse[DMX_UNIVERSE_SIZE];
+/* Immutable payload for all physical repeats of one logical priority event. */
+static uint8_t g_priorityUniverse[DMX_UNIVERSE_SIZE];
 
 /* Sequence number for the current frame (incremented after a full frame). */
 static uint32_t g_frameSequence = 0;
@@ -170,6 +172,20 @@ static void clearReceiverCache(void) {
     priorityAckHead = 0;
     priorityAckTail = 0;
     priorityAckReportPending = false;
+    priorityNextUniverse = false;
+    priorityIdForNextUniverse = 0;
+    priorityTargetReceiverIdForNextUniverse = 0;
+    priorityRepeatCountForNextUniverse = 1;
+    priorityAttemptForNextUniverse = 1;
+    priorityGateMetadataForNextUniverse = false;
+    memset(priorityHardGateMaskForNextUniverse, 0, sizeof(priorityHardGateMaskForNextUniverse));
+    priorityMetadataPending = false;
+    prioritySequenceForCurrentFrame = 0;
+    priorityRepeatsRemaining = 0;
+    memset(g_priorityUniverse, 0, sizeof(g_priorityUniverse));
+    currentFrameIsPriority = false;
+    priorityAttempt = 1;
+    g_sendConfirmations = 0;
     telemetryReportPending = false;
     telemetryReportRecordIndex = 0;
     telemetryReportRecordCount = 0;
@@ -291,11 +307,10 @@ static void commitEnttecUniverse(void) {
     memset(g_universe, 0, sizeof(g_universe));
     memcpy(g_universe, enttecPayload + 1, enttecLength - 1);
     if (priorityNextUniverse) {
+        memcpy(g_priorityUniverse, g_universe, sizeof(g_priorityUniverse));
         prioritySequenceForCurrentFrame = priorityIdForNextUniverse;
         priorityRepeatsRemaining = priorityRepeatCountForNextUniverse;
         priorityNextUniverse = false;
-    } else {
-        priorityRepeatsRemaining = 0;
     }
     if (enttecValidFrames < 0xFFFFFFFFUL) enttecValidFrames++;
 }
@@ -487,7 +502,8 @@ static void onTelemetryReceived(uint8_t* address, uint8_t* data, uint8_t len,
             if (priorityCompletionInvalid < 0xFFFFFFFFUL) priorityCompletionInvalid++;
             return;
         }
-        if (completion.completionStatus == PRIORITY_COMPLETE_ACCEPTED) {
+        if (completion.completionStatus == PRIORITY_COMPLETE_ACCEPTED ||
+            completion.completionStatus == PRIORITY_COMPLETE_GATE_APPLIED) {
             if (priorityCompletionsReceived < 0xFFFFFFFFUL) priorityCompletionsReceived++;
         } else if (completion.completionStatus == PRIORITY_COMPLETE_DUPLICATE) {
             if (priorityCompletionDuplicates < 0xFFFFFFFFUL) priorityCompletionDuplicates++;
@@ -815,7 +831,7 @@ static void submitPriorityFragment(uint32_t seq, uint8_t fragIdx) {
     pkt.dataOffset = offset;
     pkt.payloadLength = payloadLength;
     memcpy(packetBuffer, &pkt, sizeof(pkt));
-    memcpy(packetBuffer + PRIORITY_HEADER_SIZE, g_txUniverse + offset, payloadLength);
+    memcpy(packetBuffer + PRIORITY_HEADER_SIZE, g_priorityUniverse + offset, payloadLength);
     if (priorityTargetReceiverIdForNextUniverse == 0U
 #if defined(PRIORITY_FORCE_BROADCAST_DIAGNOSTIC)
         || true

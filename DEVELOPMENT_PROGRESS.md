@@ -1176,16 +1176,44 @@ Expected approximate sequence:
 9. Low-battery GPIO monitoring ✓ (hardware-verified 2026-09-02)
 10. Receiver telemetry ✓ (multi-receiver hardware-verified 2026-09-02)
 11. Status/management interface ✓ (substantially complete for current Linux/20 Hz deployment)
-12. Reliability and throughput testing
+12. Reliability and throughput testing ✓ (Feature 12 complete for validated Linux/20 Hz deployment)
 13. Hardware-specific cleanup and fail-safe refinement
 14. High-priority transmission ✓ (targeted receiver ACK and retry path hardware-validated)
 15. Channel gating ✓ (daemon filtering, receiver runtime hard-gate fail-safe, and Mega validation)
 
 This ordering may change as hardware testing reveals constraints.
 
+### Feature 12: Reliability and throughput testing
+
+Status: COMPLETE for the validated Linux/20 Hz ESP8266/transmitter/receiver/
+Arduino Mega deployment.
+
+The 30-minute two-receiver acceptance submitted 36,000 DMX frames at 20 Hz and
+recorded 79,869/79,869 passing Mega checks. Thirty priority events produced 60
+receiver completions with zero event failures, retries, invalid ACKs, or
+unknown ACKs. The two-receiver hard-gate acceptance passed both lock and unlock
+transactions, with gate-applied ACKs from both receivers on the first attempt
+and zero Mega failures in all measurement windows.
+
+Hardware-intervention coverage also passed:
+
+* receiver removal and reconnection;
+* transmitter reset while the daemon remained running;
+* daemon stop/restart with receiver rediscovery and cache clearing;
+* PTY client disconnect and reconnection.
+
+Each recovery preserved valid normal DMX output. Fresh priority transactions
+after recovery completed with both receiver ACKs on the first attempt and zero
+retries. The final 20-event two-receiver soak also completed with 20/20
+first-attempt successes and no failed, invalid, unknown, or retry-failed events.
+
+The receiver priority staging timeout was aligned with the daemon's four-second
+priority transaction budget so 1 Hz priority fragments and gate metadata remain
+valid across the complete transaction window. The host suite passes 66 tests.
+
 ### Feature 15: Channel Gating
 
-Status: SUBSTANTIALLY COMPLETE (daemon, transmitter, receiver, and hardware validation complete for the current single-receiver qualification setup)
+Status: COMPLETE for the validated two-receiver Linux/20 Hz deployment.
 
 The daemon now supports three per-channel states: `OPEN`, `MANAGEMENT_ONLY`,
 and `LOCKED`. Serial and Art-Net frames update only open channels; management
@@ -1206,23 +1234,23 @@ priority reconstruction. The transmitter waits for metadata queue/send
 confirmation before sending priority fragments, and receiver completion ACKs
 identify gate metadata application.
 
-The Mega-connected receiver was hardware-validated on 2026-09-09:
+The two-receiver hard-gate path was hardware-validated on 2026-09-10:
 
-* Normal baseline: 266/266 checks passed.
-* Priority gate establishment: 310/310 checks passed.
-* Normal traffic remained blocked at the locked priority value: 267/267 passed.
-* Priority unlock: 311/311 checks passed.
-* Normal output resumed after unlock: 267/267 passed.
-* A 20-event priority soak completed with 20/20 first-attempt successes,
-  zero failures, and zero invalid or unknown ACKs.
+* Priority gate establishment: 266/266 checks passed.
+* Normal traffic remained blocked at the locked priority value: 266/266 passed.
+* Priority unlock: 267/267 checks passed.
+* Normal output resumed after unlock: 266/266 checks passed.
+* Both receivers reported gate-applied completion on lock and unlock.
+* A 20-event two-receiver priority soak completed with 20/20 first-attempt
+  successes, zero failures, and zero invalid or unknown ACKs.
 
-Two-receiver hard-gate qualification remains pending until both receiver units
-are confirmed to run the matching firmware at the same time. Runtime-only
-locks reset to open on receiver reboot by design.
+Runtime-only locks reset to open on receiver reboot by design. Native
+Windows/macOS serial support and longer optional soak runs remain non-blocking
+follow-up work.
 
 ### Feature 11: Host Status and Management Interface
 
-Status: SUBSTANTIALLY COMPLETE for the current Linux/20 Hz deployment.
+Status: COMPLETE for the current Linux/20 Hz deployment.
 
 Completed:
 
@@ -1236,12 +1264,13 @@ Completed:
   dashboard setup editor.
 * btop-like curses dashboard with color-coded telemetry visualizations and
   Advanced hardware-testing controls.
-* 34 automated Art-Net/daemon tests and live Art-Net/transmitter/receiver
+* 66 automated host tests and live Art-Net/transmitter/receiver
   validation.
 * 30-minute end-to-end acceptance run with 36,000 DMX frames submitted at 20 Hz,
-  79,880 Mega DMX checks, zero failures, and two receivers observed.
+  79,869/79,869 Mega DMX checks passing, zero failures, and two receivers
+  observed.
 
-Remaining follow-up work is not required for current substantial completion:
+Remaining non-blocking follow-up work:
 
 * Native Windows/macOS virtual serial backends.
 * Broader QLC+ version/platform validation.

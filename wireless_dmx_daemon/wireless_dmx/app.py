@@ -336,9 +336,11 @@ class WirelessDmxService:
             state["attempt"] += 1
             state["started_at"] = now
             event["current_receiver"] = receiver_id
-            self.transmitter.send_immediate(mark_next_priority(
+            if not self.transmitter.send_priority_management(mark_next_priority(
                 priority_id, event["repeat_count"], state["attempt"], receiver_id,
-                event["hard_gate_mask"]))
+                event["hard_gate_mask"])):
+                state["started_at"] = now
+                return
             self.pacer.submit_priority(event["universe"], repeat_count=1,
                                        ttl_seconds=event["ttl_seconds"],
                                        reason=event["reason"], priority_id=priority_id,
@@ -436,6 +438,8 @@ class WirelessDmxService:
                 self._priority_retry_recovered += 1
             if event is not None:
                 event.setdefault("ack_receivers", set()).add(received.receiver_id)
+                if received.completion_status == PRIORITY_COMPLETE_GATE_APPLIED:
+                    event.setdefault("gate_applied_receivers", set()).add(received.receiver_id)
                 if received.attempt == 1:
                     event.setdefault("first_attempt_ack_receivers", set()).add(received.receiver_id)
                 expected = event["expected_receivers"]
@@ -450,7 +454,12 @@ class WirelessDmxService:
                     if event.get("current_receiver") == received.receiver_id:
                         event["receiver_index"] += 1
                         self._start_priority_receiver(event, received.priority_id, time.monotonic())
-                if expected and expected.issubset(event["ack_receivers"]):
+                completion_receivers = (
+                    event.get("gate_applied_receivers", set())
+                    if event.get("hard_gate_mask") is not None
+                    else event["ack_receivers"]
+                )
+                if expected and expected.issubset(completion_receivers):
                     event["ack_complete"] = True
                     event["ack_completed_at"] = event.get("ack_completed_at") or time.monotonic()
                     event["terminal"] = True
@@ -553,6 +562,7 @@ class WirelessDmxService:
                         # do not mark it failed until all configured attempts
                         # have been exhausted.
                         state["started_at"] = now
+                        self._priority_retry_attempts += 1
                         event["retry_count"] += 1
                         event["last_attempt_at"] = now
                         self._start_priority_receiver(event, priority_id, now)
@@ -589,8 +599,12 @@ class WirelessDmxService:
                     self.pacer.submit_priority(event["universe"], 1,
                                                event["ttl_seconds"], event["reason"],
                                                priority_id=priority_id, attempt=next_attempt)
-                    self.transmitter.send_immediate(mark_next_priority(
-                        priority_id, event["repeat_count"], next_attempt))
+                    if not self.transmitter.send_priority_management(mark_next_priority(
+                            priority_id, event["repeat_count"], next_attempt,
+                            event.get("current_receiver") or 0,
+                            event.get("hard_gate_mask"))):
+                        event["last_attempt_at"] = now
+                        continue
                     event["attempt"] = next_attempt
                     event["retry_count"] += 1
                     event["last_attempt_at"] = now

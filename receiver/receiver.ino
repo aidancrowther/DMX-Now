@@ -130,7 +130,10 @@ static uint8_t stagedHardGateMask[DMX_GATE_MASK_SIZE];
 static unsigned long priorityGateMetadataLastActivityMs = 0;
 #define PRIORITY_ACK_QUEUE_SIZE 8U
 #ifndef PRIORITY_STAGING_TIMEOUT_MS
-#define PRIORITY_STAGING_TIMEOUT_MS 500UL
+/* Priority fragments are intentionally paced at 1 Hz. Keep the reconstruction
+ * and gate metadata alive for the complete validated daemon transaction budget
+ * so the 1-second inter-fragment interval cannot abandon the frame. */
+#define PRIORITY_STAGING_TIMEOUT_MS 4000UL
 #endif
 #ifndef PRIORITY_ACK_REPEAT_COUNT
 #define PRIORITY_ACK_REPEAT_COUNT 3U
@@ -489,7 +492,7 @@ static void transmitPriorityAck(void) {
     packet.priorityId = entry.id;
     packet.frameSequence = entry.frameSequence;
     packet.attempt = entry.attempt;
-    packet.completionStatus = PRIORITY_COMPLETE_ACCEPTED;
+    packet.completionStatus = entry.completionStatus;
     packet.attemptsObserved = entry.attemptsObserved;
     packet.lastRssi = entry.rssi;
     const uint8_t* destination = entry.sourceMac;
