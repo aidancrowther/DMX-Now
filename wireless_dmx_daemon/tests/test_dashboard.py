@@ -59,10 +59,15 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("SETTINGS", MAIN_COMMANDS)
         self.assertIn("[u]", MAIN_COMMANDS)
         self.assertIn("MANUAL DMX", MAIN_COMMANDS)
+        self.assertIn("[o] output", MAIN_COMMANDS)
+        self.assertIn("[i] locate", MAIN_COMMANDS)
+        self.assertIn("[p] priority", MAIN_COMMANDS)
         self.assertIn("[a]", MANUAL_COMMANDS)
         self.assertIn("[z] reset zero", MANUAL_COMMANDS)
         self.assertIn("[r] repeats", MANUAL_COMMANDS)
         self.assertIn("[t] TTL", MANUAL_COMMANDS)
+        self.assertNotIn("[o] output", MANUAL_COMMANDS)
+        self.assertNotIn("[i] locate", MANUAL_COMMANDS)
         self.assertIn("[q] quit", MANUAL_COMMANDS)
         self.assertIn("[w]", SETUP_COMMANDS)
         self.assertIn("[q] quit", SETUP_COMMANDS)
@@ -84,6 +89,20 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("ACK 00000007", text)
         self.assertIn("EXPECT 00000007,00000009", text)
         self.assertIn("GATE 00000007", text)
+
+    def test_management_feedback_is_complete_not_failed(self):
+        for action in ("OUTPUT", "LOCATE"):
+            text = priority_feedback({
+                "priority_id": action,
+                "expected_receivers": {0xDB07D7},
+                "ack_receivers": {0xDB07D7},
+                "retry_count": 0,
+                "management_complete": True,
+                "terminal": True,
+                "terminal_reason": "management packet sent",
+            })
+            self.assertIn(f"PRIORITY {action} COMPLETE", text)
+            self.assertNotIn("FAILED", text)
 
 
 if __name__ == "__main__":

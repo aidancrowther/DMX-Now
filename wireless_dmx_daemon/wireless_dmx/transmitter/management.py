@@ -12,6 +12,7 @@ from ..protocols import (
     MANAGEMENT_GET_PRIORITY_ACKS, MANAGEMENT_PRIORITY_ACKS,
     MANAGEMENT_CLEAR_RECEIVER_CACHE, MANAGEMENT_CACHE_CLEARED,
     MANAGEMENT_SET_RECEIVER_FAILSAFE,
+    MANAGEMENT_SET_RECEIVER_OUTPUT, MANAGEMENT_LOCATE_RECEIVER,
     MANAGEMENT_RECEIVER_TELEMETRY, MANAGEMENT_SYNC, ProtocolError, crc16_ccitt,
 )
 from ..protocols import DMX_GATE_MASK_SIZE
@@ -67,6 +68,22 @@ def set_receiver_failsafe_request(mode: str, timeout_seconds: int, generation: i
         raise ValueError("unsupported receiver fail-safe mode")
     payload = struct.pack("<BBHI", modes[mode], 0, timeout_seconds, generation & 0xFFFFFFFF)
     body = bytes((MANAGEMENT_PROTO_VERSION, MANAGEMENT_SET_RECEIVER_FAILSAFE)) + struct.pack("<H", len(payload)) + payload
+    return MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body))
+
+
+def set_receiver_output_request(enabled: bool, target_receiver_id: int, generation: int) -> bytes:
+    payload = struct.pack("<BBI", 1 if enabled else 0, 0, target_receiver_id & 0xFFFFFFFF)
+    payload += struct.pack("<I", generation & 0xFFFFFFFF)
+    body = bytes((MANAGEMENT_PROTO_VERSION, MANAGEMENT_SET_RECEIVER_OUTPUT)) + struct.pack("<H", len(payload)) + payload
+    return MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body))
+
+
+def locate_receiver_request(target_receiver_id: int, duration_seconds: int = 15, generation: int = 0) -> bytes:
+    if not 1 <= duration_seconds <= 15:
+        raise ValueError("locate duration must be between 1 and 15 seconds")
+    payload = struct.pack("<IHI", target_receiver_id & 0xFFFFFFFF, duration_seconds,
+                          generation & 0xFFFFFFFF)
+    body = bytes((MANAGEMENT_PROTO_VERSION, MANAGEMENT_LOCATE_RECEIVER)) + struct.pack("<H", len(payload)) + payload
     return MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body))
 
 

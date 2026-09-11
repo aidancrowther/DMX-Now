@@ -155,6 +155,16 @@ static bool currentFrameIsPriority = false;
 static uint8_t priorityAttempt = 1;
 static ReceiverFailsafeConfigPacket pendingFailsafeConfig;
 static uint8_t pendingFailsafeConfigRepeats = 0;
+#define CONTROL_PACKET_QUEUE_SIZE 8U
+struct PendingControlPacket {
+    uint8_t payload[sizeof(ReceiverLocatePacket)];
+    uint8_t length;
+    uint8_t repeatsRemaining;
+};
+static PendingControlPacket controlPacketQueue[CONTROL_PACKET_QUEUE_SIZE];
+static uint8_t controlPacketHead = 0;
+static uint8_t controlPacketTail = 0;
+static uint8_t controlPacketCount = 0;
 
 static bool telemetryReportPending = false;
 static uint8_t telemetryReportPart = 0;
@@ -189,6 +199,9 @@ static void clearReceiverCache(void) {
     priorityAttempt = 1;
     g_sendConfirmations = 0;
     pendingFailsafeConfigRepeats = 0;
+    controlPacketHead = 0;
+    controlPacketTail = 0;
+    controlPacketCount = 0;
     telemetryReportPending = false;
     telemetryReportRecordIndex = 0;
     telemetryReportRecordCount = 0;
@@ -203,6 +216,31 @@ static uint16_t managementCrc16(const uint8_t* data, uint16_t length) {
                                    : (uint16_t)(crc << 1);
     }
     return crc;
+}
+
+static bool enqueueControlPacket(const uint8_t* payload, uint8_t length) {
+    if (!payload || length == 0 || length > sizeof(controlPacketQueue[0].payload) ||
+        controlPacketCount >= CONTROL_PACKET_QUEUE_SIZE) {
+        return false;
+    }
+    PendingControlPacket& entry = controlPacketQueue[controlPacketHead];
+    memcpy(entry.payload, payload, length);
+    entry.length = length;
+    entry.repeatsRemaining = 3U;
+    controlPacketHead = (uint8_t)((controlPacketHead + 1U) % CONTROL_PACKET_QUEUE_SIZE);
+    controlPacketCount++;
+    return true;
+}
+
+static void serviceControlPacket(void) {
+    if (controlPacketCount == 0 || !quickEspNow.readyToSendData()) return;
+    PendingControlPacket& entry = controlPacketQueue[controlPacketTail];
+    if (quickEspNow.sendBcast(entry.payload, entry.length) != COMMS_SEND_OK) return;
+    if (entry.repeatsRemaining > 0) entry.repeatsRemaining--;
+    if (entry.repeatsRemaining == 0) {
+        controlPacketTail = (uint8_t)((controlPacketTail + 1U) % CONTROL_PACKET_QUEUE_SIZE);
+        controlPacketCount--;
+    }
 }
 
 static bool sequenceIsNewer(uint32_t a, uint32_t b) {
@@ -464,6 +502,34 @@ static void serviceEnttecInput(void) {
                         memcpy(&pendingFailsafeConfig.generation, managementPayload + 4, sizeof(uint32_t));
                         pendingFailsafeConfigRepeats = 3U;
                     }
+                }
+                if (managementVersion == MANAGEMENT_PROTO_VERSION &&
+                    managementCrc16(crcInput, (uint16_t)(4 + managementLength)) == managementReceivedCrc &&
+                    managementOpcode == MANAGEMENT_SET_RECEIVER_OUTPUT &&
+                    managementLength == 10U) {
+                    ReceiverOutputControlPacket packet;
+                    packet.magic = DMX_PACKET_MAGIC;
+                    packet.protocolVersion = DMX_PROTO_VERSION;
+                    packet.packetType = RECEIVER_OUTPUT_CONTROL_PACKET_TYPE;
+                    packet.universeId = DMX_UNIVERSE_ID;
+                    memcpy(&packet.enabled, managementPayload, 1);
+                    packet.targetReceiverId = 0U;
+                    memcpy(&packet.targetReceiverId, managementPayload + 2, sizeof(uint32_t));
+                    memcpy(&packet.generation, managementPayload + 6, sizeof(uint32_t));
+                    enqueueControlPacket(reinterpret_cast<const uint8_t*>(&packet), sizeof(packet));
+                }
+                if (managementVersion == MANAGEMENT_PROTO_VERSION &&
+                    managementCrc16(crcInput, (uint16_t)(4 + managementLength)) == managementReceivedCrc &&
+                    managementOpcode == MANAGEMENT_LOCATE_RECEIVER && managementLength == 10U) {
+                    ReceiverLocatePacket packet;
+                    memcpy(&packet.targetReceiverId, managementPayload, sizeof(uint32_t));
+                    memcpy(&packet.durationSeconds, managementPayload + 4, sizeof(uint16_t));
+                    memcpy(&packet.generation, managementPayload + 6, sizeof(uint32_t));
+                    packet.magic = DMX_PACKET_MAGIC;
+                    packet.protocolVersion = DMX_PROTO_VERSION;
+                    packet.packetType = RECEIVER_LOCATE_PACKET_TYPE;
+                    packet.universeId = DMX_UNIVERSE_ID;
+                    enqueueControlPacket(reinterpret_cast<const uint8_t*>(&packet), sizeof(packet));
                 }
                 if (managementVersion == MANAGEMENT_PROTO_VERSION &&
                     managementCrc16(crcInput, (uint16_t)(4 + managementLength)) == managementReceivedCrc &&
@@ -1041,6 +1107,7 @@ void loop(void) {
             pendingFailsafeConfigRepeats--;
         }
     }
+    serviceControlPacket();
 
     switch (txState) {
         case TX_IDLE:

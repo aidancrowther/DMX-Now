@@ -28,6 +28,8 @@ recovers by searching for the next sync sequence after malformed input.
 | `0x03` | Get priority ACKs | empty | Bounded priority ACK report. |
 | `0x04` | Clear receiver cache | empty | Clears transmitter telemetry/ACK cache and returns cache-cleared response. |
 | `0x05` | Set receiver fail-safe | mode, timeout, generation | Transmitter broadcasts the receiver configuration three times. |
+| `0x06` | Set receiver output | enabled, target ID, generation | Transmitter broadcasts a targeted or all-online MAX3485 output change. |
+| `0x07` | Locate receiver | target ID, duration, generation | Receiver disables DMX and pulses GPIO1/GPIO2 for the requested interval; the default is 15 seconds and the valid range is 1–15 seconds. |
 
 The Python codec is in:
 
@@ -89,6 +91,22 @@ timeouts, apply the generation, and echo it through telemetry.
 Repeated identical configuration packets are idempotent. A receiver does not
 clear active fail-safe state or increment its activation counter merely because
 the daemon retransmitted the same configuration.
+The dashboard output and locate controls use the transmitter's priority
+management queue. They are not priority DMX universes; they are higher-priority
+control packets sent ahead of normal management and DMX work. Receivers latch
+the output override at the final output boundary, so later normal or priority
+DMX frames cannot re-enable a disabled line. Disabling output is a visible DMX
+interruption and should be treated as a hardware test action; the operator must
+explicitly turn it back on.
+prepared for the selected receiver's RS-485 line to go silent. The action can
+target one receiver ID or all online receivers. Re-enable output explicitly
+afterward; a new DMX universe does not implicitly override this manual control.
+
+The locate action is deliberately disruptive. It disables DMX and pulses both
+receiver output-related pins for 15 seconds by default. Use it only when the selected
+receiver is disconnected from DMX fixtures. The current board has no separate
+status LED GPIO; this is a practical identification aid using the existing ESP
+module pins, not a non-interrupting locator.
 
 ## Failure handling
 

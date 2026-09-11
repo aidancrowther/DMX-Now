@@ -17,7 +17,8 @@ from .telemetry import TelemetryStore
 from .transmitter.connection import TransmitterConnection
 from .transmitter.management import (CacheClearedResponse, ManagementParser, PriorityAckReport,
                                      clear_receiver_cache_request, get_priority_acks_request, get_telemetry_request,
-                                      mark_next_priority, set_receiver_failsafe_request)
+                                      mark_next_priority, set_receiver_failsafe_request, set_receiver_output_request,
+                                      locate_receiver_request)
 from .protocols import DMX_GATE_MASK_SIZE
 from .protocols import PRIORITY_COMPLETE_GATE_APPLIED
 from .virtual_serial.linux_pty import LinuxPtyBackend
@@ -226,6 +227,39 @@ class WirelessDmxService:
             return priority_id
         self.pacer.submit(universe)
         return None
+
+    def set_receiver_output(self, enabled: bool, receiver_id: int = 0) -> tuple[int, ...]:
+        """Request a targeted or broadcast MAX3485 output change."""
+        online = tuple(receiver.receiver_id for receiver in self.telemetry.snapshot()
+                       if receiver.link_state.value == "online" and
+                       (receiver_id == 0 or receiver.receiver_id == receiver_id))
+        generation = int(time.time() * 1000) & 0xFFFFFFFF
+        if receiver_id and not online:
+            raise ValueError(f"receiver {receiver_id:08X} is not online")
+        if not self.transmitter.connected:
+            detail = self.transmitter.last_error or "serial transmitter is not connected"
+            raise RuntimeError(f"output control not sent: {detail}")
+        if not self.transmitter.send_priority_management(
+                set_receiver_output_request(enabled, receiver_id, generation)):
+            detail = self.transmitter.last_error or "priority management queue rejected the packet"
+            raise RuntimeError(f"output control not sent: {detail}")
+        return online
+
+    def locate_receiver(self, receiver_id: int = 0, duration_seconds: int = 15) -> tuple[int, ...]:
+        online = tuple(receiver.receiver_id for receiver in self.telemetry.snapshot()
+                       if receiver.link_state.value == "online" and
+                       (receiver_id == 0 or receiver.receiver_id == receiver_id))
+        if receiver_id and not online:
+            raise ValueError(f"receiver {receiver_id:08X} is not online")
+        generation = int(time.time() * 1000) & 0xFFFFFFFF
+        if not self.transmitter.connected:
+            detail = self.transmitter.last_error or "serial transmitter is not connected"
+            raise RuntimeError(f"locate not sent: {detail}")
+        if not self.transmitter.send_priority_management(
+                locate_receiver_request(receiver_id, duration_seconds, generation)):
+            detail = self.transmitter.last_error or "priority management queue rejected the packet"
+            raise RuntimeError(f"locate not sent: {detail}")
+        return online
 
     def clear_priority(self) -> None:
         self.pacer.clear_priority()

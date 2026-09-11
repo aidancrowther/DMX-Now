@@ -134,6 +134,17 @@ static uint32_t failsafeGeneration = 0;
 static bool failsafeActive = false;
 static uint32_t failsafeActivations = 0;
 static uint8_t failsafeBlackoutUniverse[DMX_UNIVERSE_SIZE];
+static bool locateActive = false;
+static unsigned long locateEndMs = 0;
+static unsigned long locateNextPulseMs = 0;
+static bool locatePulseLevel = false;
+static bool outputOverrideActive = false;
+static bool outputOverrideEnabled = true;
+static bool locateRestoreEnabled = true;
+static bool dmxOutputEnabled = false;
+#ifndef LOCATE_PULSE_HALF_PERIOD_MS
+#define LOCATE_PULSE_HALF_PERIOD_MS 500UL
+#endif
 static bool priorityGateMetadataActive = false;
 static bool priorityGateMetadataExpected = false;
 static uint32_t priorityGateMetadataId = 0;
@@ -276,6 +287,14 @@ static void setDmxOutputEnabled(bool enabled);
 static void incrementCounter(unsigned long& counter);
 static uint16_t telemetryRetryCount = 0;
 
+/* Physical DMX has a single owner. Logical universe reconstruction continues
+ * during locate, but espDMX must not be allowed to remux GPIO1 or restart its
+ * TX state machine until the locator releases the pins. */
+static void commitDmxUniverse(const uint8_t* universe) {
+    if (locateActive) return;
+    dmxA.setChans(const_cast<uint8_t*>(universe), DMX_UNIVERSE_SIZE, 1);
+}
+
 static uint32_t saturatingU32(unsigned long value) {
     return (value > 0xFFFFFFFFUL) ? 0xFFFFFFFFUL : (uint32_t)value;
 }
@@ -286,7 +305,7 @@ static void applyFailsafeOutput(void) {
     failsafeActive = true;
     if (failsafeActivations < 0xFFFFFFFFUL) failsafeActivations++;
     if (failsafeMode == RECEIVER_FAILSAFE_BLACKOUT) {
-        dmxA.setChans(failsafeBlackoutUniverse, DMX_UNIVERSE_SIZE, 1);
+        commitDmxUniverse(failsafeBlackoutUniverse);
     } else if (failsafeMode == RECEIVER_FAILSAFE_DISABLE_LINE) {
         setDmxOutputEnabled(false);
     }
@@ -296,6 +315,44 @@ static void recoverFailsafeOutput(void) {
     if (!failsafeActive) return;
     failsafeActive = false;
     if (failsafeMode == RECEIVER_FAILSAFE_DISABLE_LINE) setDmxOutputEnabled(true);
+}
+
+static void locateReceiver(uint16_t seconds) {
+    if (locateActive) return;
+    locateActive = true;
+    locateRestoreEnabled = outputOverrideActive ? outputOverrideEnabled : dmxOutputEnabled;
+    locateEndMs = millis() + (unsigned long)seconds * 1000UL;
+    locateNextPulseMs = millis();
+    locatePulseLevel = false;
+    dmxA.suspend();
+    pinMode(PIN_DMX_DATA, OUTPUT);
+    pinMode(PIN_DMX_ENABLE, OUTPUT);
+    /* Establish the safe state before beginning the visible pattern. GPIO2 is
+     * also the inverted MAX3485 enable, so the first state must disable DMX. */
+    digitalWrite(PIN_DMX_DATA, LOW);
+    digitalWrite(PIN_DMX_ENABLE, HIGH);
+    dmxOutputEnabled = false;
+}
+
+static void serviceLocate(void) {
+    if (!locateActive) return;
+    const unsigned long now = millis();
+    if ((long)(now - locateEndMs) >= 0) {
+        locateActive = false;
+        digitalWrite(PIN_DMX_DATA, LOW);
+        /* Restore the newest logical universe while espDMX still owns no
+         * output, then resume() performs the UART mux/BREAK/MAB handoff. */
+        commitDmxUniverse(activeUniverse);
+        dmxA.resume();
+        setDmxOutputEnabled(locateRestoreEnabled);
+        return;
+    }
+    if ((long)(now - locateNextPulseMs) >= 0) {
+        locatePulseLevel = !locatePulseLevel;
+        digitalWrite(PIN_DMX_DATA, locatePulseLevel ? HIGH : LOW);
+        digitalWrite(PIN_DMX_ENABLE, locatePulseLevel ? HIGH : LOW);
+        locateNextPulseMs = now + LOCATE_PULSE_HALF_PERIOD_MS;
+    }
 }
 
 static void incrementCounter(unsigned long& counter) {
@@ -633,7 +690,7 @@ static void processPriorityPacket(const uint8_t* pkt, uint8_t len, int8_t rssi,
             gateApplied = true;
             gateMissing = false;
         }
-        dmxA.setChans(activeUniverse, DMX_UNIVERSE_SIZE, 1);
+        commitDmxUniverse(activeUniverse);
         lastActiveSequence = priorityFrameSequence;
         hasActiveWirelessFrame = true;
         lastCompletionTimeMs = millis();
@@ -666,7 +723,7 @@ void dataReceived(uint8_t* address, uint8_t* data, uint8_t len, signed int rssi,
     if (radioPacketsSeen < 0xFFFFFFFFUL) radioPacketsSeen++;
 
     /* Drop anything that cannot be a valid fragment (header + >=1 payload byte). */
-    if (len < (DMX_HEADER_SIZE + 1) || len > RX_SLOT_MAX) {
+    if (len < 5 || len > RX_SLOT_MAX) {
         return;
     }
 
@@ -782,7 +839,7 @@ static void promoteActive(uint32_t seq) {
     incrementCounter(completeUniverses);
 
     /* Load the newly active universe into the physical DMX output. */
-    dmxA.setChans(activeUniverse, DMX_UNIVERSE_SIZE, 1);
+        commitDmxUniverse(activeUniverse);
     recoverFailsafeOutput();
 
     /* Reset staging metadata for the next frame (do NOT clear the 512 bytes). */
@@ -913,7 +970,41 @@ static void processPacket(const uint8_t* pkt, uint8_t len, int8_t rssi,
         }
         return;
     }
+    if (len == sizeof(ReceiverOutputControlPacket) &&
+        pkt[3] == RECEIVER_OUTPUT_CONTROL_PACKET_TYPE) {
+        ReceiverOutputControlPacket control;
+        memcpy(&control, pkt, sizeof(control));
+        if (control.magic == DMX_PACKET_MAGIC &&
+            control.protocolVersion == DMX_PROTO_VERSION &&
+            control.universeId == DMX_UNIVERSE_ID &&
+            (control.targetReceiverId == 0U || control.targetReceiverId == receiverId)) {
+            /* Locate owns the output control plane for its full interval. Do
+             * not let a queued/stale output packet alter the state restored
+             * when locating completes. */
+            if (!locateActive) {
+                outputOverrideActive = true;
+                outputOverrideEnabled = control.enabled != 0U;
+                setDmxOutputEnabled(outputOverrideEnabled);
+            }
+        }
+        return;
+    }
+    if (len == sizeof(ReceiverLocatePacket) && pkt[3] == RECEIVER_LOCATE_PACKET_TYPE) {
+        ReceiverLocatePacket locate;
+        memcpy(&locate, pkt, sizeof(locate));
+        if (locate.magic == DMX_PACKET_MAGIC && locate.protocolVersion == DMX_PROTO_VERSION &&
+            locate.universeId == DMX_UNIVERSE_ID &&
+            (locate.targetReceiverId == 0U || locate.targetReceiverId == receiverId) &&
+            locate.durationSeconds >= 1U && locate.durationSeconds <= 15U) {
+            locateReceiver(locate.durationSeconds);
+        }
+        return;
+    }
 
+    if (len < DMX_HEADER_SIZE) {
+        rejectMalformed();
+        return;
+    }
     DmxFragmentPacket hdr;
     memcpy(&hdr, pkt, sizeof(hdr));
 
@@ -1002,9 +1093,9 @@ static void processPacket(const uint8_t* pkt, uint8_t len, int8_t rssi,
  *   GPIO LOW  -> transistor OFF -> DE HIGH -> enabled
  *   GPIO HIGH -> transistor ON  -> DE LOW  -> disabled
  * -------------------------------------------------------------------------- */
-static bool dmxOutputEnabled = false;
-
 static void setDmxOutputEnabled(bool enabled) {
+    if (locateActive) return;
+    if (enabled && outputOverrideActive) enabled = outputOverrideEnabled;
     dmxOutputEnabled = enabled;
     digitalWrite(PIN_DMX_ENABLE, enabled ? LOW : HIGH);
 }
@@ -1126,6 +1217,7 @@ void loop(void) {
         clearPriorityGateMetadata();
     }
 
+    serviceLocate();
     applyFailsafeOutput();
 
     if ((long)(millis() - nextTelemetryMs) >= 0) {

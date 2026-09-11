@@ -14,6 +14,16 @@ GPIO2 high disables the MAX3485 and GPIO2 low enables it. Firmware keeps the
 line disabled during startup and enables it only when initialization and the
 configured fail-safe policy permit output.
 
+The current receiver design has no separate controllable status LED. The locate
+implementation is therefore deliberately disruptive: it suspends espDMX,
+releases GPIO1 from the UART mux, disables the MAX3485 initially, and pulses
+both GPIO1 and GPIO2 with a 500 ms half-period for 15 seconds. Driving both
+pins accommodates ESP-01 boards whose onboard LED is wired to either commonly
+used LED GPIO. GPIO2 is also the MAX3485 enable line, so the pulse pattern
+intentionally toggles the RS-485 driver; disconnect the receiver from DMX
+fixtures before locating. A future board revision with a dedicated LED GPIO
+could provide a non-disruptive locator.
+
 The current design does not provide galvanic USB/DMX isolation. Disconnect a
 receiver from DMX equipment before connecting USB charging power. The full
 schematic is `Hardware/1-Schematic_ESP DMX.json`.

@@ -54,6 +54,8 @@
 #define PRIORITY_LIVENESS_RESPONSE_PACKET_TYPE 6U
 #define PRIORITY_GATE_METADATA_PACKET_TYPE 7U
 #define RECEIVER_FAILSAFE_CONFIG_PACKET_TYPE 8U
+#define RECEIVER_OUTPUT_CONTROL_PACKET_TYPE 9U
+#define RECEIVER_LOCATE_PACKET_TYPE 10U
 #define PRIORITY_COMPLETE_ACCEPTED 1U
 #define PRIORITY_COMPLETE_DUPLICATE 2U
 #define PRIORITY_COMPLETE_INVALID 3U
@@ -74,6 +76,8 @@
 #define MANAGEMENT_GET_PRIORITY_ACKS     0x03U
 #define MANAGEMENT_CLEAR_RECEIVER_CACHE  0x04U
 #define MANAGEMENT_SET_RECEIVER_FAILSAFE 0x05U
+#define MANAGEMENT_SET_RECEIVER_OUTPUT   0x06U
+#define MANAGEMENT_LOCATE_RECEIVER       0x07U
 #define MANAGEMENT_RECEIVER_TELEMETRY      0x81U
 #define MANAGEMENT_PRIORITY_ACKS           0x83U
 #define MANAGEMENT_CACHE_CLEARED           0x84U
@@ -223,6 +227,26 @@ struct __attribute__((packed)) ReceiverFailsafeConfigPacket {
     uint32_t generation;
 };
 
+struct __attribute__((packed)) ReceiverOutputControlPacket {
+    uint16_t magic;
+    uint8_t  protocolVersion;
+    uint8_t  packetType;
+    uint8_t  universeId;
+    uint32_t targetReceiverId;
+    uint8_t  enabled;
+    uint32_t generation;
+};
+
+struct __attribute__((packed)) ReceiverLocatePacket {
+    uint16_t magic;
+    uint8_t protocolVersion;
+    uint8_t packetType;
+    uint8_t universeId;
+    uint32_t targetReceiverId;
+    uint16_t durationSeconds;
+    uint32_t generation;
+};
+
 struct __attribute__((packed)) PriorityTransmitRequest {
     uint32_t priorityId;
     uint32_t targetReceiverId; /* zero means legacy broadcast */
@@ -313,6 +337,10 @@ static_assert(sizeof(ReceiverTelemetryPacket) <= ESP_NOW_MAX_DATA_LEN,
               "ReceiverTelemetryPacket must fit within ESP_NOW_MAX_DATA_LEN");
 static_assert(sizeof(ReceiverFailsafeConfigPacket) <= ESP_NOW_MAX_DATA_LEN,
               "ReceiverFailsafeConfigPacket must fit within ESP_NOW_MAX_DATA_LEN");
+static_assert(sizeof(ReceiverOutputControlPacket) <= ESP_NOW_MAX_DATA_LEN,
+              "ReceiverOutputControlPacket must fit within ESP_NOW_MAX_DATA_LEN");
+static_assert(sizeof(ReceiverLocatePacket) <= ESP_NOW_MAX_DATA_LEN,
+              "ReceiverLocatePacket must fit within ESP_NOW_MAX_DATA_LEN");
 static_assert(sizeof(TelemetryReportPartHeader) == 8,
               "TelemetryReportPartHeader layout changed unexpectedly");
 static_assert(sizeof(TelemetryReportRecord) == 62,

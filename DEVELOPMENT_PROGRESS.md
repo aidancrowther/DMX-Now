@@ -1270,6 +1270,13 @@ Completed:
   79,869/79,869 Mega DMX checks passing, zero failures, and two receivers
   observed.
 
+The receiver management controls also include targeted/broadcast MAX3485 output
+control and a deliberately disruptive GPIO1/GPIO2 locator. The locator suspends
+the UART-backed espDMX engine, releases GPIO1 to GPIO mode, and runs for a
+15-second default interval (explicit requests may use 1–15 seconds). These
+controls are compile-verified and require off-fixture hardware validation before
+being treated as production-safe.
+
 Remaining non-blocking follow-up work:
 
 * Native Windows/macOS virtual serial backends.

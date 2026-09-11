@@ -105,7 +105,7 @@ Settings are sent at runtime and are not persisted in receiver flash. Receivers
 start with compile-time defaults and the daemon reapplies its configured
 generation after startup, transmitter reconnect, receiver discovery, or
 receiver reboot. Detailed semantics and finite validation procedures are in
-`docs/failsafe.md`.
+`docs/receiver-failsafe.md`.
 
 ## Tests
 

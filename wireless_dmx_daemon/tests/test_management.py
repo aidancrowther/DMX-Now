@@ -12,7 +12,8 @@ from wireless_dmx.protocols import (MANAGEMENT_PRIORITY_ACKS, MANAGEMENT_RECEIVE
 from wireless_dmx.transmitter.management import (ACK_HEADER, ACK_RECORD, ManagementParser,
                                                  PART_HEADER, RECORD, get_priority_acks_request,
                                                   clear_receiver_cache_request, get_telemetry_request,
-                                                   mark_next_priority, set_receiver_failsafe_request)
+                                                    mark_next_priority, set_receiver_failsafe_request,
+                                                    set_receiver_output_request, locate_receiver_request)
 
 
 def make_part(sequence, index, count, records):
@@ -60,6 +61,32 @@ class ManagementTests(unittest.TestCase):
         self.assertEqual(request[:2], MANAGEMENT_SYNC)
         self.assertEqual(struct.unpack_from("<H", request, 4)[0], 8)
         self.assertEqual(crc16_ccitt(request[2:-2]), struct.unpack("<H", request[-2:])[0])
+
+    def test_output_request_layout_and_crc(self):
+        request = set_receiver_output_request(False, 0x12345678, 0xAABBCCDD)
+        self.assertEqual(request[:2], MANAGEMENT_SYNC)
+        self.assertEqual(request[3], 0x06)
+        self.assertEqual(struct.unpack_from("<H", request, 4)[0], 10)
+        self.assertEqual(request[6:16], bytes.fromhex("000078563412DDCCBBAA"))
+        self.assertEqual(crc16_ccitt(request[2:-2]), struct.unpack("<H", request[-2:])[0])
+
+    def test_locate_request_layout_and_crc(self):
+        request = locate_receiver_request(0x12345678, 15, 0xAABBCCDD)
+        self.assertEqual(request[:2], MANAGEMENT_SYNC)
+        self.assertEqual(request[3], 0x07)
+        self.assertEqual(struct.unpack_from("<H", request, 4)[0], 10)
+        self.assertEqual(request[6:16], bytes.fromhex("785634120F00DDCCBBAA"))
+        self.assertEqual(crc16_ccitt(request[2:-2]), struct.unpack("<H", request[-2:])[0])
+
+    def test_locate_request_defaults_to_fifteen_seconds(self):
+        request = locate_receiver_request(1)
+        self.assertEqual(request[6:16], bytes.fromhex("010000000F0000000000"))
+
+    def test_locate_request_rejects_invalid_duration(self):
+        with self.assertRaises(ValueError):
+            locate_receiver_request(1, 0)
+        with self.assertRaises(ValueError):
+            locate_receiver_request(1, 16)
 
     def test_clear_cache_response_is_parsed(self):
         body = bytes((1, 0x84, 0, 0))

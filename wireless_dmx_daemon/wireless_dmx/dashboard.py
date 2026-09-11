@@ -116,8 +116,8 @@ def priority_feedback(event: dict | None) -> str:
     expected = sorted(event.get("expected_receivers", set()))
     acknowledged = sorted(event.get("ack_receivers", set()))
     gate_applied = sorted(event.get("gate_applied_receivers", set()))
-    status = "COMPLETE" if event.get("ack_complete") else "WAITING"
-    if event.get("terminal") and not event.get("ack_complete"):
+    status = "COMPLETE" if event.get("ack_complete") or event.get("management_complete") else "WAITING"
+    if event.get("terminal") and not event.get("ack_complete") and not event.get("management_complete"):
         status = f"FAILED:{event.get('terminal_reason', 'unknown')}"
     ack_text = ",".join(f"{receiver:08X}" for receiver in acknowledged) or "none"
     expected_text = ",".join(f"{receiver:08X}" for receiver in expected) or "broadcast"
@@ -128,7 +128,7 @@ def priority_feedback(event: dict | None) -> str:
     return text
 
 
-MAIN_COMMANDS = "[d] daemon  [r] telemetry  [s] SETTINGS  [u] MANUAL DMX  [x] advanced  [l] logs  [q] quit"
+MAIN_COMMANDS = "[d] daemon  [r] telemetry  [s] SETTINGS  [u] MANUAL DMX  [o] output  [i] locate  [p] priority  [x] advanced  [l] logs  [q] quit"
 SETUP_COMMANDS = "[↑/↓/j/k] select  [e] edit  [w] write config  [x] cancel"
 ADVANCED_COMMANDS = "[m] Mega  [a] acceptance  [b] abort Mega  [x] main  [q] quit"
 SETUP_COMMANDS = "[↑/↓/j/k] select  [e] edit  [w] write config  [x] discard  [q] quit"
@@ -341,6 +341,67 @@ def _box(stdscr, top: int, left: int, bottom: int, right: int, title: str) -> No
         pass
 
 
+def latest_priority_event(controller: DashboardController) -> dict | None:
+    if controller.service and controller.service._priority_events:
+        return controller.service._priority_events[next(reversed(controller.service._priority_events))]
+    return None
+
+
+def _online_receiver_ids(controller: DashboardController) -> list[int]:
+    return [receiver.receiver_id for receiver in controller.snapshot().receivers
+            if receiver.link_state.value == "online"]
+
+
+def render_receiver_modal(stdscr, controller: DashboardController, action: str,
+                          selected_index: int, selected_ids: set[int], message: str = "") -> None:
+    """Render a centered multi-select receiver management menu."""
+    height, width = stdscr.getmaxyx()
+    ids = _online_receiver_ids(controller)
+    entries = [0] + ids
+    selected_index = max(0, min(selected_index, len(entries) - 1))
+    box_width = min(max(48, width - 8), 76)
+    box_height = min(max(9, len(entries) + 7), max(9, height - 4))
+    top = max(1, (height - box_height) // 2)
+    left = max(1, (width - box_width) // 2)
+    bottom = min(height - 2, top + box_height - 1)
+    right = min(width - 2, left + box_width - 1)
+    _box(stdscr, top, left, bottom, right, "RECEIVER MANAGEMENT")
+    verb = "MAX3485 OUTPUT" if action == "output" else "LOCATE RECEIVERS"
+    _safe_add(stdscr, top + 1, left + 3, f"{verb} - select one or more online receivers", color_attr("accent", True))
+    _safe_add(stdscr, top + 2, left + 3, "Space: toggle   Enter: continue   x/Esc: cancel", curses.A_DIM)
+    visible = max(1, bottom - top - 5)
+    first = max(0, min(selected_index - visible // 2, len(entries) - visible))
+    for offset, receiver_id in enumerate(entries[first:first + visible]):
+        index = first + offset
+        marker = "[x]" if receiver_id in selected_ids else "[ ]"
+        label = "ALL ONLINE RECEIVERS" if receiver_id == 0 else f"Receiver {receiver_id:08X}"
+        attr = color_attr("gate_open_selected", True) if index == selected_index else 0
+        _safe_add(stdscr, top + 4 + offset, left + 3, f"{marker} {label}", attr)
+    if message:
+        _safe_add(stdscr, bottom - 1, left + 3, message, color_attr("warning", True), right - left - 5)
+
+
+def render_priority_modal(stdscr, event: dict | None, countdown: float | None = None) -> None:
+    """Render a centered, readable priority transaction alert."""
+    height, width = stdscr.getmaxyx()
+    timer = f"AUTO-CLOSE IN {max(0, int(countdown + 0.999))}s" if countdown is not None else "AUTO-CLOSE DISABLED"
+    lines = ["PRIORITY TRAFFIC STATUS", priority_feedback(event), timer,
+             "c: keep open   Enter/x/Esc: close"]
+    box_width = min(max(60, max(len(line) for line in lines) + 6), width - 4)
+    box_height = min(len(lines) + 4, height - 4)
+    top = max(1, (height - box_height) // 2)
+    left = max(1, (width - box_width) // 2)
+    _box(stdscr, top, left, top + box_height - 1, left + box_width - 1, "PRIORITY ALERT")
+    for offset, line in enumerate(lines):
+        attr = color_attr("warning", True) if offset == 1 else color_attr("accent", True) if offset == 0 else curses.A_DIM
+        _safe_add(stdscr, top + 2 + offset, left + 3, line, attr, box_width - 6)
+
+
+def priority_event_finished(event: dict | None) -> bool:
+    return bool(event and (event.get("ack_complete") or event.get("terminal") or
+                           event.get("management_complete")))
+
+
 def render(stdscr, controller: DashboardController, show_logs: bool) -> None:
     stdscr.erase()
     height, width = stdscr.getmaxyx()
@@ -365,9 +426,7 @@ def render(stdscr, controller: DashboardController, show_logs: bool) -> None:
     _safe_add(stdscr, 5, x, f"Dropped      : {snapshot.dmx.frames_dropped_by_pacer:>8} {bar(snapshot.dmx.frames_dropped_by_pacer, max(1, snapshot.dmx.valid_dmx_frames))}", color_attr(drop_color))
     _safe_add(stdscr, 6, x, f"Target rate  : {controller.config.pacer_rate_hz:.1f} Hz  Art-Net: "
               f"{'ON' if controller.config.artnet_enabled else 'OFF'}:{controller.config.artnet_port}", color_attr("accent", True))
-    priority_event = None
-    if controller.service and controller.service._priority_events:
-        priority_event = controller.service._priority_events[next(reversed(controller.service._priority_events))]
+    priority_event = latest_priority_event(controller)
     _safe_add(stdscr, 7, 3, priority_feedback(priority_event), color_attr("warning" if priority_event and not priority_event.get("ack_complete") else "accent", True))
     _box(stdscr, 8, 1, max(10, 11 + len(snapshot.receivers)), width - 2, "RECEIVERS")
     row = 9
@@ -509,9 +568,43 @@ def run_dashboard(stdscr, controller: DashboardController) -> None:
     manual_full = False
     manual_grid = False
     manual_message = ""
+    management = False
+    management_action = "output"
+    management_index = 0
+    management_selected: set[int] = set()
+    management_message = ""
+    priority_alert = False
+    priority_alert_manual = False
+    priority_alert_close_at = 0.0
+    priority_alert_event: dict | None = None
     controller.start_daemon()
     while True:
-        if manual:
+        if (priority_alert and not priority_alert_manual and priority_alert_close_at and
+                time.monotonic() >= priority_alert_close_at):
+            priority_alert = False
+            priority_alert_event = None
+        if priority_alert:
+            stdscr.erase()
+            event = priority_alert_event or latest_priority_event(controller)
+            if not priority_alert_manual and priority_event_finished(event):
+                if not priority_alert_close_at:
+                    priority_alert_close_at = time.monotonic() + 10.0
+                else:
+                    priority_alert_close_at = min(priority_alert_close_at, time.monotonic() + 10.0)
+            remaining = (priority_alert_close_at - time.monotonic()
+                         if priority_alert_close_at and not priority_alert_manual else None)
+            render_priority_modal(stdscr, event, remaining)
+            stdscr.refresh()
+        elif management:
+            stdscr.erase()
+            if management_action == "output_state":
+                render_receiver_modal(stdscr, controller, "output", management_index, management_selected,
+                                      "Press o for ON, f for OFF, or x to cancel")
+            else:
+                render_receiver_modal(stdscr, controller, management_action, management_index,
+                                      management_selected, management_message)
+            stdscr.refresh()
+        elif manual:
             render_manual(stdscr, controller, manual_channel, manual_priority, manual_repeat,
                           manual_ttl, manual_full, manual_grid, manual_message)
         elif setup:
@@ -526,8 +619,15 @@ def run_dashboard(stdscr, controller: DashboardController) -> None:
         height, width = stdscr.getmaxyx()
         if key in (ord("q"), ord("Q")):
             return
-        if key in (ord("x"), ord("X")):
-            if manual:
+        if key in (ord("x"), ord("X"), 27):
+            if priority_alert:
+                priority_alert = False
+                priority_alert_event = None
+            elif management:
+                management = False
+                management_message = ""
+                management_selected.clear()
+            elif manual:
                 manual = False
                 manual_message = ""
             elif setup:
@@ -535,6 +635,77 @@ def run_dashboard(stdscr, controller: DashboardController) -> None:
                 setup_message = "changes discarded"
             else:
                 advanced = not advanced
+            continue
+        if priority_alert:
+            if key in (ord("c"), ord("C")) and not priority_alert_manual:
+                priority_alert_manual = True
+                priority_alert_close_at = 0.0
+            elif key in (ord("p"), ord("P"), curses.KEY_ENTER, 10, 13):
+                priority_alert = False
+                priority_alert_event = None
+            continue
+        if management:
+            ids = [0] + _online_receiver_ids(controller)
+            if key in (curses.KEY_UP, ord("k")):
+                management_index = max(0, management_index - 1)
+            elif key in (curses.KEY_DOWN, ord("j")):
+                management_index = min(max(0, len(ids) - 1), management_index + 1)
+            elif management_action == "output_state" and key in (ord("o"), ord("O"), ord("f"), ord("F")):
+                enabled = key in (ord("o"), ord("O"))
+                targets = tuple(management_selected)
+                try:
+                    if 0 in targets:
+                        targets = controller.service.set_receiver_output(enabled, 0) if controller.service else ()
+                    else:
+                        for receiver_id in targets:
+                            if controller.service:
+                                controller.service.set_receiver_output(enabled, receiver_id)
+                    management_message = f"output {'on' if enabled else 'off'} requested for {len(targets)} receiver(s)"
+                    priority_alert_event = {"priority_id": "OUTPUT", "expected_receivers": set(targets),
+                                            "ack_receivers": set(targets), "retry_count": 0,
+                                            "management_complete": True, "terminal": True,
+                                            "terminal_reason": "management packet sent"}
+                    priority_alert = True
+                    priority_alert_manual = False
+                    priority_alert_close_at = time.monotonic() + 10.0
+                    management = False
+                except (ValueError, RuntimeError) as exc:
+                    management_action = "output"
+                    management_message = str(exc)
+            elif key == ord(" ") and ids:
+                receiver_id = ids[management_index]
+                if receiver_id == 0:
+                    management_selected = {0}
+                elif 0 in management_selected:
+                    management_selected.clear()
+                    management_selected.add(receiver_id)
+                elif receiver_id in management_selected:
+                    management_selected.remove(receiver_id)
+                else:
+                    management_selected.add(receiver_id)
+            elif key in (curses.KEY_ENTER, 10, 13) and management_selected:
+                if management_action == "output":
+                    management_action = "output_state"
+                else:
+                    try:
+                        targets = tuple(management_selected)
+                        if 0 in targets:
+                            targets = controller.service.locate_receiver(0, 15) if controller.service else ()
+                        else:
+                            for receiver_id in targets:
+                                if controller.service:
+                                    controller.service.locate_receiver(receiver_id, 15)
+                        management_message = f"locate requested for {len(targets)} receiver(s); DMX interrupted for 15 seconds"
+                        priority_alert_event = {"priority_id": "LOCATE", "expected_receivers": set(targets),
+                                                "ack_receivers": set(targets), "retry_count": 0,
+                                                "management_complete": True, "terminal": True,
+                                                "terminal_reason": "management packet sent"}
+                        priority_alert = True
+                        priority_alert_manual = False
+                        priority_alert_close_at = time.monotonic() + 10.0
+                        management = False
+                    except (ValueError, RuntimeError) as exc:
+                        management_message = str(exc)
             continue
         if key in (ord("s"), ord("S")) and not advanced and not setup:
             setup = True
@@ -592,8 +763,6 @@ def run_dashboard(stdscr, controller: DashboardController) -> None:
                 manual_message = f"channel {manual_channel} gate: {controller.service.channel_gate(manual_channel).value}"
             elif key in (ord("r"), ord("R")):
                 manual_repeat = manual_repeat % controller.config.priority_max_repeat_count + 1
-            elif key in (ord("t"), ord("T")):
-                manual_ttl = 0.5 if manual_ttl >= controller.config.priority_max_ttl_seconds else min(controller.config.priority_max_ttl_seconds, manual_ttl + 0.5)
             elif key in (ord("u"), ord("U")):
                 manual_full = not manual_full
                 if not manual_full:
@@ -610,6 +779,10 @@ def run_dashboard(stdscr, controller: DashboardController) -> None:
                     priority_id = controller.service.send_manual(manual_priority, manual_repeat, manual_ttl)
                     if manual_priority:
                         manual_message = priority_feedback(controller.service._priority_events.get(priority_id))
+                        priority_alert_event = controller.service._priority_events.get(priority_id)
+                        priority_alert = True
+                        priority_alert_manual = False
+                        priority_alert_close_at = 0.0
                     else:
                         manual_message = "sent normal universe"
                 except Exception as exc:
@@ -672,6 +845,23 @@ def run_dashboard(stdscr, controller: DashboardController) -> None:
             controller.request_telemetry()
         elif key in (ord("l"), ord("L")):
             show_logs = not show_logs
+        elif key in (ord("o"), ord("O")):
+            management = True
+            management_action = "output"
+            management_index = 0
+            management_selected.clear()
+            management_message = ""
+        elif key in (ord("i"), ord("I")):
+            management = True
+            management_action = "locate"
+            management_index = 0
+            management_selected.clear()
+            management_message = "WARNING: locating interrupts DMX for 5 seconds; use only off-fixture"
+        elif key in (ord("p"), ord("P")):
+            priority_alert = True
+            priority_alert_manual = True
+            priority_alert_close_at = 0.0
+            priority_alert_event = latest_priority_event(controller)
 
 
 def build_parser() -> argparse.ArgumentParser:
