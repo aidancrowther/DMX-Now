@@ -1,0 +1,70 @@
+[virtual_port]
+enabled = true
+requested_path = "/tmp/wireless-dmx"
+backend = "linux-pty"
+
+[raw_virtual_port]
+enabled = false
+requested_path = "/tmp/wireless-dmx-raw"
+timeout_seconds = 1.0
+
+[transmitter]
+device = "/dev/ttyUSB0"
+baud = 115200
+data_bits = 8
+parity = "none"
+stop_bits = 2
+
+[pacer]
+enabled = true
+rate_hz = 20.0
+maximum_rate_hz = 20.0
+allow_experimental_rates = false
+
+[telemetry]
+enabled = true
+interval_seconds = 10.0
+response_timeout_seconds = 2.0
+stale_seconds = 15.0
+offline_seconds = 30.0
+max_report_age_seconds = 5.0
+
+[channel_gates]
+management_only = []
+locked = []
+
+# Optional persistent friendly names keyed by the receiver's 32-bit ID.
+# The hardware ID remains visible in the dashboard and is used for targeting.
+[receiver_names]
+# "00DB07D7" = "Front Truss"
+
+[receiver_failsafe]
+mode = "hold"
+timeout_seconds = 60
+
+[artnet]
+enabled = true
+bind_host = "0.0.0.0"
+port = 6454
+universe = 0
+
+[input]
+source_policy = "latest" # latest, serial, raw_serial, or artnet
+
+[priority]
+enabled = true
+max_queue_depth = 4
+default_repeat_count = 3
+max_repeat_count = 10
+default_ttl_seconds = 2.0
+max_ttl_seconds = 5.0
+lead_in_ms = 500
+lead_out_ms = 500
+confirmation_window_ms = 1500
+max_attempts = 5
+receiver_budget_seconds = 4.0
+retry_cooldown_min_seconds = 1.0
+retry_cooldown_max_seconds = 2.5
+normal_quiet_before_ms = 500
+normal_quiet_after_ms = 1000
+max_consecutive_events = 3

@@ -1260,8 +1260,13 @@ Completed:
 * Linux host daemon with ENTTEC parser, 20 Hz latest-state pacer, reconnecting
   transmitter connection, and virtual serial PTY backend.
 * Configurable Art-Net ArtDMX input, virtual serial input, and source policy.
-* TOML configuration, `default.conf` fallback, atomic configuration saving, and
-  dashboard setup editor.
+* Optional raw-DMX Linux PTY accepting complete 512-byte universes, with source
+  arbitration and a default one-second incomplete-burst timeout. The raw-DMX
+  hardware run passed 133/133 Mega checks before and after a timed-out partial
+  burst, with one timeout drop recorded.
+* TOML configuration under `configs/`, read-only default/example baselines,
+  interactive configuration selection, last-writable-config reopening, atomic
+  Save As support, and dashboard setup editing.
 * btop-like curses dashboard with color-coded telemetry visualizations and
   Advanced hardware-testing controls.
 * 66 automated host tests and live Art-Net/transmitter/receiver

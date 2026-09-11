@@ -13,6 +13,9 @@ EDITABLE_FIELDS = (
     ("Transmitter baud", "transmitter_baud", int),
     ("Virtual serial enabled", "virtual_serial_enabled", bool),
     ("Virtual port path", "virtual_port_path", str),
+    ("Raw DMX serial enabled", "raw_virtual_serial_enabled", bool),
+    ("Raw DMX port path", "raw_virtual_port_path", str),
+    ("Raw DMX timeout seconds", "raw_virtual_timeout_seconds", float),
     ("Art-Net enabled", "artnet_enabled", bool),
     ("Art-Net UDP port", "artnet_port", int),
     ("Art-Net universe", "artnet_universe", int),
@@ -56,3 +59,19 @@ def update_field(config: DaemonConfig, index: int, text: str) -> DaemonConfig:
 
 def save_edited_config(config: DaemonConfig, path: str) -> None:
     save_config(config, path)
+
+
+def receiver_name(config: DaemonConfig, receiver_id: int) -> str:
+    return dict(config.receiver_names).get(receiver_id, "")
+
+
+def set_receiver_name(config: DaemonConfig, receiver_id: int, name: str) -> DaemonConfig:
+    names = dict(config.receiver_names)
+    cleaned = name.strip()
+    if cleaned:
+        names[receiver_id] = cleaned
+    else:
+        names.pop(receiver_id, None)
+    result = replace(config, receiver_names=tuple(sorted(names.items())))
+    result.validate()
+    return result

@@ -22,6 +22,9 @@ def parser() -> argparse.ArgumentParser:
         command.add_argument("--baud", type=int)
         command.add_argument("--rate", type=float)
         command.add_argument("--virtual-port")
+        command.add_argument("--raw-dmx-enabled", action=argparse.BooleanOptionalAction, default=None)
+        command.add_argument("--raw-dmx-port")
+        command.add_argument("--raw-dmx-timeout", type=float)
         command.add_argument("--telemetry-interval", type=float)
         command.add_argument("--allow-experimental-rates", action="store_true")
     sub.add_parser("version")
@@ -49,7 +52,10 @@ def main(argv=None) -> int:
     service = _service(args)
     if args.command == "run":
         service.start()
-        print(f"Virtual ENTTEC port: {service.virtual.path}", flush=True)
+        if config.virtual_serial_enabled:
+            print(f"Virtual ENTTEC port: {service.virtual.path}", flush=True)
+        if config.raw_virtual_serial_enabled:
+            print(f"Virtual raw DMX port: {service.raw_virtual.path}", flush=True)
         try:
             while True:
                 time.sleep(1)

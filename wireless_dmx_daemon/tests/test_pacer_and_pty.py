@@ -8,10 +8,43 @@ import unittest
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
 from wireless_dmx.pacer import DmxPacer
+from wireless_dmx.raw_dmx import RawDmxParser
 from wireless_dmx.virtual_serial.linux_pty import LinuxPtyBackend
 
 
 class PacerAndPtyTests(unittest.TestCase):
+    def test_raw_dmx_parser_requires_complete_universe(self):
+        parser = RawDmxParser()
+        universe = bytes(range(256)) * 2
+        self.assertEqual(parser.feed(universe[:200]), ())
+        frames = parser.feed(universe[200:])
+        self.assertEqual(len(frames), 1)
+        self.assertEqual(frames[0].data, universe)
+
+    def test_raw_dmx_parser_handles_concatenated_bursts(self):
+        parser = RawDmxParser()
+        first = bytes([1]) * 512
+        second = bytes([2]) * 512
+        frames = parser.feed(first + second)
+        self.assertEqual(tuple(frame.data for frame in frames), (first, second))
+
+    def test_raw_dmx_parser_retains_incomplete_tail(self):
+        parser = RawDmxParser()
+        parser.feed(bytes([3]) * 511)
+        self.assertEqual(parser.invalid_bursts, 0)
+        frames = parser.feed(bytes([3]) + bytes([4]) * 512)
+        self.assertEqual(tuple(frame.data for frame in frames),
+                         (bytes([3]) * 512, bytes([4]) * 512))
+
+    def test_raw_dmx_parser_expires_partial_universe(self):
+        parser = RawDmxParser(timeout_seconds=1.0)
+        parser.feed(bytes([9]) * 200, now=10.0)
+        self.assertFalse(parser.expire(now=10.999))
+        self.assertTrue(parser.expire(now=11.0))
+        self.assertEqual(parser.invalid_bursts, 1)
+        self.assertEqual(parser.feed(bytes([7]) * 512, now=12.0)[0].data,
+                         bytes([7]) * 512)
+
     def test_pacer_replaces_pending_state(self):
         sent = []
         pacer = DmxPacer(50, sent.append)

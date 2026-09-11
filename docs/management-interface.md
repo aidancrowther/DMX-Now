@@ -68,6 +68,11 @@ Telemetry includes receiver identity, link age, battery state, RSSI, uptime,
 universe counters, firmware/protocol versions, telemetry sequence, and fail-safe
 configuration/state.
 
+Friendly receiver names are host-side aliases and are not part of the embedded
+telemetry protocol. The daemon persists them under `[receiver_names]`, keyed by
+the receiver's hexadecimal 32-bit ID. This keeps naming independent of firmware
+and preserves the hardware ID for targeted management commands.
+
 ## Priority and ACK flow
 
 The daemon creates a unique priority ID and sends a marker. The transmitter

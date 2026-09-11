@@ -6,12 +6,41 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
-from wireless_dmx.config import load_config, save_config
+from wireless_dmx.config import (available_config_paths, last_config_path, load_config,
+                                 remember_config_path, save_config)
 from wireless_dmx.models import ReceiverLinkState, ReceiverTelemetry
 from wireless_dmx.telemetry import TelemetryStore
 
 
 class ConfigTelemetryTests(unittest.TestCase):
+    def test_available_config_paths_prioritizes_default(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "z.toml").write_text("")
+            (root / "default.conf").write_text("")
+            (root / "a.conf").write_text("")
+            self.assertEqual(available_config_paths(directory),
+                             (str(root / "default.conf"), str(root / "a.conf"), str(root / "z.toml")))
+
+    def test_last_config_prefers_existing_writable_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            writable = root / "show.toml"
+            writable.write_text("")
+            remember_config_path(str(writable), directory)
+            self.assertEqual(last_config_path(directory), str(writable))
+            self.assertIsNone(last_config_path(str(root / "missing")))
+
+    def test_last_config_falls_back_to_newest_writable_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            old = root / "old.toml"
+            new = root / "new.toml"
+            old.write_text("")
+            time.sleep(0.01)
+            new.write_text("")
+            self.assertEqual(last_config_path(directory), str(new))
+
     def test_channel_gates_round_trip(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.toml"
@@ -22,6 +51,17 @@ class ConfigTelemetryTests(unittest.TestCase):
             loaded = load_config(str(path))
             self.assertEqual(tuple(loaded.management_only_channels), (1, 7))
             self.assertEqual(tuple(loaded.locked_channels), (100, 101))
+
+    def test_receiver_names_round_trip(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.toml"
+            config = load_config()
+            config = config.__class__(**{**config.__dict__,
+                "receiver_names": ((0x00DB07D7, "Front Truss"), (0x12345678, 'Stage "Left"'))})
+            save_config(config, str(path))
+            loaded = load_config(str(path))
+            self.assertEqual(dict(loaded.receiver_names)[0x00DB07D7], "Front Truss")
+            self.assertEqual(dict(loaded.receiver_names)[0x12345678], 'Stage "Left"')
 
     def test_channel_gate_lists_must_not_overlap(self):
         config = load_config()

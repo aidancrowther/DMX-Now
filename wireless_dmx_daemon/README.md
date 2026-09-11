@@ -14,13 +14,14 @@ DMX hardware was designed by me.
 ## Initial assumptions
 
 * Initial host platform: Linux.
-* Initial virtual serial implementation: Linux PTY, isolated behind a backend
-  interface for future Windows/macOS VCP implementations.
+* Initial virtual serial implementation: Linux PTYs for ENTTEC-compatible and
+  optional raw-DMX input, isolated behind replaceable backend adapters.
 * Transmitter connection: configurable serial device, default `/dev/ttyUSB0`.
 * Transmitter serial format: 115200 baud, 8 data bits, no parity, 2 stop bits.
 * Default wireless pacing rate: 20 Hz.
 * Art-Net ArtDMX input is enabled by default on UDP port 6454, Universe 0.
-* Virtual serial and Art-Net inputs can be enabled independently or together.
+* ENTTEC serial, raw-DMX serial, and Art-Net inputs can be enabled independently
+  or together.
 * Rates above 20 Hz require an explicit experimental override.
 * Telemetry is binary management traffic. The transmitter's text
   telemetry logging is not enabled during normal operation because it would
@@ -201,10 +202,14 @@ Mega measurements and automatic recovery. See `../docs/lab-validation.md`.
 The default command is:
 
 ```bash
-python3 -m wireless_dmx run --config config.example.toml
+python3 -m wireless_dmx run --config configs/config.example.toml
 ```
 
-The printed PTY slave path is the port to configure in lighting software. The
+Dashboard configuration files live in `configs/`. Starting the dashboard without
+`--config` uses the last writable configuration when available, or opens the
+interactive configuration selector. The CLI still accepts `--config <path>`.
+
+The printed PTY slave paths are the ports to configure in lighting software. The
 daemon owns the physical transmitter at 115200 8N2 and exposes current state
 through service snapshots rather than mixing diagnostic text into the ENTTEC
 stream.
@@ -223,6 +228,23 @@ Universe: 0
 Configure QLC+ to send Art-Net to the daemon host's IP address and Universe 0.
 The daemon normalizes ArtDMX payloads to 512 channels and sends them through the
 same 20 Hz latest-state pacer used by the virtual serial input.
+
+An optional second Linux PTY accepts raw DMX universes without ENTTEC framing:
+
+```toml
+[raw_virtual_port]
+enabled = true
+requested_path = "/tmp/wireless-dmx-raw"
+timeout_seconds = 1.0
+
+[input]
+source_policy = "raw_serial"
+```
+
+Write one complete 512-byte universe per burst. The raw-DMX parser handles PTY
+partial reads and concatenated bursts while preserving the same source gating
+and pacer behavior as other inputs. Incomplete bursts expire after the configured
+`timeout_seconds`, which defaults to 1.0 second.
 
 Input combinations are configured in TOML:
 
@@ -247,6 +269,12 @@ source frame arrives most recently.
 If no configuration path is supplied, the application loads
 `default.conf` from its working directory when present, otherwise it uses the
 built-in safe defaults.
+
+The dashboard treats `default.conf` as a read-only baseline. Start the dashboard
+without `--config` to choose from available `.conf` and `.toml` files, or press
+`c` while it is running to switch configurations. Use Save As in the setup
+editor to create a writable configuration file. The `--config` option remains
+available for CLI and scripted management.
 
 The Art-Net listener is a UDP input adapter and does not require QLC+ to see a
 USB or serial interface. Configure QLC+'s Art-Net output for the daemon host,
@@ -357,6 +385,10 @@ In full-universe grid mode, the left/right arrows move horizontally by one
 channel and the up/down arrows move by one 16-channel row. In list and channel
 modes, left/right do nothing. Press `a` in any manual mode to jump directly to
 channel 1–512.
+
+In grid mode, type a value directly with the number keys and press Enter to
+apply it to the selected channel. Values must be 0–255; Backspace removes a
+digit. Enter with no typed value continues to send the complete universe.
 
 ## Suggested future layout
 

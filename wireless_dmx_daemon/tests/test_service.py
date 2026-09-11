@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).parents[1]))
 
 from wireless_dmx.app import WirelessDmxService
 from wireless_dmx.enttec.protocol import encode_dmx
+from wireless_dmx.raw_dmx import RAW_DMX_UNIVERSE_SIZE
 from wireless_dmx.models import ChannelGate, DaemonConfig, ReceiverLinkState, ReceiverTelemetry
 from wireless_dmx.protocols import (MANAGEMENT_CACHE_CLEARED, MANAGEMENT_PRIORITY_ACKS,
                                     MANAGEMENT_RECEIVER_TELEMETRY, MANAGEMENT_SYNC, crc16_ccitt)
@@ -42,6 +43,46 @@ def telemetry_part():
 
 
 class ServiceTests(unittest.TestCase):
+    def test_service_accepts_raw_dmx_universe(self):
+        backend = LinuxPtyBackend()
+        raw_backend = LinuxPtyBackend()
+        fake = FakeSerial()
+        service = WirelessDmxService(
+            DaemonConfig(virtual_serial_enabled=False, raw_virtual_serial_enabled=True,
+                         artnet_enabled=False, virtual_port_path="",
+                         raw_virtual_port_path="/tmp/raw-dmx-service-test"),
+            serial_factory=lambda: fake, virtual_backend=backend)
+        service.raw_virtual.stop()
+        service.raw_virtual = raw_backend
+        service.start()
+        try:
+            with open(service.raw_virtual.path, "wb", buffering=0) as client:
+                client.write(bytes([0x55]) * RAW_DMX_UNIVERSE_SIZE)
+            deadline = time.monotonic() + 1
+            while time.monotonic() < deadline and service.snapshot().dmx.raw_serial_source_frames < 1:
+                time.sleep(0.01)
+            self.assertEqual(service.snapshot().dmx.raw_serial_source_frames, 1)
+            self.assertEqual(service.manual_universe_snapshot(), bytes([0x55]) * 512)
+        finally:
+            service.stop()
+
+    def test_service_abandons_timed_out_raw_universe(self):
+        fake = FakeSerial()
+        service = WirelessDmxService(
+            DaemonConfig(virtual_serial_enabled=False, raw_virtual_serial_enabled=True,
+                         artnet_enabled=False, virtual_port_path="",
+                         raw_virtual_port_path="/tmp/raw-dmx-timeout-test",
+                         raw_virtual_timeout_seconds=0.05),
+            serial_factory=lambda: fake)
+        service.start()
+        try:
+            with open(service.raw_virtual.path, "wb", buffering=0) as client:
+                client.write(bytes([0x11]) * 200)
+            time.sleep(0.15)
+            self.assertGreaterEqual(service.snapshot().dmx.raw_serial_timeout_drops, 1)
+            self.assertEqual(service.manual_universe_snapshot(), bytes(512))
+        finally:
+            service.stop()
     def test_service_forwards_normalized_pty_dmx_to_fake_transmitter(self):
         backend = LinuxPtyBackend()
         fake = FakeSerial()

@@ -1,6 +1,7 @@
 import os
 import sys
 import unittest
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
@@ -25,6 +26,22 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("dashboard", controller.events) if controller.events else None
         finally:
             controller.close()
+
+    def test_default_config_is_read_only_and_save_as_switches_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            controller = DashboardController(DaemonConfig(), config_path="default.conf")
+            try:
+                with self.assertRaises(PermissionError):
+                    controller.save_configuration()
+                with self.assertRaises(PermissionError):
+                    controller.save_as(str(Path(directory) / "default.conf"))
+                target = str(Path(directory) / "show.toml")
+                controller.save_as(target)
+                self.assertEqual(controller.config_path, target)
+                self.assertTrue(Path(target).exists())
+                self.assertIn("configuration saved as", controller.events[0])
+            finally:
+                controller.close()
 
     def test_visualization_helpers_are_bounded(self):
         self.assertEqual(bar(0, 100, 8), "[........]")
@@ -54,11 +71,32 @@ class DashboardTests(unittest.TestCase):
         self.assertTrue(counters.startswith("      6ms"))
         self.assertIn("FS:hold/60s", counters)
 
+    def test_receiver_display_includes_friendly_name_and_id(self):
+        receiver = ReceiverTelemetry(
+            7, "18:fe:34:00:00:07", ReceiverLinkState.ONLINE, False,
+            -39, -40, 1, 2, 3, 4, 0, 5, 6, 1, 1, 0,
+        )
+        identity, *_ = receiver_display_segments(receiver, {7: "Front Truss"})
+        self.assertEqual(identity, "Front Truss      [00000007]")
+
+    def test_long_receiver_display_name_scrolls_in_sixteen_character_window(self):
+        receiver = ReceiverTelemetry(
+            7, "18:fe:34:00:00:07", ReceiverLinkState.ONLINE, False,
+            -39, -40, 1, 2, 3, 4, 0, 5, 6, 1, 1, 0,
+        )
+        first, *_ = receiver_display_segments(receiver, {7: "A very long receiver name"}, now=0.0)
+        second, *_ = receiver_display_segments(receiver, {7: "A very long receiver name"}, now=3.0)
+        self.assertEqual(len(first), 27)
+        self.assertEqual(len(second), 27)
+        self.assertNotEqual(first, second)
+        self.assertIn("[00000007]", first)
+
     def test_all_dashboard_command_legends_include_settings(self):
         self.assertIn("[s]", MAIN_COMMANDS)
         self.assertIn("SETTINGS", MAIN_COMMANDS)
         self.assertIn("[u]", MAIN_COMMANDS)
         self.assertIn("MANUAL DMX", MAIN_COMMANDS)
+        self.assertIn("[n] names", MAIN_COMMANDS)
         self.assertIn("[o] output", MAIN_COMMANDS)
         self.assertIn("[i] locate", MAIN_COMMANDS)
         self.assertIn("[p] priority", MAIN_COMMANDS)
@@ -66,6 +104,8 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("[z] reset zero", MANUAL_COMMANDS)
         self.assertIn("[r] repeats", MANUAL_COMMANDS)
         self.assertIn("[t] TTL", MANUAL_COMMANDS)
+        self.assertIn("[0-9] type value", MANUAL_COMMANDS)
+        self.assertIn("[Enter] apply/send", MANUAL_COMMANDS)
         self.assertNotIn("[o] output", MANUAL_COMMANDS)
         self.assertNotIn("[i] locate", MANUAL_COMMANDS)
         self.assertIn("[q] quit", MANUAL_COMMANDS)

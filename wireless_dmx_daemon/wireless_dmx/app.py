@@ -22,6 +22,7 @@ from .transmitter.management import (CacheClearedResponse, ManagementParser, Pri
 from .protocols import DMX_GATE_MASK_SIZE
 from .protocols import PRIORITY_COMPLETE_GATE_APPLIED
 from .virtual_serial.linux_pty import LinuxPtyBackend
+from .raw_dmx import RawDmxParser
 
 
 class NullVirtualBackend:
@@ -51,6 +52,9 @@ class WirelessDmxService:
         self.management = ManagementParser()
         self.virtual = virtual_backend or (LinuxPtyBackend(config.virtual_port_path)
                                            if config.virtual_serial_enabled else NullVirtualBackend())
+        self.raw_virtual = (LinuxPtyBackend(config.raw_virtual_port_path)
+                            if config.raw_virtual_serial_enabled else NullVirtualBackend())
+        self.raw_dmx = RawDmxParser(config.raw_virtual_timeout_seconds)
         self.artnet_parser = ArtNetParser(config.artnet_universe, self.stats)
         self.artnet = ArtNetListener(config.artnet_bind_host, config.artnet_port, self.artnet_parser) \
             if config.artnet_enabled else None
@@ -274,6 +278,7 @@ class WirelessDmxService:
     def start(self) -> None:
         self.telemetry.clear()
         self.virtual.start()
+        self.raw_virtual.start()
         if self.artnet:
             self.artnet.start()
         self.transmitter.start()
@@ -295,6 +300,7 @@ class WirelessDmxService:
         if self.artnet:
             self.artnet.stop()
         self.virtual.stop()
+        self.raw_virtual.stop()
         self._logger.info("service_stopped")
 
     def snapshot(self) -> DaemonSnapshot:
@@ -402,6 +408,8 @@ class WirelessDmxService:
             return
         if source == "artnet":
             self.stats.artnet_source_frames += 1
+        elif source == "raw_serial":
+            self.stats.raw_serial_source_frames += 1
         else:
             self.stats.serial_source_frames += 1
         if not self._has_source_blocked_channels:
@@ -422,6 +430,8 @@ class WirelessDmxService:
         self.manual_universe[:] = merged
         if source == "artnet":
             self.stats.artnet_channels_blocked += blocked
+        elif source == "raw_serial":
+            self.stats.raw_serial_channels_blocked += blocked
         else:
             self.stats.serial_channels_blocked += blocked
         if self.config.pacer_enabled:
@@ -524,6 +534,12 @@ class WirelessDmxService:
                 if incoming:
                     for frame in self.enttec.feed(incoming):
                         self._accept_source_frame(frame.universe(), "serial")
+                raw_incoming = self.raw_virtual.read()
+                if self.raw_dmx.expire():
+                    self.stats.raw_serial_timeout_drops += 1
+                if raw_incoming:
+                    for frame in self.raw_dmx.feed(raw_incoming):
+                        self._accept_source_frame(frame.data, "raw_serial")
                 if self.artnet:
                     for frame in self.artnet.receive():
                         data = frame.data + bytes(512 - len(frame.data))

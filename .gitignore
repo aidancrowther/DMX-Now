@@ -48,6 +48,8 @@ notes/
 !.env.example
 *.local.toml
 *.local.conf
+wireless_dmx_daemon/configs/.last_config
+wireless_dmx_daemon/configs/.last_config.tmp
 
 # Editors and operating-system files
 .vscode/

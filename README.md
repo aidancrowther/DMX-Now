@@ -33,6 +33,8 @@ discarded rather than promoted.
 ## Features
 
 - Streaming ENTTEC DMX input and Art-Net ArtDMX input.
+- Optional raw-DMX virtual serial input accepting complete 512-byte universes.
+- Raw-DMX incomplete-burst timeout, defaulting to 1 second.
 - Bounded latest-state pacing at the validated 20 Hz rate.
 - Receiver telemetry with link freshness, battery, RSSI, sequence, counters,
   firmware, and fail-safe state.
@@ -44,6 +46,7 @@ discarded rather than promoted.
   - `disable_line`: disable the RS-485 driver after the timeout.
 - Automatic recovery after a new complete universe.
 - Linux PTY input and a terminal management dashboard.
+- Persistent host-side receiver friendly names editable from the dashboard.
 
 ## Repository layout
 
@@ -85,13 +88,23 @@ or receiver define enabled in a production image.
 ```bash
 cd wireless_dmx_daemon
 python3 -m pip install .
-wireless-dmx run --config config.example.toml
+wireless-dmx run --config configs/config.example.toml
 ```
 
 The daemon prints the Linux PTY path. Configure a serial-capable application to
 use that path, or use Art-Net Universe 0 over UDP port 6454. The complete daemon
 configuration is documented in `docs/daemon.md` and demonstrated in
-`wireless_dmx_daemon/config.example.toml`.
+`wireless_dmx_daemon/configs/config.example.toml`.
+
+Dashboard configurations are stored under `wireless_dmx_daemon/configs/`. The
+dashboard can select a configuration interactively when launched without
+`--config`. The CLI and scripted dashboard forms continue to accept
+`--config <path>`.
+
+The optional raw-DMX input creates a second PTY and accepts one complete
+512-byte universe per burst. Configure it under `[raw_virtual_port]` and select
+it with `[input] source_policy = "raw_serial"`; incomplete bursts expire after
+1 second by default.
 
 ## Receiver fail-safe configuration
 

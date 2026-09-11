@@ -8,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
 from wireless_dmx.artnet import ARTDMX_OPCODE, ARTNET_ID, ArtNetListener, ArtNetParser, encode_artdmx
-from wireless_dmx.config import load_config, save_config
+from wireless_dmx.config import apply_args, load_config, save_config
 from wireless_dmx.config_editor import EDITABLE_FIELDS, update_field
 from wireless_dmx.models import DaemonConfig
 
@@ -53,6 +53,9 @@ class ArtNetConfigTests(unittest.TestCase):
         DaemonConfig(virtual_serial_enabled=True, artnet_enabled=False).validate()
         DaemonConfig(virtual_serial_enabled=False, artnet_enabled=True, virtual_port_path="").validate()
         DaemonConfig(virtual_serial_enabled=True, artnet_enabled=True).validate()
+        DaemonConfig(virtual_serial_enabled=False, raw_virtual_serial_enabled=True,
+                     artnet_enabled=False, virtual_port_path="").validate()
+        DaemonConfig(input_source_policy="raw_serial").validate()
         with self.assertRaisesRegex(ValueError, "at least one"):
             DaemonConfig(virtual_serial_enabled=False, artnet_enabled=False, virtual_port_path="").validate()
 
@@ -69,6 +72,30 @@ class ArtNetConfigTests(unittest.TestCase):
             self.assertFalse(loaded.virtual_serial_enabled)
             self.assertEqual(loaded.input_source_policy, "artnet")
 
+    def test_raw_input_config_round_trip_and_cli_overrides(self):
+        config = DaemonConfig(raw_virtual_serial_enabled=True,
+                              raw_virtual_port_path="/tmp/raw-dmx",
+                              input_source_policy="raw_serial")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "raw.toml"
+            save_config(config, str(path))
+            loaded = load_config(str(path))
+            self.assertTrue(loaded.raw_virtual_serial_enabled)
+            self.assertEqual(loaded.raw_virtual_port_path, "/tmp/raw-dmx")
+            self.assertEqual(loaded.raw_virtual_timeout_seconds, 1.0)
+            self.assertEqual(loaded.input_source_policy, "raw_serial")
+        args = type("Args", (), {"raw_dmx_enabled": True, "raw_dmx_port": "/tmp/override",
+                                  "allow_experimental_rates": False})()
+        overridden = apply_args(DaemonConfig(), args)
+        self.assertTrue(overridden.raw_virtual_serial_enabled)
+        self.assertEqual(overridden.raw_virtual_port_path, "/tmp/override")
+
+    def test_cli_parser_exposes_raw_dmx_options(self):
+        from wireless_dmx.cli import parser
+        args = parser().parse_args(["run", "--raw-dmx-enabled", "--raw-dmx-port", "/tmp/raw"])
+        self.assertTrue(args.raw_dmx_enabled)
+        self.assertEqual(args.raw_dmx_port, "/tmp/raw")
+
     def test_setup_editor_updates_artnet_fields(self):
         config = DaemonConfig()
         port_index = next(i for i, item in enumerate(EDITABLE_FIELDS) if item[1] == "artnet_port")
@@ -77,6 +104,12 @@ class ArtNetConfigTests(unittest.TestCase):
         config = update_field(config, enabled_index, "false")
         self.assertEqual(config.artnet_port, 6455)
         self.assertFalse(config.artnet_enabled)
+
+    def test_setup_editor_exposes_raw_dmx_timeout(self):
+        timeout_index = next(i for i, item in enumerate(EDITABLE_FIELDS)
+                             if item[1] == "raw_virtual_timeout_seconds")
+        config = update_field(DaemonConfig(), timeout_index, "2.5")
+        self.assertEqual(config.raw_virtual_timeout_seconds, 2.5)
 
 
 if __name__ == "__main__":

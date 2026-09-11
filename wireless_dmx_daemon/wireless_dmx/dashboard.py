@@ -16,9 +16,16 @@ from pathlib import Path
 import serial
 
 from .app import WirelessDmxService
-from .config import apply_args, load_config
-from .config_editor import EDITABLE_FIELDS, field_value, save_edited_config, update_field
+from .config import (CONFIG_DIRECTORY, apply_args, available_config_paths, last_config_path,
+                     load_config, remember_config_path)
+from .config_editor import (EDITABLE_FIELDS, field_value, receiver_name, save_edited_config,
+                             set_receiver_name, update_field)
 from .models import ChannelGate, DaemonConfig, DaemonHealth, DaemonSnapshot
+
+
+RECEIVER_NAME_DISPLAY_WIDTH = 16
+RECEIVER_NAME_SCROLL_INTERVAL_SECONDS = 0.75
+RECEIVER_NAME_SCROLL_GAP = "   "
 
 
 COLOR_PAIRS = {
@@ -91,15 +98,29 @@ def rssi_quality(rssi: int) -> tuple[str, float]:
     return label, quality
 
 
-def receiver_display_segments(receiver) -> tuple[str, str, str, str, str]:
+def receiver_display_segments(receiver, names: dict[int, str] | None = None,
+                              now: float | None = None) -> tuple[str, str, str, str, str]:
     """Return non-overlapping receiver display fields.
 
     Keeping these fields separate prevents battery status text from overwriting
     the RSSI quality/bar visualization in narrow terminal layouts.
     """
     quality, quality_value = rssi_quality(receiver.transmitter_rssi)
+    name = (names or {}).get(receiver.receiver_id, "")
+    if name:
+        if len(name) <= RECEIVER_NAME_DISPLAY_WIDTH:
+            display_name = name
+        else:
+            phase = int((time.monotonic() if now is None else now) /
+                        RECEIVER_NAME_SCROLL_INTERVAL_SECONDS)
+            stream = name + RECEIVER_NAME_SCROLL_GAP + name
+            start = phase % (len(name) + len(RECEIVER_NAME_SCROLL_GAP))
+            display_name = stream[start:start + RECEIVER_NAME_DISPLAY_WIDTH]
+        identity = f"{display_name:<{RECEIVER_NAME_DISPLAY_WIDTH}} [{receiver.receiver_id:08X}]"
+    else:
+        identity = f"{'RX-' + format(receiver.receiver_id, '08X'):<{RECEIVER_NAME_DISPLAY_WIDTH}} [{receiver.receiver_id:08X}]"
     return (
-        f"RX-{receiver.receiver_id:08X}",
+        identity,
         receiver.link_state.value,
         "LOW" if receiver.battery_low else "OK",
         f"{receiver.transmitter_rssi:>3}dBm {quality:<4}{bar(quality_value, 1, 8)}",
@@ -127,12 +148,10 @@ def priority_feedback(event: dict | None) -> str:
         text += f" GATE {gate_text}"
     return text
 
-
-MAIN_COMMANDS = "[d] daemon  [r] telemetry  [s] SETTINGS  [u] MANUAL DMX  [o] output  [i] locate  [p] priority  [x] advanced  [l] logs  [q] quit"
-SETUP_COMMANDS = "[↑/↓/j/k] select  [e] edit  [w] write config  [x] cancel"
+MAIN_COMMANDS = "[d] daemon  [r] telemetry  [s] SETTINGS  [u] MANUAL DMX  [n] names  [c] configs  [o] output  [i] locate  [p] priority  [x] advanced  [l] logs  [q] quit"
 ADVANCED_COMMANDS = "[m] Mega  [a] acceptance  [b] abort Mega  [x] main  [q] quit"
-SETUP_COMMANDS = "[↑/↓/j/k] select  [e] edit  [w] write config  [x] discard  [q] quit"
-MANUAL_COMMANDS = "[↑/↓/j/k] select  [←/→] grid  [a] jump  [e] value  [+/-] nudge  [l] gate  [n/p] priority  [r] repeats  [t] TTL  [Enter] send  [c] clear  [z] reset zero  [u] full  [g] grid  [x] main  [q] quit"
+SETUP_COMMANDS = "[↑/↓/j/k] select  [e] edit  [w] save  [a] Save As  [x] discard  [q] quit"
+MANUAL_COMMANDS = "[↑/↓/j/k] select  [←/→] grid  [0-9] type value  [Enter] apply/send  [a] jump  [e] value  [+/-] nudge  [l] gate  [n/p] priority  [r] repeats  [t] TTL  [c] clear  [z] reset zero  [u] full  [g] grid  [x] main  [q] quit"
 
 
 def grid_position(channel: int, columns: int = 16) -> tuple[int, int]:
@@ -244,9 +263,11 @@ class MegaMonitorController:
 
 
 class DashboardController:
-    def __init__(self, config: DaemonConfig, mega_port: str = "/dev/ttyUSB1", config_path: str = "default.conf") -> None:
+    def __init__(self, config: DaemonConfig, mega_port: str = "/dev/ttyUSB1", config_path: str = "default.conf",
+                 config_explicit: bool = True) -> None:
         self.config = config
         self.config_path = config_path
+        self.config_explicit = config_explicit
         self.service: WirelessDmxService | None = None
         self.mega = MegaMonitorController(mega_port)
         self.events: deque[str] = deque(maxlen=80)
@@ -254,8 +275,36 @@ class DashboardController:
         self._lock = threading.Lock()
 
     def save_configuration(self) -> None:
+        if Path(self.config_path).name in ("default.conf", "config.example.toml"):
+            raise PermissionError(f"{Path(self.config_path).name} is read-only; use Save As")
         save_edited_config(self.config, self.config_path)
+        remember_config_path(self.config_path)
         self.log(f"configuration saved to {self.config_path}")
+
+    def save_as(self, path: str) -> None:
+        target = Path(path.strip()).expanduser()
+        if not target.name:
+            raise ValueError("configuration filename must not be empty")
+        if not target.is_absolute():
+            target = CONFIG_DIRECTORY / target
+        if target.suffix not in (".conf", ".toml"):
+            target = target.with_suffix(".toml")
+        if target.name in ("default.conf", "config.example.toml"):
+            raise PermissionError(f"{target.name} is read-only; choose another filename")
+        save_edited_config(self.config, str(target))
+        self.config_path = str(target)
+        self.config_explicit = True
+        remember_config_path(self.config_path)
+        self.log(f"configuration saved as {self.config_path}")
+
+    def select_config(self, path: str) -> None:
+        if self.service is not None:
+            self.stop_daemon()
+        self.config_path = path
+        self.config = load_config(path)
+        self.config_explicit = True
+        remember_config_path(path)
+        self.log(f"configuration selected: {path}")
 
     def log(self, message: str) -> None:
         with self._lock:
@@ -352,6 +401,79 @@ def _online_receiver_ids(controller: DashboardController) -> list[int]:
             if receiver.link_state.value == "online"]
 
 
+def _known_receivers(controller: DashboardController):
+    """Return all discovered receivers, including stale/offline aliases."""
+    return list(controller.snapshot().receivers)
+
+
+def render_names_modal(stdscr, controller: DashboardController, selected_index: int,
+                       message: str = "") -> None:
+    """Render the persistent receiver-friendly-name editor."""
+    height, width = stdscr.getmaxyx()
+    receivers = _known_receivers(controller)
+    selected_index = max(0, min(selected_index, max(0, len(receivers) - 1)))
+    box_width = min(max(60, width - 8), 88)
+    box_height = min(max(10, len(receivers) + 6), max(10, height - 4))
+    top = max(1, (height - box_height) // 2)
+    left = max(1, (width - box_width) // 2)
+    bottom = min(height - 2, top + box_height - 1)
+    right = min(width - 2, left + box_width - 1)
+    _box(stdscr, top, left, bottom, right, "RECEIVER NAMES")
+    _safe_add(stdscr, top + 1, left + 3,
+              "Select a receiver and press e to edit; blank input clears the name",
+              color_attr("accent", True), right - left - 5)
+    _safe_add(stdscr, top + 2, left + 3, "Names are saved immediately to the active TOML configuration",
+              curses.A_DIM, right - left - 5)
+    if not receivers:
+        _safe_add(stdscr, top + 4, left + 3, "No receivers discovered yet.", color_attr("warning", True))
+    else:
+        visible = max(1, bottom - top - 5)
+        first = max(0, min(selected_index - visible // 2, len(receivers) - visible))
+        names = dict(controller.config.receiver_names)
+        for offset, receiver in enumerate(receivers[first:first + visible]):
+            index = first + offset
+            alias = names.get(receiver.receiver_id, "") or "(unnamed)"
+            label = f"{alias}  [RX-{receiver.receiver_id:08X}]  {receiver.link_state.value}"
+            attr = color_attr("gate_open_selected", True) if index == selected_index else 0
+            _safe_add(stdscr, top + 4 + offset, left + 3, label, attr, right - left - 5)
+    if message:
+        _safe_add(stdscr, bottom - 1, left + 3, message,
+                  color_attr("warning", True), right - left - 5)
+
+
+def render_config_modal(stdscr, paths: tuple[str, ...], selected_index: int,
+                        current_path: str, message: str = "") -> None:
+    """Render the dashboard configuration-file selector."""
+    height, width = stdscr.getmaxyx()
+    selected_index = max(0, min(selected_index, max(0, len(paths) - 1)))
+    box_width = min(max(64, width - 8), 96)
+    box_height = min(max(10, len(paths) + 6), max(10, height - 4))
+    top = max(1, (height - box_height) // 2)
+    left = max(1, (width - box_width) // 2)
+    bottom = min(height - 2, top + box_height - 1)
+    right = min(width - 2, left + box_width - 1)
+    _box(stdscr, top, left, bottom, right, "CONFIGURATION FILES")
+    _safe_add(stdscr, top + 1, left + 3,
+              "Select a configuration; default.conf is read-only",
+              color_attr("accent", True), right - left - 5)
+    if not paths:
+        _safe_add(stdscr, top + 4, left + 3, "No .conf or .toml files found.", color_attr("warning", True))
+    else:
+        visible = max(1, bottom - top - 5)
+        first = max(0, min(selected_index - visible // 2, len(paths) - visible))
+        for offset, path in enumerate(paths[first:first + visible]):
+            index = first + offset
+            label = f"{path}{'  (active)' if path == current_path else ''}"
+            if Path(path).name in ("default.conf", "config.example.toml"):
+                label += "  [read-only]"
+            attr = color_attr("gate_open_selected", True) if index == selected_index else 0
+            _safe_add(stdscr, top + 4 + offset, left + 3, label, attr, right - left - 5)
+    _safe_add(stdscr, bottom - 1, left + 3,
+              message or "Enter: select   x/Esc: cancel",
+              color_attr("warning", True) if message else curses.A_DIM,
+              right - left - 5)
+
+
 def render_receiver_modal(stdscr, controller: DashboardController, action: str,
                           selected_index: int, selected_ids: set[int], message: str = "") -> None:
     """Render a centered multi-select receiver management menu."""
@@ -371,10 +493,15 @@ def render_receiver_modal(stdscr, controller: DashboardController, action: str,
     _safe_add(stdscr, top + 2, left + 3, "Space: toggle   Enter: continue   x/Esc: cancel", curses.A_DIM)
     visible = max(1, bottom - top - 5)
     first = max(0, min(selected_index - visible // 2, len(entries) - visible))
+    names = dict(controller.config.receiver_names)
     for offset, receiver_id in enumerate(entries[first:first + visible]):
         index = first + offset
         marker = "[x]" if receiver_id in selected_ids else "[ ]"
-        label = "ALL ONLINE RECEIVERS" if receiver_id == 0 else f"Receiver {receiver_id:08X}"
+        if receiver_id == 0:
+            label = "ALL ONLINE RECEIVERS"
+        else:
+            alias = names.get(receiver_id, "")
+            label = f"{alias} [RX-{receiver_id:08X}]" if alias else f"Receiver {receiver_id:08X}"
         attr = color_attr("gate_open_selected", True) if index == selected_index else 0
         _safe_add(stdscr, top + 4 + offset, left + 3, f"{marker} {label}", attr)
     if message:
@@ -417,8 +544,9 @@ def render(stdscr, controller: DashboardController, show_logs: bool) -> None:
     client_color = "healthy" if snapshot.virtual_client_connected else "warning"
     _safe_add(stdscr, 3, 3, f"Health       : {snapshot.health.value}", color_attr(health_color, True))
     _safe_add(stdscr, 4, 3, f"Transmitter  : {'CONNECTED' if snapshot.transmitter_connected else 'OFFLINE'}", color_attr(tx_color, True))
-    _safe_add(stdscr, 5, 3, f"Virtual PTY  : {snapshot.virtual_port or '-'}", color_attr("accent"))
-    _safe_add(stdscr, 6, 3, f"Lighting app : {'CONNECTED' if snapshot.virtual_client_connected else 'WAITING'}", color_attr(client_color, True))
+    _safe_add(stdscr, 5, 3, f"ENTTEC PTY   : {snapshot.virtual_port or '-'}", color_attr("accent"))
+    _safe_add(stdscr, 6, 3, f"Raw DMX PTY  : {controller.service.raw_virtual.path if controller.service and controller.service.raw_virtual.master_fd is not None else '-'}", color_attr("accent"))
+    _safe_add(stdscr, 7, 3, f"Lighting app : {'CONNECTED' if snapshot.virtual_client_connected else 'WAITING'}", color_attr(client_color, True))
     x = width // 2 + 2
     _safe_add(stdscr, 3, x, f"Input        : {snapshot.dmx.valid_dmx_frames:>8} {bar(snapshot.dmx.valid_dmx_frames, max(1, snapshot.dmx.valid_dmx_frames))}")
     _safe_add(stdscr, 4, x, f"Submitted    : {snapshot.dmx.frames_submitted:>8} {bar(snapshot.dmx.frames_submitted, max(1, snapshot.dmx.valid_dmx_frames))}", color_attr("healthy"))
@@ -430,17 +558,18 @@ def render(stdscr, controller: DashboardController, show_logs: bool) -> None:
     _safe_add(stdscr, 7, 3, priority_feedback(priority_event), color_attr("warning" if priority_event and not priority_event.get("ack_complete") else "accent", True))
     _box(stdscr, 8, 1, max(10, 11 + len(snapshot.receivers)), width - 2, "RECEIVERS")
     row = 9
-    _safe_add(stdscr, row, 3, "ID         LINK     BATTERY  RSSI             LAST SEEN  COMPLETE  INCOMPLETE", color_attr("accent", True))
+    _safe_add(stdscr, row, 3, "NAME/ID                        LINK     BATTERY  RSSI             LAST SEEN  COMPLETE  INCOMPLETE", color_attr("accent", True))
     for receiver in snapshot.receivers:
         row += 1
         link_color = "healthy" if receiver.link_state.value == "online" else "warning" if receiver.link_state.value == "stale" else "critical"
         battery_color = "warning" if receiver.battery_low else "healthy"
-        receiver_id, link, battery, rssi, counters = receiver_display_segments(receiver)
-        _safe_add(stdscr, row, 3, receiver_id, color_attr("accent", True))
-        _safe_add(stdscr, row, 15, f"{link:<8}", color_attr(link_color, True))
-        _safe_add(stdscr, row, 24, f"{battery:<8}", color_attr(battery_color, True))
-        _safe_add(stdscr, row, 33, rssi, color_attr("healthy" if receiver.transmitter_rssi >= -55 else "warning"))
-        _safe_add(stdscr, row, 54, counters)
+        receiver_id, link, battery, rssi, counters = receiver_display_segments(
+            receiver, dict(controller.config.receiver_names))
+        _safe_add(stdscr, row, 3, receiver_id, color_attr("accent", True), 27)
+        _safe_add(stdscr, row, 32, f"{link:<8}", color_attr(link_color, True))
+        _safe_add(stdscr, row, 41, f"{battery:<8}", color_attr(battery_color, True))
+        _safe_add(stdscr, row, 50, rssi, color_attr("healthy" if receiver.transmitter_rssi >= -55 else "warning"))
+        _safe_add(stdscr, row, 71, counters)
     log_top = max(12 + len(snapshot.receivers), height - 8) if show_logs else height - 3
     if show_logs and log_top < height - 2:
         _box(stdscr, log_top, 1, height - 3, width - 2, "EVENTS")
@@ -491,14 +620,15 @@ def render_setup(stdscr, controller: DashboardController, selected: int, message
         attr = color_attr("accent", True) if index == selected else 0
         _safe_add(stdscr, row, 3, f"{label:<28} {field_value(controller.config, index)}", attr)
     if message:
-        _safe_add(stdscr, height - 2, 2, message, color_attr("warning", True))
-    _safe_add(stdscr, height - 1, 2, SETUP_COMMANDS, color_attr("accent", True))
+        _safe_add(stdscr, height - 3, 2, message, color_attr("warning", True))
+    if Path(controller.config_path).name in ("default.conf", "config.example.toml"):
+        _safe_add(stdscr, height - 1, 2, f"{Path(controller.config_path).name} is read-only; use [a] Save As", color_attr("warning", True))
     stdscr.refresh()
 
 
 def render_manual(stdscr, controller: DashboardController, channel: int, priority: bool,
                   repeat_count: int, ttl_seconds: float, full_mode: bool, grid_mode: bool,
-                  message: str) -> None:
+                  message: str, typed_value: str = "") -> None:
     stdscr.erase()
     height, width = stdscr.getmaxyx()
     _safe_add(stdscr, 0, 2, "WIRELESS DMX MANUAL TRANSMISSION", color_attr("accent", True) | curses.A_REVERSE)
@@ -526,8 +656,9 @@ def render_manual(stdscr, controller: DashboardController, channel: int, priorit
                     break
                 gate = service.channel_gate(index + 1) if service else ChannelGate.OPEN
                 attr = color_attr(channel_gate_selected_color(gate), True) if index == channel - 1 else color_attr(channel_gate_color(gate))
+                display_value = typed_value if index == channel - 1 and typed_value else f"{universe[index]:02X}"
                 _safe_add(stdscr, y, 8 + grid_col * cell_width,
-                          f"{universe[index]:02X}", attr, cell_width - 1)
+                          display_value, attr, cell_width - 1)
     elif full_mode:
         _box(stdscr, 4, 1, max(5, height - 4), width - 2, "FULL UNIVERSE")
         visible = max(1, height - 8)
@@ -568,16 +699,29 @@ def run_dashboard(stdscr, controller: DashboardController) -> None:
     manual_full = False
     manual_grid = False
     manual_message = ""
+    manual_typed_value = ""
     management = False
     management_action = "output"
     management_index = 0
     management_selected: set[int] = set()
     management_message = ""
+    names = False
+    names_index = 0
+    names_message = ""
+    configs = not controller.config_explicit
+    config_index = 0
+    config_message = ""
     priority_alert = False
     priority_alert_manual = False
     priority_alert_close_at = 0.0
     priority_alert_event: dict | None = None
-    controller.start_daemon()
+    config_paths = available_config_paths(str(CONFIG_DIRECTORY))
+    if controller.config_path not in config_paths and config_paths:
+        config_index = 0
+    elif controller.config_path in config_paths:
+        config_index = config_paths.index(controller.config_path)
+    if not configs:
+        controller.start_daemon()
     while True:
         if (priority_alert and not priority_alert_manual and priority_alert_close_at and
                 time.monotonic() >= priority_alert_close_at):
@@ -595,6 +739,14 @@ def run_dashboard(stdscr, controller: DashboardController) -> None:
                          if priority_alert_close_at and not priority_alert_manual else None)
             render_priority_modal(stdscr, event, remaining)
             stdscr.refresh()
+        elif names:
+            stdscr.erase()
+            render_names_modal(stdscr, controller, names_index, names_message)
+            stdscr.refresh()
+        elif configs:
+            stdscr.erase()
+            render_config_modal(stdscr, config_paths, config_index, controller.config_path, config_message)
+            stdscr.refresh()
         elif management:
             stdscr.erase()
             if management_action == "output_state":
@@ -606,7 +758,7 @@ def run_dashboard(stdscr, controller: DashboardController) -> None:
             stdscr.refresh()
         elif manual:
             render_manual(stdscr, controller, manual_channel, manual_priority, manual_repeat,
-                          manual_ttl, manual_full, manual_grid, manual_message)
+                          manual_ttl, manual_full, manual_grid, manual_message, manual_typed_value)
         elif setup:
             render_setup(stdscr, controller, setup_selected, setup_message)
         elif advanced:
@@ -627,6 +779,11 @@ def run_dashboard(stdscr, controller: DashboardController) -> None:
                 management = False
                 management_message = ""
                 management_selected.clear()
+            elif names:
+                names = False
+                names_message = ""
+            elif configs:
+                return
             elif manual:
                 manual = False
                 manual_message = ""
@@ -643,6 +800,39 @@ def run_dashboard(stdscr, controller: DashboardController) -> None:
             elif key in (ord("p"), ord("P"), curses.KEY_ENTER, 10, 13):
                 priority_alert = False
                 priority_alert_event = None
+            continue
+        if names:
+            receivers = _known_receivers(controller)
+            if key in (curses.KEY_UP, ord("k")):
+                names_index = max(0, names_index - 1)
+            elif key in (curses.KEY_DOWN, ord("j")):
+                names_index = min(max(0, len(receivers) - 1), names_index + 1)
+            elif key in (ord("e"), ord("E")) and receivers:
+                receiver = receivers[names_index]
+                current = receiver_name(controller.config, receiver.receiver_id)
+                try:
+                    prompt = f"Name for RX-{receiver.receiver_id:08X} [{current}]: "
+                    _safe_add(stdscr, height - 2, 2, prompt, color_attr("accent", True), width - 4)
+                    stdscr.refresh()
+                    text = _read_line_blocking(stdscr, height - 2, 2 + len(prompt), 64)
+                    controller.config = set_receiver_name(controller.config, receiver.receiver_id, text)
+                    controller.save_configuration()
+                    names_message = f"saved name for RX-{receiver.receiver_id:08X}"
+                except (ValueError, curses.error, OSError) as exc:
+                    names_message = f"name update failed: {exc}"
+            continue
+        if configs:
+            if key in (curses.KEY_UP, ord("k")):
+                config_index = max(0, config_index - 1)
+            elif key in (curses.KEY_DOWN, ord("j")):
+                config_index = min(max(0, len(config_paths) - 1), config_index + 1)
+            elif key in (curses.KEY_ENTER, 10, 13) and config_paths:
+                try:
+                    controller.select_config(config_paths[config_index])
+                    configs = False
+                    controller.start_daemon()
+                except (OSError, ValueError) as exc:
+                    config_message = f"config selection failed: {exc}"
             continue
         if management:
             ids = [0] + _online_receiver_ids(controller)
@@ -718,14 +908,27 @@ def run_dashboard(stdscr, controller: DashboardController) -> None:
             continue
         if manual:
             if key in (curses.KEY_UP, ord("k")):
+                manual_typed_value = ""
                 manual_channel = max(1, manual_channel - (16 if manual_full and manual_grid else 1))
             elif key in (curses.KEY_DOWN, ord("j")):
+                manual_typed_value = ""
                 manual_channel = min(512, manual_channel + (16 if manual_full and manual_grid else 1))
             elif key == curses.KEY_LEFT and manual_full and manual_grid:
+                manual_typed_value = ""
                 manual_channel = max(1, manual_channel - 1)
             elif key == curses.KEY_RIGHT and manual_full and manual_grid:
+                manual_typed_value = ""
                 manual_channel = min(512, manual_channel + 1)
+            elif manual_full and manual_grid and ord("0") <= key <= ord("9"):
+                candidate = manual_typed_value + chr(key)
+                if len(candidate) <= 3:
+                    manual_typed_value = candidate
+                    manual_message = f"channel {manual_channel} value: {candidate} (Enter to apply)"
+            elif manual_full and manual_grid and key in (curses.KEY_BACKSPACE, 8, 127):
+                manual_typed_value = manual_typed_value[:-1]
+                manual_message = "value entry cleared" if not manual_typed_value else f"channel {manual_channel} value: {manual_typed_value}"
             elif key in (ord("a"), ord("A")):
+                manual_typed_value = ""
                 _safe_add(stdscr, height - 1, 2, "Jump to channel 1-512: "); stdscr.refresh()
                 try:
                     target = int(_read_line_blocking(stdscr, height - 1, 23, 3))
@@ -736,11 +939,13 @@ def run_dashboard(stdscr, controller: DashboardController) -> None:
                 except (ValueError, PermissionError, curses.error) as exc:
                     manual_message = f"invalid channel: {exc}"
             elif key in (ord("+"), ord("=")) and controller.service:
+                manual_typed_value = ""
                 try:
                     controller.service.set_manual_channel(manual_channel, min(255, controller.service.manual_universe[manual_channel - 1] + 1))
                 except PermissionError as exc:
                     manual_message = str(exc)
             elif key in (ord("-"), ord("_")) and controller.service:
+                manual_typed_value = ""
                 try:
                     controller.service.set_manual_channel(manual_channel, max(0, controller.service.manual_universe[manual_channel - 1] - 1))
                 except PermissionError as exc:
@@ -750,12 +955,15 @@ def run_dashboard(stdscr, controller: DashboardController) -> None:
             elif key in (ord("p"), ord("P")):
                 manual_priority = True
             elif key in (ord("c"), ord("C")) and controller.service:
+                manual_typed_value = ""
                 controller.service.clear_manual_universe()
                 manual_message = "manual universe cleared"
             elif key in (ord("z"), ord("Z")) and controller.service:
+                manual_typed_value = ""
                 controller.service.clear_manual_universe()
                 manual_message = "manual universe reset to zero"
             elif key in (ord("l"), ord("L")) and controller.service:
+                manual_typed_value = ""
                 from .models import ChannelGate
                 gates = (ChannelGate.OPEN, ChannelGate.MANAGEMENT_ONLY, ChannelGate.LOCKED)
                 current = controller.service.channel_gate(manual_channel)
@@ -764,10 +972,12 @@ def run_dashboard(stdscr, controller: DashboardController) -> None:
             elif key in (ord("r"), ord("R")):
                 manual_repeat = manual_repeat % controller.config.priority_max_repeat_count + 1
             elif key in (ord("u"), ord("U")):
+                manual_typed_value = ""
                 manual_full = not manual_full
                 if not manual_full:
                     manual_grid = False
             elif key in (ord("g"), ord("G")):
+                manual_typed_value = ""
                 # Grid mode is a view within the full-universe editor. Keep
                 # this key independent of channel-gate handling and make the
                 # transition explicit so a stale grid flag cannot hide the
@@ -776,6 +986,14 @@ def run_dashboard(stdscr, controller: DashboardController) -> None:
                 manual_grid = not manual_grid
             elif key in (curses.KEY_ENTER, 10, 13) and controller.service:
                 try:
+                    if manual_typed_value:
+                        value = int(manual_typed_value)
+                        if value > 255:
+                            raise ValueError("value must be 0-255")
+                        controller.service.set_manual_channel(manual_channel, value)
+                        manual_message = f"channel {manual_channel} set to {value}"
+                        manual_typed_value = ""
+                        continue
                     priority_id = controller.service.send_manual(manual_priority, manual_repeat, manual_ttl)
                     if manual_priority:
                         manual_message = priority_feedback(controller.service._priority_events.get(priority_id))
@@ -788,6 +1006,7 @@ def run_dashboard(stdscr, controller: DashboardController) -> None:
                 except Exception as exc:
                     manual_message = f"send failed: {exc}"
             elif key in (ord("e"), ord("E")) and controller.service:
+                manual_typed_value = ""
                 _safe_add(stdscr, height - 1, 2, "Enter value 0-255: "); stdscr.refresh()
                 try:
                     value = int(_read_line_blocking(stdscr, height - 1, 22, 3))
@@ -826,6 +1045,18 @@ def run_dashboard(stdscr, controller: DashboardController) -> None:
                     setup_message = f"saved {controller.config_path}; restart daemon to apply"
                 except Exception as exc:
                     setup_message = f"save failed: {exc}"
+            elif key in (ord("a"), ord("A")):
+                try:
+                    prompt = "Save configuration as (.toml or .conf): "
+                    stdscr.move(height - 1, 0)
+                    stdscr.clrtoeol()
+                    _safe_add(stdscr, height - 1, 2, prompt, color_attr("accent", True), width - 4)
+                    stdscr.refresh()
+                    path = _read_line_blocking(stdscr, height - 1, 2 + len(prompt), 120)
+                    controller.save_as(path)
+                    setup_message = f"saved {controller.config_path}"
+                except (ValueError, PermissionError, OSError, curses.error) as exc:
+                    setup_message = f"save as failed: {exc}"
             continue
         if advanced:
             if key in (ord("m"), ord("M")):
@@ -845,6 +1076,15 @@ def run_dashboard(stdscr, controller: DashboardController) -> None:
             controller.request_telemetry()
         elif key in (ord("l"), ord("L")):
             show_logs = not show_logs
+        elif key in (ord("n"), ord("N")):
+            names = True
+            names_index = 0
+            names_message = ""
+        elif key in (ord("c"), ord("C")):
+            config_paths = available_config_paths(str(CONFIG_DIRECTORY))
+            config_index = config_paths.index(controller.config_path) if controller.config_path in config_paths else 0
+            config_message = ""
+            configs = True
         elif key in (ord("o"), ord("O")):
             management = True
             management_action = "output"
@@ -856,7 +1096,7 @@ def run_dashboard(stdscr, controller: DashboardController) -> None:
             management_action = "locate"
             management_index = 0
             management_selected.clear()
-            management_message = "WARNING: locating interrupts DMX for 5 seconds; use only off-fixture"
+            management_message = "WARNING: locating interrupts DMX for 15 seconds; use only off-fixture"
         elif key in (ord("p"), ord("P")):
             priority_alert = True
             priority_alert_manual = True
@@ -875,9 +1115,17 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
-    config_path = args.config or "default.conf"
-    config = load_config(args.config)
-    controller = DashboardController(config, args.mega_port, args.config_path or config_path)
+    if args.config is not None:
+        config_path = args.config
+        config = load_config(config_path)
+        config_explicit = True
+    else:
+        remembered = last_config_path()
+        config_path = remembered or str(CONFIG_DIRECTORY / "default.conf")
+        config = load_config(config_path if Path(config_path).exists() else None)
+        config_explicit = remembered is not None
+    controller = DashboardController(config, args.mega_port, args.config_path or config_path,
+                                     config_explicit=config_explicit)
     try:
         if args.no_daemon:
             controller.log("dashboard started without daemon")

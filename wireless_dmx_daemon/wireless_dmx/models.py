@@ -55,8 +55,11 @@ class DmxStatistics:
     artnet_invalid_packets: int = 0
     artnet_source_frames: int = 0
     serial_source_frames: int = 0
+    raw_serial_source_frames: int = 0
     source_frames_rejected: int = 0
     serial_channels_blocked: int = 0
+    raw_serial_channels_blocked: int = 0
+    raw_serial_timeout_drops: int = 0
     artnet_channels_blocked: int = 0
     management_channels_rejected: int = 0
     channel_gate_changes: int = 0
@@ -193,6 +196,9 @@ class DaemonConfig:
     telemetry_stale_seconds: float = 15.0
     telemetry_offline_seconds: float = 30.0
     virtual_port_path: str = "/tmp/wireless-dmx"
+    raw_virtual_serial_enabled: bool = False
+    raw_virtual_port_path: str = "/tmp/wireless-dmx-raw"
+    raw_virtual_timeout_seconds: float = 1.0
     telemetry_max_report_age_seconds: float = 5.0
     virtual_serial_enabled: bool = True
     artnet_enabled: bool = True
@@ -223,6 +229,8 @@ class DaemonConfig:
     locked_channels: tuple[int, ...] = ()
     receiver_failsafe_mode: ReceiverFailsafeMode = ReceiverFailsafeMode.HOLD
     receiver_failsafe_timeout_seconds: int = 60
+    # Host-side friendly aliases keyed by stable ESP8266 receiver ID.
+    receiver_names: tuple[tuple[int, str], ...] = ()
 
     def validate(self) -> None:
         if not self.transmitter_device:
@@ -252,16 +260,20 @@ class DaemonConfig:
         if not self.virtual_port_path:
             if self.virtual_serial_enabled:
                 raise ValueError("virtual_port_path must not be empty when virtual serial is enabled")
-        if not self.virtual_serial_enabled and not self.artnet_enabled:
+        if not self.virtual_serial_enabled and not self.raw_virtual_serial_enabled and not self.artnet_enabled:
             raise ValueError("at least one DMX input must be enabled")
+        if self.raw_virtual_serial_enabled and not self.raw_virtual_port_path:
+            raise ValueError("raw_virtual_port_path must not be empty when raw DMX input is enabled")
+        if self.raw_virtual_timeout_seconds <= 0:
+            raise ValueError("raw_virtual_timeout_seconds must be positive")
         if not self.artnet_bind_host:
             raise ValueError("artnet_bind_host must not be empty")
         if not 1 <= self.artnet_port <= 65535:
             raise ValueError("artnet_port must be between 1 and 65535")
         if not 0 <= self.artnet_universe <= 32767:
             raise ValueError("artnet_universe must be between 0 and 32767")
-        if self.input_source_policy not in ("latest", "serial", "artnet"):
-            raise ValueError("input_source_policy must be latest, serial, or artnet")
+        if self.input_source_policy not in ("latest", "serial", "raw_serial", "artnet"):
+            raise ValueError("input_source_policy must be latest, serial, raw_serial, or artnet")
         for name, channels in (("management_only_channels", self.management_only_channels),
                                ("locked_channels", self.locked_channels)):
             if len(set(channels)) != len(channels) or any(not 1 <= channel <= 512 for channel in channels):
@@ -274,6 +286,15 @@ class DaemonConfig:
             raise ValueError("receiver_failsafe_mode must be hold, blackout, or disable_line") from exc
         if not 30 <= self.receiver_failsafe_timeout_seconds <= 3600:
             raise ValueError("receiver_failsafe_timeout_seconds must be between 30 and 3600")
+        name_ids = [receiver_id for receiver_id, _ in self.receiver_names]
+        if len(set(name_ids)) != len(name_ids):
+            raise ValueError("receiver_names must not contain duplicate receiver IDs")
+        for receiver_id, name in self.receiver_names:
+            if not 0 <= receiver_id <= 0xFFFFFFFF:
+                raise ValueError("receiver_names IDs must be 32-bit receiver IDs")
+            if not isinstance(name, str) or len(name) > 64:
+                raise ValueError("receiver_names values must be strings of at most 64 characters")
+
         if self.priority_max_queue_depth < 1:
             raise ValueError("priority_max_queue_depth must be positive")
         if not 1 <= self.priority_default_repeat_count <= self.priority_max_repeat_count:
