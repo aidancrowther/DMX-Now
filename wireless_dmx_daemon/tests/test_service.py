@@ -170,6 +170,20 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(priority_id, 0)
         self.assertEqual(service.pacer.priority_status().queue_depth, 1)
 
+    def test_manual_universe_reset_clears_editable_channels_without_sending(self):
+        service = WirelessDmxService(
+            DaemonConfig(virtual_port_path="/tmp/wireless-dmx-reset-test"),
+            serial_factory=lambda: FakeSerial(),
+            virtual_backend=LinuxPtyBackend("/tmp/wireless-dmx-reset-test"),
+        )
+        service.set_manual_universe(bytes([99]) * 512)
+        service.set_channel_gate(1, ChannelGate.LOCKED)
+        service.set_manual_channel(2, 77)
+        service.clear_manual_universe()
+        self.assertEqual(service.manual_universe_snapshot()[0], 99)
+        self.assertEqual(service.manual_universe_snapshot()[1], 0)
+        self.assertEqual(service.pacer.priority_status().queue_depth, 0)
+
     def test_channel_gates_block_external_sources_but_allow_management(self):
         service = WirelessDmxService(
             DaemonConfig(virtual_port_path="/tmp/wireless-dmx-gates"),

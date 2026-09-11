@@ -121,6 +121,8 @@ are kept separately in `docs/lab-validation.md`; they are evidence for one
 validated setup, not a requirement that every deployment have the same number
 of receivers, USB paths, or monitor hardware.
 
+The dashboard hotkey reference is in `docs/daemon.md`.
+
 ## Limitations
 
 - The current virtual serial backend targets Linux.

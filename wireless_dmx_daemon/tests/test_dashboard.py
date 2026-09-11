@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).parents[1]))
 from wireless_dmx.dashboard import (ADVANCED_COMMANDS, MAIN_COMMANDS, MANUAL_COMMANDS, SETUP_COMMANDS,
                                     DashboardController, bar, build_parser, channel_gate_color,
                                     channel_gate_selected_color,
-                                    receiver_display_segments, rssi_quality)
+                                     priority_feedback, receiver_display_segments, rssi_quality)
 from wireless_dmx.models import ChannelGate, DaemonConfig, ReceiverLinkState, ReceiverTelemetry
 
 
@@ -60,9 +60,30 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("[u]", MAIN_COMMANDS)
         self.assertIn("MANUAL DMX", MAIN_COMMANDS)
         self.assertIn("[a]", MANUAL_COMMANDS)
+        self.assertIn("[z] reset zero", MANUAL_COMMANDS)
+        self.assertIn("[r] repeats", MANUAL_COMMANDS)
+        self.assertIn("[t] TTL", MANUAL_COMMANDS)
+        self.assertIn("[q] quit", MANUAL_COMMANDS)
         self.assertIn("[w]", SETUP_COMMANDS)
+        self.assertIn("[q] quit", SETUP_COMMANDS)
         self.assertIn("[x]", ADVANCED_COMMANDS)
         self.assertIn("[l]", MANUAL_COMMANDS)
+
+    def test_priority_feedback_lists_acknowledged_receivers(self):
+        text = priority_feedback({
+            "priority_id": 42,
+            "expected_receivers": {7, 9},
+            "ack_receivers": {7},
+            "gate_applied_receivers": {7},
+            "hard_gate_mask": bytes(64),
+            "ack_complete": False,
+            "terminal": False,
+            "retry_count": 1,
+        })
+        self.assertIn("PRIORITY 42 WAITING", text)
+        self.assertIn("ACK 00000007", text)
+        self.assertIn("EXPECT 00000007,00000009", text)
+        self.assertIn("GATE 00000007", text)
 
 
 if __name__ == "__main__":

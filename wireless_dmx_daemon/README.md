@@ -343,6 +343,10 @@ it and saves to the path selected by `--config-path` or the active configuration
 path. Restart the daemon after changing settings that affect sockets, PTYs, or
 the transmitter connection.
 
+The complete hotkey reference for every dashboard view is in `../docs/daemon.md`
+under “Dashboard hotkeys”. It includes manual priority feedback, repeat/TTL
+controls, and zero-universe reset.
+
 Manual DMX value entry uses a temporary blocking input mode so typed values are
 accepted reliably even though the live dashboard normally uses non-blocking
 keyboard polling. In the full-universe manual view, press `g` to switch between

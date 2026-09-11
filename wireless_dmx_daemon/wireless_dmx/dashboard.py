@@ -108,10 +108,31 @@ def receiver_display_segments(receiver) -> tuple[str, str, str, str, str]:
     )
 
 
+def priority_feedback(event: dict | None) -> str:
+    """Return concise live acknowledgement feedback for a priority event."""
+    if not event:
+        return "PRIORITY: idle"
+    priority_id = event.get("priority_id", "?")
+    expected = sorted(event.get("expected_receivers", set()))
+    acknowledged = sorted(event.get("ack_receivers", set()))
+    gate_applied = sorted(event.get("gate_applied_receivers", set()))
+    status = "COMPLETE" if event.get("ack_complete") else "WAITING"
+    if event.get("terminal") and not event.get("ack_complete"):
+        status = f"FAILED:{event.get('terminal_reason', 'unknown')}"
+    ack_text = ",".join(f"{receiver:08X}" for receiver in acknowledged) or "none"
+    expected_text = ",".join(f"{receiver:08X}" for receiver in expected) or "broadcast"
+    text = f"PRIORITY {priority_id} {status} ACK {ack_text} EXPECT {expected_text} RETRIES {event.get('retry_count', 0)}"
+    if event.get("hard_gate_mask") is not None:
+        gate_text = ",".join(f"{receiver:08X}" for receiver in gate_applied) or "none"
+        text += f" GATE {gate_text}"
+    return text
+
+
 MAIN_COMMANDS = "[d] daemon  [r] telemetry  [s] SETTINGS  [u] MANUAL DMX  [x] advanced  [l] logs  [q] quit"
 SETUP_COMMANDS = "[↑/↓/j/k] select  [e] edit  [w] write config  [x] cancel"
 ADVANCED_COMMANDS = "[m] Mega  [a] acceptance  [b] abort Mega  [x] main  [q] quit"
-MANUAL_COMMANDS = "[↑/↓/j/k] select  [←/→] grid  [a] jump  [e] value  [+/-] nudge  [l] gate  [n/p] priority  [Enter] send  [c] clear  [u] full  [g] grid  [x] main"
+SETUP_COMMANDS = "[↑/↓/j/k] select  [e] edit  [w] write config  [x] discard  [q] quit"
+MANUAL_COMMANDS = "[↑/↓/j/k] select  [←/→] grid  [a] jump  [e] value  [+/-] nudge  [l] gate  [n/p] priority  [r] repeats  [t] TTL  [Enter] send  [c] clear  [z] reset zero  [u] full  [g] grid  [x] main  [q] quit"
 
 
 def grid_position(channel: int, columns: int = 16) -> tuple[int, int]:
@@ -344,6 +365,10 @@ def render(stdscr, controller: DashboardController, show_logs: bool) -> None:
     _safe_add(stdscr, 5, x, f"Dropped      : {snapshot.dmx.frames_dropped_by_pacer:>8} {bar(snapshot.dmx.frames_dropped_by_pacer, max(1, snapshot.dmx.valid_dmx_frames))}", color_attr(drop_color))
     _safe_add(stdscr, 6, x, f"Target rate  : {controller.config.pacer_rate_hz:.1f} Hz  Art-Net: "
               f"{'ON' if controller.config.artnet_enabled else 'OFF'}:{controller.config.artnet_port}", color_attr("accent", True))
+    priority_event = None
+    if controller.service and controller.service._priority_events:
+        priority_event = controller.service._priority_events[next(reversed(controller.service._priority_events))]
+    _safe_add(stdscr, 7, 3, priority_feedback(priority_event), color_attr("warning" if priority_event and not priority_event.get("ack_complete") else "accent", True))
     _box(stdscr, 8, 1, max(10, 11 + len(snapshot.receivers)), width - 2, "RECEIVERS")
     row = 9
     _safe_add(stdscr, row, 3, "ID         LINK     BATTERY  RSSI             LAST SEEN  COMPLETE  INCOMPLETE", color_attr("accent", True))
@@ -556,6 +581,9 @@ def run_dashboard(stdscr, controller: DashboardController) -> None:
             elif key in (ord("c"), ord("C")) and controller.service:
                 controller.service.clear_manual_universe()
                 manual_message = "manual universe cleared"
+            elif key in (ord("z"), ord("Z")) and controller.service:
+                controller.service.clear_manual_universe()
+                manual_message = "manual universe reset to zero"
             elif key in (ord("l"), ord("L")) and controller.service:
                 from .models import ChannelGate
                 gates = (ChannelGate.OPEN, ChannelGate.MANAGEMENT_ONLY, ChannelGate.LOCKED)
@@ -580,7 +608,10 @@ def run_dashboard(stdscr, controller: DashboardController) -> None:
             elif key in (curses.KEY_ENTER, 10, 13) and controller.service:
                 try:
                     priority_id = controller.service.send_manual(manual_priority, manual_repeat, manual_ttl)
-                    manual_message = f"sent {'priority ' + str(priority_id) if manual_priority else 'normal'} universe"
+                    if manual_priority:
+                        manual_message = priority_feedback(controller.service._priority_events.get(priority_id))
+                    else:
+                        manual_message = "sent normal universe"
                 except Exception as exc:
                     manual_message = f"send failed: {exc}"
             elif key in (ord("e"), ord("E")) and controller.service:
