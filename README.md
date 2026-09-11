@@ -1,6 +1,6 @@
-# Wireless DMX
+# DMX Now
 
-Wireless DMX is an ESP8266-based DMX512 system. A host daemon accepts DMX from
+DMX Now is an ESP8266-based DMX512 system. A host daemon accepts DMX from
 Art-Net or an ENTTEC-compatible serial client, sends the latest complete
 universe to a wireless transmitter, and distributes it over QuickESPNow to any
 number of battery-powered receivers. Each receiver regenerates DMX512 through

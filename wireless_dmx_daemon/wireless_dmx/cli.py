@@ -13,7 +13,7 @@ from .logging_setup import configure_logging
 
 
 def parser() -> argparse.ArgumentParser:
-    root = argparse.ArgumentParser(prog="wireless-dmx")
+    root = argparse.ArgumentParser(prog="dmx-now")
     root.add_argument("--config")
     sub = root.add_subparsers(dest="command", required=True)
     for name in ("run", "status", "receivers", "stats"):
@@ -38,7 +38,7 @@ def _service(args) -> WirelessDmxService:
 def main(argv=None) -> int:
     args = parser().parse_args(argv)
     if args.command == "version":
-        print("wireless-dmx 0.1.0")
+        print("DMX Now 0.1.0")
         return 0
     if args.command == "config-check":
         config = load_config(args.config)

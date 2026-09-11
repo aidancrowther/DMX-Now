@@ -1,5 +1,5 @@
 [Unit]
-Description=ESP8266 Wireless DMX host bridge
+Description=DMX Now ESP8266 host bridge
 After=local-fs.target
 
 [Service]

@@ -1,6 +1,6 @@
-# Wireless DMX Host Daemon
+# DMX Now Host Daemon
 
-This directory contains the host-side bridge for the ESP8266 Wireless DMX
+This directory contains the host-side bridge for the DMX Now ESP8266 system
 system. The daemon will expose a virtual ENTTEC-compatible serial port to
 lighting software, forward validated DMX data to the ESP8266 transmitter at
 115200 8N2, pace DMX frames at the validated 20 Hz wireless rate, and expose

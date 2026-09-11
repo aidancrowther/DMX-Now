@@ -1,4 +1,4 @@
-# ESP8266 Wireless DMX
+# DMX Now
 
 Experimental wireless DMX512 system using ESP8266 modules, QuickESPNow, and MAX3485 RS-485 transceivers.
 

@@ -1,5 +1,5 @@
 /**
- * Integrated Wireless DMX Receiver (QuickESPNow RX -> DMX output)
+ * Integrated DMX Now Receiver (QuickESPNow RX -> DMX output)
  *
  * Combines the two previously-verified halves into one sketch:
  *   - QuickESPNow broadcast reception + Feature 6 reconstruction/double

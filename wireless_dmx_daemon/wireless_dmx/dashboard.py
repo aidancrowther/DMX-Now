@@ -1,4 +1,4 @@
-"""btop-like terminal dashboard for the Wireless DMX system."""
+"""btop-like terminal dashboard for the DMX Now system."""
 
 from __future__ import annotations
 
@@ -325,7 +325,7 @@ def render(stdscr, controller: DashboardController, show_logs: bool) -> None:
     height, width = stdscr.getmaxyx()
     snapshot = controller.snapshot()
     mega = controller.mega.snapshot()
-    title = "WIRELESS DMX CONTROL CENTER"
+    title = "DMX NOW CONTROL CENTER"
     _safe_add(stdscr, 0, 2, title, color_attr("accent", True) | curses.A_REVERSE)
     _safe_add(stdscr, 0, max(2, width - 26), time.strftime("%Y-%m-%d %H:%M:%S"), curses.A_DIM)
     _box(stdscr, 2, 1, 7, width // 2 - 1, "DAEMON")

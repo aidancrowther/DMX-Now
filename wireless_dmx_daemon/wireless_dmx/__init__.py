@@ -1,4 +1,4 @@
-"""Host-side Wireless DMX daemon package."""
+"""Host-side DMX Now daemon package."""
 
 from .models import (
     DaemonConfig,
