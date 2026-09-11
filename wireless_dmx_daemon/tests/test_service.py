@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).parents[1]))
 from wireless_dmx.app import WirelessDmxService
 from wireless_dmx.enttec.protocol import encode_dmx
 from wireless_dmx.raw_dmx import RAW_DMX_UNIVERSE_SIZE
-from wireless_dmx.models import ChannelGate, DaemonConfig, ReceiverLinkState, ReceiverTelemetry
+from wireless_dmx.models import ChannelGate, DaemonConfig, DaemonMode, ReceiverLinkState, ReceiverTelemetry
 from wireless_dmx.protocols import (MANAGEMENT_CACHE_CLEARED, MANAGEMENT_PRIORITY_ACKS,
                                     MANAGEMENT_RECEIVER_TELEMETRY, MANAGEMENT_SYNC, crc16_ccitt)
 from wireless_dmx.transmitter.management import ACK_HEADER, ACK_RECORD, PART_HEADER, RECORD
@@ -43,6 +43,40 @@ def telemetry_part():
 
 
 class ServiceTests(unittest.TestCase):
+    def test_management_only_rejects_normal_source_and_manual_send(self):
+        service = WirelessDmxService(
+            DaemonConfig(mode=DaemonMode.MANAGEMENT_ONLY, virtual_serial_enabled=False,
+                         raw_virtual_serial_enabled=False, artnet_enabled=False, virtual_port_path=""),
+            serial_factory=lambda: FakeSerial())
+        universe = bytes([55]) * 512
+        service._accept_source_frame(universe, "serial")
+        self.assertEqual(service.stats.source_frames_rejected, 1)
+        self.assertEqual(service.manual_universe_snapshot(), bytes(512))
+        with self.assertRaises(RuntimeError):
+            service.send_manual(priority=False)
+
+    def test_management_only_preserves_priority_submission(self):
+        service = WirelessDmxService(
+            DaemonConfig(mode=DaemonMode.MANAGEMENT_ONLY, virtual_serial_enabled=False,
+                         raw_virtual_serial_enabled=False, artnet_enabled=False, virtual_port_path=""),
+            serial_factory=lambda: FakeSerial())
+        priority_id = service.send_manual(priority=True)
+        self.assertEqual(priority_id, 0)
+        self.assertEqual(service.pacer.priority_status().queue_depth, 1)
+
+    def test_management_only_does_not_start_dmx_backends(self):
+        service = WirelessDmxService(
+            DaemonConfig(mode=DaemonMode.MANAGEMENT_ONLY, virtual_serial_enabled=True,
+                         raw_virtual_serial_enabled=True, artnet_enabled=True),
+            serial_factory=lambda: FakeSerial())
+        service.start()
+        try:
+            self.assertIsNone(service.virtual.master_fd)
+            self.assertIsNone(service.raw_virtual.master_fd)
+            self.assertIsNone(service.artnet.socket if service.artnet else None)
+        finally:
+            service.stop()
+
     def test_service_accepts_raw_dmx_universe(self):
         backend = LinuxPtyBackend()
         raw_backend = LinuxPtyBackend()

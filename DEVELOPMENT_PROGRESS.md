@@ -1180,8 +1180,34 @@ Expected approximate sequence:
 13. Hardware-specific cleanup and fail-safe refinement
 14. High-priority transmission ✓ (targeted receiver ACK and retry path hardware-validated)
 15. Channel gating ✓ (daemon filtering, receiver runtime hard-gate fail-safe, and Mega validation)
+16. Management-only daemon/transmitter role and standalone physical-DMX re-transmitter — *implementation in progress*
 
 This ordering may change as hardware testing reveals constraints.
+
+### Feature 16: Management-only coexistence and physical-DMX re-transmitter
+
+Status: IMPLEMENTATION IN PROGRESS on branch `feature/management-mode-retransmitter`.
+
+The daemon now has a bridge-mode default plus an explicit `management_only`
+role. Management-only mode does not start ordinary DMX inputs or emit normal
+DMX, while telemetry, receiver controls, and explicit priority/gate traffic
+remain available. The integrated transmitter has a compile-time
+`TRANSMITTER_MANAGEMENT_ONLY` role with the same normal-DMX suppression.
+
+A standalone `retransmitter/` sketch receives physical DMX on UART0/GPIO3
+using the pinned BSD-licensed `LXESP8266DMX` receive implementation and sends
+only the existing normal three-fragment protocol. Its helper supports channel,
+universe, refresh-rate, optional partial-universe zero-fill flags, and an
+interactive `--menuconfig` prompt. Strict 512-slot input remains the default.
+
+Host coverage currently passes 97 tests. Bridge transmitter, management-only
+transmitter, re-transmitter, and receiver compile checks pass with ESP8266 core
+3.1.2; measured IRAM usage is 91%, 91%, 92%, and 92%, respectively.
+
+Physical DMX input, management/re-transmitter RF coexistence, reset/sequence
+recovery, and Mega monitor acceptance remain hardware-validation work. The
+re-transmitter has no planned diagnostic or auxiliary I/O beyond UART0 DMX RX
+and ESP-NOW; future hardware I/O can be added without changing the protocol.
 
 ### Feature 12: Reliability and throughput testing
 

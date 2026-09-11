@@ -543,10 +543,13 @@ def render(stdscr, controller: DashboardController, show_logs: bool) -> None:
     tx_color = "healthy" if snapshot.transmitter_connected else "critical"
     client_color = "healthy" if snapshot.virtual_client_connected else "warning"
     _safe_add(stdscr, 3, 3, f"Health       : {snapshot.health.value}", color_attr(health_color, True))
-    _safe_add(stdscr, 4, 3, f"Transmitter  : {'CONNECTED' if snapshot.transmitter_connected else 'OFFLINE'}", color_attr(tx_color, True))
-    _safe_add(stdscr, 5, 3, f"ENTTEC PTY   : {snapshot.virtual_port or '-'}", color_attr("accent"))
-    _safe_add(stdscr, 6, 3, f"Raw DMX PTY  : {controller.service.raw_virtual.path if controller.service and controller.service.raw_virtual.master_fd is not None else '-'}", color_attr("accent"))
-    _safe_add(stdscr, 7, 3, f"Lighting app : {'CONNECTED' if snapshot.virtual_client_connected else 'WAITING'}", color_attr(client_color, True))
+    mode = getattr(controller.config.mode, "value", controller.config.mode)
+    mode_color = "warning" if mode == "management_only" else "healthy"
+    _safe_add(stdscr, 4, 3, f"Mode         : {mode.upper()}", color_attr(mode_color, True))
+    _safe_add(stdscr, 5, 3, f"Transmitter  : {'CONNECTED' if snapshot.transmitter_connected else 'OFFLINE'}", color_attr(tx_color, True))
+    _safe_add(stdscr, 6, 3, f"ENTTEC PTY   : {snapshot.virtual_port or '-'}", color_attr("accent"))
+    _safe_add(stdscr, 7, 3, f"Raw DMX PTY  : {controller.service.raw_virtual.path if controller.service and controller.service.raw_virtual.master_fd is not None else '-'}", color_attr("accent"))
+    _safe_add(stdscr, 8, 3, f"Lighting app : {'CONNECTED' if snapshot.virtual_client_connected else 'WAITING'}", color_attr(client_color, True))
     x = width // 2 + 2
     _safe_add(stdscr, 3, x, f"Input        : {snapshot.dmx.valid_dmx_frames:>8} {bar(snapshot.dmx.valid_dmx_frames, max(1, snapshot.dmx.valid_dmx_frames))}")
     _safe_add(stdscr, 4, x, f"Submitted    : {snapshot.dmx.frames_submitted:>8} {bar(snapshot.dmx.frames_submitted, max(1, snapshot.dmx.valid_dmx_frames))}", color_attr("healthy"))
@@ -555,9 +558,9 @@ def render(stdscr, controller: DashboardController, show_logs: bool) -> None:
     _safe_add(stdscr, 6, x, f"Target rate  : {controller.config.pacer_rate_hz:.1f} Hz  Art-Net: "
               f"{'ON' if controller.config.artnet_enabled else 'OFF'}:{controller.config.artnet_port}", color_attr("accent", True))
     priority_event = latest_priority_event(controller)
-    _safe_add(stdscr, 7, 3, priority_feedback(priority_event), color_attr("warning" if priority_event and not priority_event.get("ack_complete") else "accent", True))
-    _box(stdscr, 8, 1, max(10, 11 + len(snapshot.receivers)), width - 2, "RECEIVERS")
-    row = 9
+    _safe_add(stdscr, 8, 3, priority_feedback(priority_event), color_attr("warning" if priority_event and not priority_event.get("ack_complete") else "accent", True))
+    _box(stdscr, 9, 1, max(11, 12 + len(snapshot.receivers)), width - 2, "RECEIVERS")
+    row = 10
     _safe_add(stdscr, row, 3, "NAME/ID                        LINK     BATTERY  RSSI             LAST SEEN  COMPLETE  INCOMPLETE", color_attr("accent", True))
     for receiver in snapshot.receivers:
         row += 1

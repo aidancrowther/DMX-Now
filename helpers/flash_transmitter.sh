@@ -22,6 +22,7 @@ ARDUINO_CLI="arduino-cli"
 PORT="/dev/ttyUSB0"
 FLASH=false
 EXTRA_FLAGS=()   # extra -D defines (e.g. future test hooks)
+ROLE="bridge"
 
 # Paths
 QESPNOW_LIB="${PROJECT_ROOT}/libraries/QuickESPNow"
@@ -67,6 +68,17 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
 
+        --management-only)
+            ROLE="management-only"
+            EXTRA_FLAGS+=("-DTRANSMITTER_MANAGEMENT_ONLY")
+            shift
+            ;;
+
+        --bridge)
+            ROLE="bridge"
+            shift
+            ;;
+
         --)
             shift
             break
@@ -74,7 +86,7 @@ while [[ $# -gt 0 ]]; do
 
         *)
             echo "Unknown argument: $1" >&2
-            echo "Usage: $0 [-f] [--port /dev/ttyUSB0] [--define -DEXTRA]" >&2
+            echo "Usage: $0 [-f] [--bridge|--management-only] [--port /dev/ttyUSB0] [--define -DEXTRA]" >&2
             exit 1
             ;;
     esac
@@ -89,6 +101,7 @@ echo "  WirelessDMX: ${PROTOCOL_LIB}"
 echo "Sketch: ${SKETCH_DIR}"
 echo "Serial port: ${PORT}"
 echo "Flash after compile: ${FLASH}"
+echo "Role: ${ROLE}"
 if [[ ${#EXTRA_FLAGS[@]} -gt 0 ]]; then
     echo "Extra defines: ${EXTRA_FLAGS[*]}"
 fi

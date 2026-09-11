@@ -1111,6 +1111,14 @@ void loop(void) {
 
     switch (txState) {
         case TX_IDLE:
+#if defined(TRANSMITTER_MANAGEMENT_ONLY)
+            /* Management-only transmitters never originate ordinary DMX.
+             * Priority traffic remains available for gates and locked values. */
+            if (priorityRepeatsRemaining == 0) {
+                lastFrameGenerationTime = now;
+                break;
+            }
+#endif
             if (now - lastFrameGenerationTime >= activeInterval) {
                 txState = TX_GENERATING;
                 stateEnteredTime = now;
@@ -1119,7 +1127,17 @@ void loop(void) {
             break;
 
         case TX_GENERATING:
-            memcpy(g_txUniverse, g_universe, sizeof(g_txUniverse));
+            if (priorityRepeatsRemaining > 0) {
+                memcpy(g_txUniverse, g_priorityUniverse, sizeof(g_txUniverse));
+            } else {
+#if defined(TRANSMITTER_MANAGEMENT_ONLY)
+                txState = TX_IDLE;
+                lastFrameGenerationTime = now;
+                break;
+#else
+                memcpy(g_txUniverse, g_universe, sizeof(g_txUniverse));
+#endif
+            }
             currentFragment = 0;
             g_sendConfirmations = 0;   /* reset before the sends so all are counted */
             currentFrameIsPriority = priorityRepeatsRemaining > 0;

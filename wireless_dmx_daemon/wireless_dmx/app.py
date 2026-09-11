@@ -10,7 +10,7 @@ from threading import Event, Thread, Lock
 
 from .enttec.parser import EnttecParser
 from .artnet import ArtNetListener, ArtNetParser
-from .models import (DaemonConfig, DaemonHealth, DaemonSnapshot, DmxStatistics,
+from .models import (DaemonConfig, DaemonHealth, DaemonMode, DaemonSnapshot, DmxStatistics,
     ChannelGate, PriorityAck, PriorityAckSummary, PriorityStatus, TelemetryStatus)
 from .pacer import DmxPacer
 from .telemetry import TelemetryStore
@@ -177,6 +177,9 @@ class WirelessDmxService:
 
     def send_manual(self, priority: bool = False, repeat_count: int | None = None,
                     ttl_seconds: float | None = None, reason: str = "manual dashboard") -> int | None:
+        if not priority and self.config.mode == DaemonMode.MANAGEMENT_ONLY:
+            self.stats.frames_dropped_by_pacer += 1
+            raise RuntimeError("normal DMX transmission is disabled in management-only mode")
         universe = bytes(self.manual_universe)
         if priority:
             hard_gate_mask = None
@@ -277,10 +280,11 @@ class WirelessDmxService:
 
     def start(self) -> None:
         self.telemetry.clear()
-        self.virtual.start()
-        self.raw_virtual.start()
-        if self.artnet:
-            self.artnet.start()
+        if self.config.mode == DaemonMode.BRIDGE:
+            self.virtual.start()
+            self.raw_virtual.start()
+            if self.artnet:
+                self.artnet.start()
         self.transmitter.start()
         self._send_cache_clear()
         self.pacer.start()
@@ -299,8 +303,9 @@ class WirelessDmxService:
         self.transmitter.stop()
         if self.artnet:
             self.artnet.stop()
-        self.virtual.stop()
-        self.raw_virtual.stop()
+        if self.config.mode == DaemonMode.BRIDGE:
+            self.virtual.stop()
+            self.raw_virtual.stop()
         self._logger.info("service_stopped")
 
     def snapshot(self) -> DaemonSnapshot:
@@ -352,6 +357,9 @@ class WirelessDmxService:
         self._logger.info("receiver_cache_clear_sent attempt=%s", self._cache_clear_sent)
 
     def _send_universe(self, universe: bytes) -> None:
+        if self.config.mode == DaemonMode.MANAGEMENT_ONLY:
+            self.stats.frames_dropped_by_pacer += 1
+            return
         if self._priority_output_active or time.monotonic() < self._normal_quiet_until:
             self.stats.frames_dropped_by_pacer += 1
             return
@@ -402,6 +410,10 @@ class WirelessDmxService:
             time.monotonic() + self.config.priority_normal_quiet_after_ms / 1000.0)
 
     def _accept_source_frame(self, universe: bytes, source: str) -> None:
+        if self.config.mode == DaemonMode.MANAGEMENT_ONLY:
+            self.stats.source_frames_rejected += 1
+            self.stats.frames_dropped_by_pacer += 1
+            return
         policy = self.config.input_source_policy
         if policy != "latest" and policy != source:
             self.stats.source_frames_rejected += 1

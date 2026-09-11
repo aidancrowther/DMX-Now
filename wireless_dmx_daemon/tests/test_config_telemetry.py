@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).parents[1]))
 
 from wireless_dmx.config import (available_config_paths, last_config_path, load_config,
                                  remember_config_path, save_config)
-from wireless_dmx.models import ReceiverLinkState, ReceiverTelemetry
+from wireless_dmx.models import DaemonMode, ReceiverLinkState, ReceiverTelemetry
 from wireless_dmx.telemetry import TelemetryStore
 
 
@@ -74,6 +74,32 @@ class ConfigTelemetryTests(unittest.TestCase):
             config = load_config(str(path))
             self.assertEqual(config.transmitter_device, "/dev/test")
             self.assertEqual(config.pacer_rate_hz, 20)
+
+    def test_daemon_mode_round_trip_and_legacy_default(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.toml"
+            config = load_config()
+            config = config.__class__(**{**config.__dict__, "mode": DaemonMode.MANAGEMENT_ONLY})
+            save_config(config, str(path))
+            self.assertEqual(load_config(str(path)).mode, DaemonMode.MANAGEMENT_ONLY)
+            legacy = Path(directory) / "legacy.toml"
+            legacy.write_text("[transmitter]\ndevice=\"/dev/test\"\n")
+            self.assertEqual(load_config(str(legacy)).mode, DaemonMode.BRIDGE)
+
+    def test_management_only_mode_allows_no_dmx_inputs(self):
+        config = load_config().__class__(
+            **{**load_config().__dict__, "mode": DaemonMode.MANAGEMENT_ONLY,
+               "virtual_serial_enabled": False, "raw_virtual_serial_enabled": False,
+               "artnet_enabled": False, "virtual_port_path": ""})
+        config.validate()
+
+    def test_bridge_mode_requires_a_dmx_input(self):
+        config = load_config().__class__(
+            **{**load_config().__dict__, "mode": DaemonMode.BRIDGE,
+               "virtual_serial_enabled": False, "raw_virtual_serial_enabled": False,
+               "artnet_enabled": False, "virtual_port_path": ""})
+        with self.assertRaises(ValueError):
+            config.validate()
 
     def test_priority_receiver_budget_loads(self):
         with tempfile.TemporaryDirectory() as directory:

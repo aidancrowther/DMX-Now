@@ -11,6 +11,7 @@ Compile only:
 ```bash
 ./helpers/flash_receiver.sh --define=-DNAME=value
 ./helpers/flash_transmitter.sh --define=-DNAME=value
+./helpers/flash_retransmitter.sh --define=-DNAME=value
 ```
 
 Compile and flash:
@@ -49,6 +50,43 @@ Example receiver test-pattern build:
 | `WIRELESS_TX_DRAIN_TIMEOUT_MS` | `100` | Bound for a stuck ESP-NOW transmit drain. |
 | `TRANSMITTER_TELEMETRY_LOGGING` | `0` | Diagnostic text logging. Keep disabled because UART0 carries binary ENTTEC/management traffic. |
 | `TRANSMITTER_VERBOSE_LOGGING` | unset | Development logging. Do not enable during normal UART operation. |
+| `TRANSMITTER_MANAGEMENT_ONLY` | unset | Disables ordinary DMX fragments while retaining management and priority DMX. |
+
+The integrated transmitter helper defaults to the normal bridge role. Select
+the optional management role with:
+
+```bash
+./helpers/flash_transmitter.sh --management-only
+```
+
+## Standalone re-transmitter
+
+The re-transmitter owns UART0/GPIO3 for physical DMX input and must not call
+`Serial.begin()` or write diagnostics to that UART. It uses the pinned
+`LXESP8266DMX` receive implementation, sends only normal three-fragment DMX
+packets, and waits for its first complete physical universe before transmitting.
+
+```bash
+./helpers/flash_retransmitter.sh
+./helpers/flash_retransmitter.sh --menuconfig
+./helpers/flash_retransmitter.sh --channel 1 --universe 1 --rate 20
+```
+
+The helper is compile-only unless `-f` is supplied. `--menuconfig` is a small
+interactive Bash configuration menu; command-line flags remain preferred for
+repeatable builds. Relevant definitions are `RETRANSMITTER_ESPNOW_CHANNEL`,
+`RETRANSMITTER_UNIVERSE_ID`, and `RETRANSMITTER_WIRELESS_REFRESH_HZ`.
+
+By default, the re-transmitter requires a complete 512-channel physical DMX
+frame. The opt-in `RETRANSMITTER_ACCEPT_PARTIAL_UNIVERSE=1` build accepts a
+valid shorter DMX frame and zero-fills channels after the received slot count
+through channel 512. The helper shortcut is:
+
+```bash
+./helpers/flash_retransmitter.sh --accept-partial
+```
+
+This flag does not accept malformed frames or nonzero start codes.
 
 ## Fault-injection flags
 

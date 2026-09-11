@@ -47,12 +47,16 @@ discarded rather than promoted.
 - Automatic recovery after a new complete universe.
 - Linux PTY input and a terminal management dashboard.
 - Persistent host-side receiver friendly names editable from the dashboard.
+- Optional management-only daemon/transmitter role for deployments where a
+  standalone physical-DMX re-transmitter owns normal DMX.
+- Standalone UART0 physical-DMX-to-ESP-NOW re-transmitter firmware.
 
 ## Repository layout
 
 ```text
 receiver/                 ESP8266 receiver firmware
 transmitter/              ESP8266 transmitter firmware
+retransmitter/             UART0 physical DMX -> normal ESP-NOW firmware
 libraries/                pinned QuickESPNow, espDMX, and shared protocol code
 wireless_dmx_daemon/      Linux host daemon and tests
 tests/                    firmware and hardware monitor sketches
@@ -77,7 +81,15 @@ The project uses `arduino-cli`, not PlatformIO:
 ```bash
 ./helpers/flash_transmitter.sh
 ./helpers/flash_receiver.sh
+./helpers/flash_retransmitter.sh
 ```
+
+The normal transmitter helper defaults to bridge mode. Build the optional
+management-only role with `./helpers/flash_transmitter.sh --management-only`.
+The daemon defaults to bridge mode; use `[daemon] mode = "management_only"` or
+`wireless-dmx run --management-only` for management-only operation. The
+management role never emits ordinary DMX, but priority/gate transactions remain
+available.
 
 Add `-f --port <device>` to flash a selected board. The helpers support
 `--define` for compile-time test settings. Never leave a test-only transmitter
