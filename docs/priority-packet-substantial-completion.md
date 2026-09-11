@@ -156,7 +156,7 @@ after receiver reconnection, transmitter reset, daemon restart, and PTY
 reconnection completed with all expected receiver ACKs on the first attempt and
 zero retries.
 
-Feature 12 is complete for the validated Linux/ESP8266/Mega deployment at the
+Reliability and throughput work is complete for the validated Linux/ESP8266/Mega deployment at the
 20 Hz production rate. Native Windows/macOS virtual serial support, broader
 lighting-application/platform coverage, and longer optional soak runs remain
 non-blocking follow-up work.

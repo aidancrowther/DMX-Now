@@ -17,5 +17,5 @@ A5 5A | version | opcode | little-endian length | payload | CRC-16/CCITT
 
 Telemetry reports are multipart bounded records. They include identity, battery,
 RSSI, uptime, sequence/counters, last-universe age, firmware/protocol versions,
-telemetry sequence, and Feature 13 fail-safe mode, active state, timeout,
+telemetry sequence, and receiver fail-safe mode, active state, timeout,
 configuration generation, and activation count.

@@ -22,7 +22,7 @@ DMX hardware was designed by me.
 * Art-Net ArtDMX input is enabled by default on UDP port 6454, Universe 0.
 * Virtual serial and Art-Net inputs can be enabled independently or together.
 * Rates above 20 Hz require an explicit experimental override.
-* Telemetry is binary Feature 11 management traffic. The transmitter's text
+* Telemetry is binary management traffic. The transmitter's text
   telemetry logging is not enabled during normal operation because it would
   corrupt the shared ENTTEC/management UART.
 
@@ -50,7 +50,7 @@ modules.
 
 ## Phased implementation plan
 
-### Phase 0 — Protocol and architecture contract
+### Protocol and architecture contract
 
 Create the package structure, core dataclasses, configuration model, protocol
 contracts, and service-state snapshots. Add dependency-free tests for these
@@ -61,18 +61,18 @@ documented; models are immutable where appropriate; unit tests cover defaults,
 validation, receiver state calculation, and statistics; future CLI/GUI code can
 consume a service snapshot without accessing I/O objects.
 
-### Phase 1 — ENTTEC protocol parser and statistics
+### ENTTEC protocol parser and statistics
 
 Implement a streaming parser supporting partial reads, concatenated frames,
 embedded delimiter bytes, valid short/full universes, malformed lengths,
 unsupported labels, and recovery after corruption. Track input and rejection
 statistics.
 
-**Completion criteria:** existing Feature 8 parser cases pass as host tests;
+**Completion criteria:** parser cases pass as host tests;
 valid frames produce one normalized DMX universe; malformed input cannot alter
 the active universe.
 
-### Phase 2 — Transmitter serial connection
+### Transmitter serial connection
 
 Implement configurable 115200 8N2 serial I/O, bounded read/write behavior,
 reconnection, timeouts, clean shutdown, and a fake serial adapter for tests.
@@ -81,7 +81,7 @@ reconnection, timeouts, clean shutdown, and a fake serial adapter for tests.
 serial failure recovery is tested without hardware; no unbounded write queue
 exists.
 
-### Phase 3 — DMX pacer
+### DMX pacer
 
 Implement latest-state pacing. New input replaces an unsent pending frame;
 obsolete frames are counted as dropped rather than queued. Make target rate,
@@ -91,7 +91,7 @@ limits, policy, and experimental override configurable.
 transmitter submissions by default; pacer statistics distinguish received,
 submitted, and dropped frames.
 
-### Phase 4 — Virtual serial port
+### Virtual serial port
 
 Implement the Linux PTY backend. Expose the slave path, optionally create a
 safe configurable symlink, tolerate no client/client reconnect, and clean up on
@@ -100,16 +100,16 @@ shutdown. Keep OS-specific details behind a backend interface.
 **Completion criteria:** a normal serial application can open the virtual port;
 ENTTEC bytes reach the parser; client disconnects do not crash the daemon.
 
-### Phase 5 — Binary telemetry management
+### Binary telemetry management
 
-Implement Feature 11 requests, CRC validation, multipart report grouping,
+Implement telemetry requests, CRC validation, multipart report grouping,
 receiver storage, freshness states, retries, and background scheduling.
 
 **Completion criteria:** one and multiple receivers are decoded; multipart
 responses work; malformed/old reports are rejected; telemetry never blocks DMX
 pacing.
 
-### Phase 6 — CLI interface
+### CLI interface
 
 Add `run`, `status`, `receivers`, `stats`, `config-check`, and `version`
 commands. The CLI renders service snapshots rather than owning business logic.
@@ -117,7 +117,7 @@ commands. The CLI renders service snapshots rather than owning business logic.
 **Completion criteria:** current DMX and receiver state is visible; startup and
 shutdown are clean; a future GUI can reuse the service layer.
 
-### Phase 7 — Configuration and persistence
+### Configuration and persistence
 
 Add TOML configuration, command-line overrides, validation, effective-config
 display, and safe defaults.
@@ -125,7 +125,7 @@ display, and safe defaults.
 **Completion criteria:** invalid device/rate/timeout settings fail before I/O;
 CLI overrides take precedence over file values.
 
-### Phase 8 — Resilience and service operation
+### Resilience and service operation
 
 Add transmitter reconnect, PTY client reconnect, bounded backoff, signal
 handling, health states, structured logs, and optional systemd integration.
@@ -133,7 +133,7 @@ handling, health states, structured logs, and optional systemd integration.
 **Completion criteria:** transmitter unplug/replug and daemon restart recover
 without replaying stale DMX history.
 
-### Phase 9 — Hardware validation
+### Hardware validation
 
 Run the daemon with the real transmitter and Arduino Mega monitor. Validate
 20 Hz operation, telemetry, malformed input recovery, receiver disappearance,
@@ -145,14 +145,14 @@ and safe reconnect behavior.
 
 ## Current implementation status
 
-Phases 0–8 and the current Feature 11 host status/management scope are
-complete for the validated Linux/20 Hz deployment. The package has
-standard-library core models, a streaming ENTTEC parser, Feature 11 management
+The host status/management scope is complete for the validated Linux/20 Hz
+deployment. The package has
+standard-library core models, a streaming ENTTEC parser, binary management
 codec, bounded latest-state pacer, reconnecting transmitter adapter, Linux PTY
 backend, TOML loading, CLI entry point, structured logging, and a systemd unit
-template. Feature 12 reliability/throughput testing, Feature 13 hardware
-fail-safe refinement, Feature 14 targeted priority transmission, and Feature 15
-receiver hard gating are **COMPLETE for the validated Linux/20 Hz hardware
+template. Reliability/throughput testing, hardware fail-safe refinement,
+targeted priority transmission, and receiver hard gating are **COMPLETE for the
+validated Linux/20 Hz hardware
 configuration**: manual complete-universe sends,
 bounded queueing, repeat/TTL handling, receiver ACKs, per-receiver
 retry/recovery, lead-in/lead-out timing, receiver-side runtime hard locks, and
@@ -173,7 +173,7 @@ The existing ESP8266/Mega 660-second acceptance run remains the authoritative
 physical DMX/RF evidence; the host daemon's live test confirms the additional
 PTY, parser, pacing, transmitter-serial, and telemetry integration path.
 
-### Feature 12 and Feature 13 completion evidence
+### Reliability, fail-safe, and priority completion evidence
 
 The final lab acceptance completed with 36,000 DMX frames submitted at 20 Hz
 and 79,869/79,869 Mega checks passing. Priority events produced no failed,
@@ -194,7 +194,7 @@ physical completion records and did not affect event completion.
 
 Hardware intervention coverage also passed: receiver removal/reconnection,
 transmitter reset with the daemon running, daemon restart, and PTY client
-disconnect/reconnection all recovered with valid normal DMX output. Feature 13
+disconnect/reconnection all recovered with valid normal DMX output. Receiver
 fail-safe coverage passed `hold`, `blackout`, and `disable_line` with finite
 Mega measurements and automatic recovery. See `../docs/lab-validation.md`.
 
@@ -327,7 +327,7 @@ than normal release controls. Inside Advanced:
 The `a` action starts `tests/run_30min_acceptance.py` as a bounded external
 process and writes evidence to `runs/dashboard-acceptance/`. The dashboard
 does not mix Mega monitor text or diagnostic output into the transmitter UART.
-The daemon continues to use binary Feature 11 telemetry management traffic.
+The daemon continues to use binary telemetry management traffic.
 
 The dashboard/controller is separated from curses rendering. Future GUI code
 can reuse `DashboardController`, `WirelessDmxService`, `DaemonSnapshot`, and
@@ -387,7 +387,7 @@ wireless_dmx_daemon/
 ## Development rules
 
 * Keep all temporary files inside this project directory.
-* Prefer standard-library interfaces in Phase 0.
+* Prefer standard-library interfaces in the foundational implementation.
 * Keep I/O adapters replaceable and testable with fakes.
 * Use fixed/bounded queues and latest-state semantics.
 * Do not enable transmitter text telemetry logging while forwarding ENTTEC

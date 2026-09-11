@@ -6,10 +6,10 @@ specific; receiver identities were discovered from telemetry.
 
 Validated behavior included normal 20 Hz acceptance, priority delivery, hard
 gates, receiver removal/reconnection, transmitter reset, daemon restart, PTY
-reconnection, priority soak, and Feature 13 `hold`, `blackout`, and
+telemetry, priority soak, and receiver `hold`, `blackout`, and
 `disable_line` tests.
 
-Feature 13 evidence included a 60-second hold test, a bounded 30-second
+Fail-safe evidence included a 60-second hold test, a bounded 30-second
 blackout test producing a finite all-zero measurement, and a bounded
 disable-line test producing zero DMX checks with more than 42 seconds of
 no-data. Production transmitter firmware was restored and fresh DMX recovery

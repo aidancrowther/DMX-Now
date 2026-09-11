@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="430" viewBox="0 0 1100 430" role="img" aria-labelledby="title desc">
+  <title id="title">DMX Now management interface flow</title>
+  <desc id="desc">Host daemon sends CRC protected management frames to the transmitter, which sends wireless telemetry and configuration packets to receivers and returns reports to the daemon.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto"><path d="M0,0 L10,3 L0,6 z" fill="#24506b"/></marker>
+    <style>
+      .box { fill:#eef7fb; stroke:#24506b; stroke-width:2; rx:12; }
+      .title { font:700 18px sans-serif; fill:#123247; }
+      .text { font:14px sans-serif; fill:#234; }
+      .label { font:12px sans-serif; fill:#24506b; }
+      .line { stroke:#24506b; stroke-width:2.5; marker-end:url(#arrow); fill:none; }
+    </style>
+  </defs>
+  <rect width="1100" height="430" fill="#ffffff"/>
+  <text x="550" y="32" text-anchor="middle" class="title">DMX Now management interface</text>
+  <rect x="35" y="85" width="240" height="210" class="box"/>
+  <text x="155" y="120" text-anchor="middle" class="title">Host daemon</text>
+  <text x="55" y="155" class="text">• configuration generation</text>
+  <text x="55" y="181" class="text">• telemetry requests</text>
+  <text x="55" y="207" class="text">• priority markers</text>
+  <text x="55" y="233" class="text">• ACK evaluation</text>
+  <text x="55" y="259" class="text">• CRC validation</text>
+  <rect x="430" y="85" width="240" height="210" class="box"/>
+  <text x="550" y="120" text-anchor="middle" class="title">ESP8266 transmitter</text>
+  <text x="450" y="155" class="text">• bounded UART parser</text>
+  <text x="450" y="181" class="text">• priority queue</text>
+  <text x="450" y="207" class="text">• receiver cache</text>
+  <text x="450" y="233" class="text">• multipart reports</text>
+  <text x="450" y="259" class="text">• wireless broadcast</text>
+  <rect x="825" y="85" width="240" height="210" class="box"/>
+  <text x="945" y="120" text-anchor="middle" class="title">Receivers</text>
+  <text x="845" y="155" class="text">• telemetry broadcast</text>
+  <text x="845" y="181" class="text">• fail-safe config</text>
+  <text x="845" y="207" class="text">• priority completion</text>
+  <text x="845" y="233" class="text">• DMX output state</text>
+  <text x="845" y="259" class="text">• gate application</text>
+  <path d="M275 145 H430" class="line"/>
+  <text x="352" y="135" text-anchor="middle" class="label">A5 5A + CRC</text>
+  <path d="M670 145 H825" class="line"/>
+  <text x="747" y="135" text-anchor="middle" class="label">QuickESPNow</text>
+  <path d="M825 260 H670" class="line"/>
+  <text x="747" y="282" text-anchor="middle" class="label">telemetry / completion</text>
+  <path d="M430 260 H275" class="line"/>
+  <text x="352" y="282" text-anchor="middle" class="label">reports / ACKs</text>
+  <rect x="250" y="350" width="600" height="44" fill="#fff8e6" stroke="#a66a00" stroke-width="2" rx="10"/>
+  <text x="550" y="378" text-anchor="middle" class="text">All queues and report assembly are bounded; malformed frames are discarded.</text>
+</svg>

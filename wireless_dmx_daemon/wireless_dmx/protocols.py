@@ -1,7 +1,7 @@
-"""Phase 0 protocol contracts and constants.
+"""Protocol contracts and constants.
 
-Binary codecs are implemented in later phases. These constants provide one
-stable import location for the service, tests, and future adapters.
+These constants provide one stable import location for the service, tests, and
+future adapters.
 """
 
 from __future__ import annotations
