@@ -153,6 +153,17 @@ static uint32_t prioritySequenceForCurrentFrame = 0;
 static uint8_t priorityRepeatsRemaining = 0;
 static bool currentFrameIsPriority = false;
 static uint8_t priorityAttempt = 1;
+static bool transmitterManagementOnly = false;
+#if defined(TRANSMITTER_LOCK_MANAGEMENT_ONLY) || defined(TRANSMITTER_MANAGEMENT_ONLY)
+static const bool transmitterModeLocked = true;
+static const bool lockedManagementOnly = true;
+#elif defined(TRANSMITTER_LOCK_BRIDGE)
+static const bool transmitterModeLocked = true;
+static const bool lockedManagementOnly = false;
+#else
+static const bool transmitterModeLocked = false;
+static const bool lockedManagementOnly = false;
+#endif
 static ReceiverFailsafeConfigPacket pendingFailsafeConfig;
 static uint8_t pendingFailsafeConfigRepeats = 0;
 #define CONTROL_PACKET_QUEUE_SIZE 8U
@@ -546,6 +557,39 @@ static void serviceEnttecInput(void) {
                     const uint16_t responseCrc = managementCrc16(response + 2, 4);
                     response[6] = (uint8_t)responseCrc;
                     response[7] = (uint8_t)(responseCrc >> 8);
+                    Serial.write(response, sizeof(response));
+                }
+                if (managementVersion == MANAGEMENT_PROTO_VERSION &&
+                    managementCrc16(crcInput, (uint16_t)(4 + managementLength)) == managementReceivedCrc &&
+                    managementOpcode == MANAGEMENT_SET_TRANSMITTER_MODE && managementLength == 1U) {
+                    const uint8_t requestedMode = managementPayload[0];
+                    const bool validMode = requestedMode == TRANSMITTER_MODE_BRIDGE ||
+                                           requestedMode == TRANSMITTER_MODE_MANAGEMENT_ONLY;
+                    const bool accepted = validMode &&
+                        (!transmitterModeLocked || requestedMode == (lockedManagementOnly
+                            ? TRANSMITTER_MODE_MANAGEMENT_ONLY : TRANSMITTER_MODE_BRIDGE));
+                    if (accepted) transmitterManagementOnly = requestedMode == TRANSMITTER_MODE_MANAGEMENT_ONLY;
+                    uint8_t response[10] = {MANAGEMENT_SYNC_1, MANAGEMENT_SYNC_2,
+                                            MANAGEMENT_PROTO_VERSION, MANAGEMENT_TRANSMITTER_MODE,
+                                            2, 0, accepted ? TRANSMITTER_MODE_ACCEPTED : TRANSMITTER_MODE_REJECTED,
+                                            (uint8_t)(transmitterManagementOnly ? TRANSMITTER_MODE_MANAGEMENT_ONLY
+                                                                                 : TRANSMITTER_MODE_BRIDGE), 0, 0};
+                    const uint16_t responseCrc = managementCrc16(response + 2, 6);
+                    response[8] = (uint8_t)responseCrc;
+                    response[9] = (uint8_t)(responseCrc >> 8);
+                    Serial.write(response, sizeof(response));
+                }
+                if (managementVersion == MANAGEMENT_PROTO_VERSION &&
+                    managementCrc16(crcInput, (uint16_t)(4 + managementLength)) == managementReceivedCrc &&
+                    managementOpcode == MANAGEMENT_GET_TRANSMITTER_MODE && managementLength == 0U) {
+                    uint8_t response[10] = {MANAGEMENT_SYNC_1, MANAGEMENT_SYNC_2,
+                                            MANAGEMENT_PROTO_VERSION, MANAGEMENT_TRANSMITTER_MODE,
+                                            2, 0, TRANSMITTER_MODE_ACCEPTED,
+                                            (uint8_t)(transmitterManagementOnly ? TRANSMITTER_MODE_MANAGEMENT_ONLY
+                                                                                 : TRANSMITTER_MODE_BRIDGE), 0, 0};
+                    const uint16_t responseCrc = managementCrc16(response + 2, 6);
+                    response[8] = (uint8_t)responseCrc;
+                    response[9] = (uint8_t)(responseCrc >> 8);
                     Serial.write(response, sizeof(response));
                 }
                 if (managementVersion == MANAGEMENT_PROTO_VERSION &&
@@ -993,6 +1037,9 @@ void setup(void) {
      * 2 stops. This supports the full-universe input bandwidth needed when the
      * validated 20 Hz wireless refresh default is used. */
     Serial.begin(115200, SERIAL_8N2);
+#if defined(TRANSMITTER_LOCK_MANAGEMENT_ONLY) || defined(TRANSMITTER_MANAGEMENT_ONLY)
+    transmitterManagementOnly = true;
+#endif
 
     WiFi.mode(WIFI_STA);
     WiFi.disconnect(false);
@@ -1111,14 +1158,14 @@ void loop(void) {
 
     switch (txState) {
         case TX_IDLE:
-#if defined(TRANSMITTER_MANAGEMENT_ONLY)
+            if (transmitterManagementOnly) {
             /* Management-only transmitters never originate ordinary DMX.
              * Priority traffic remains available for gates and locked values. */
             if (priorityRepeatsRemaining == 0) {
                 lastFrameGenerationTime = now;
                 break;
             }
-#endif
+            }
             if (now - lastFrameGenerationTime >= activeInterval) {
                 txState = TX_GENERATING;
                 stateEnteredTime = now;
@@ -1130,13 +1177,12 @@ void loop(void) {
             if (priorityRepeatsRemaining > 0) {
                 memcpy(g_txUniverse, g_priorityUniverse, sizeof(g_txUniverse));
             } else {
-#if defined(TRANSMITTER_MANAGEMENT_ONLY)
+            if (transmitterManagementOnly) {
                 txState = TX_IDLE;
                 lastFrameGenerationTime = now;
                 break;
-#else
-                memcpy(g_txUniverse, g_universe, sizeof(g_txUniverse));
-#endif
+            }
+            memcpy(g_txUniverse, g_universe, sizeof(g_txUniverse));
             }
             currentFragment = 0;
             g_sendConfirmations = 0;   /* reset before the sends so all are counted */

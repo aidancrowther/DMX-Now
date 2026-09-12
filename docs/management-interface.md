@@ -30,6 +30,8 @@ recovers by searching for the next sync sequence after malformed input.
 | `0x05` | Set receiver fail-safe | mode, timeout, generation | Transmitter broadcasts the receiver configuration three times. |
 | `0x06` | Set receiver output | enabled, target ID, generation | Transmitter broadcasts a targeted or all-online MAX3485 output change. |
 | `0x07` | Locate receiver | target ID, duration, generation | Receiver disables DMX and pulses GPIO1/GPIO2 for the requested interval; the default is 15 seconds and the valid range is 1–15 seconds. |
+| `0x08` | Set transmitter mode | one byte: `0` bridge or `1` management-only | Changes the runtime transmitter role unless the firmware was statically locked. Response `0x88` reports accepted/rejected status and active mode. |
+| `0x09` | Get transmitter mode | empty | Queries the current runtime role without changing it. Response `0x88` reports the active mode. |
 
 The Python codec is in:
 
@@ -50,6 +52,14 @@ The transmitter has separate bounded queues for:
 - latest-state normal DMX;
 - ordinary management requests;
 - priority management markers.
+
+The daemon queries the current mode after connection and reconnect. If it does
+not match the configured role, it sends a mode-set request and waits for the
+accepted response before clearing the receiver cache. Firmware may be statically locked with
+`TRANSMITTER_LOCK_BRIDGE` or `TRANSMITTER_LOCK_MANAGEMENT_ONLY`; a rejected
+request leaves the current firmware role unchanged. The legacy
+`TRANSMITTER_MANAGEMENT_ONLY` define remains an alias for a locked
+management-only image.
 
 Priority markers are serviced ahead of ordinary management traffic so telemetry
 polling cannot silently turn a priority universe into a normal universe. Normal

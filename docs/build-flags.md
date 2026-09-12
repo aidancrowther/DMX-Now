@@ -33,6 +33,8 @@ Always restore and flash a production image after a test-only build.
 | `PRIORITY_STAGING_TIMEOUT_MS` | `4000` | Lifetime of priority fragments and gate metadata while a complete priority universe is reconstructed. |
 | `RECEIVER_FAILSAFE_DEFAULT_MODE` | `RECEIVER_FAILSAFE_HOLD` | Receiver boot default: `HOLD`, `BLACKOUT`, or `DISABLE_LINE`. |
 | `RECEIVER_FAILSAFE_DEFAULT_TIMEOUT_SECONDS` | `60` | Receiver boot fail-safe timeout. Runtime daemon configuration can override it. |
+| `RECEIVER_DIAGNOSTIC_SERIAL` | `0` | Disables physical DMX output and emits complete reconstructed universes as binary `RDX1` records over UART0 at 115200 8N1. |
+| `RECEIVER_DIAGNOSTIC_BAUD` | `115200` | Diagnostic UART baud rate. Use the same rate with the host reader; `460800` is recommended for high-rate diagnostics. |
 
 Example receiver test-pattern build:
 
@@ -51,12 +53,16 @@ Example receiver test-pattern build:
 | `TRANSMITTER_TELEMETRY_LOGGING` | `0` | Diagnostic text logging. Keep disabled because UART0 carries binary ENTTEC/management traffic. |
 | `TRANSMITTER_VERBOSE_LOGGING` | unset | Development logging. Do not enable during normal UART operation. |
 | `TRANSMITTER_MANAGEMENT_ONLY` | unset | Disables ordinary DMX fragments while retaining management and priority DMX. |
+| `TRANSMITTER_LOCK_BRIDGE` | unset | Locks the runtime role to bridge; daemon mode requests for management-only are rejected. |
+| `TRANSMITTER_LOCK_MANAGEMENT_ONLY` | unset | Locks the runtime role to management-only; daemon mode requests for bridge are rejected. |
 
 The integrated transmitter helper defaults to the normal bridge role. Select
 the optional management role with:
 
 ```bash
 ./helpers/flash_transmitter.sh --management-only
+./helpers/flash_transmitter.sh --lock-bridge
+./helpers/flash_transmitter.sh --lock-management-only
 ```
 
 ## Standalone re-transmitter

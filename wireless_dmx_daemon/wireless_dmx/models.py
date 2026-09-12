@@ -19,6 +19,7 @@ class DaemonHealth(str, Enum):
     READY = "ready"
     NO_VIRTUAL_CLIENT = "no_virtual_client"
     TRANSMITTER_DISCONNECTED = "transmitter_disconnected"
+    TRANSMITTER_MODE_REJECTED = "transmitter_mode_rejected"
     TELEMETRY_DEGRADED = "telemetry_degraded"
     RUNNING = "running"
     STOPPING = "stopping"
@@ -352,4 +353,6 @@ class DaemonSnapshot:
     receivers: Tuple[ReceiverTelemetry, ...] = ()
     telemetry: TelemetryStatus = field(default_factory=TelemetryStatus)
     priority: PriorityStatus = field(default_factory=PriorityStatus)
+    transmitter_mode: Optional[str] = None
+    transmitter_mode_sync: str = "pending"
     last_error: Optional[str] = None

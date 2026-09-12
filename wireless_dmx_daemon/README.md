@@ -318,6 +318,22 @@ The single wrapper application is the curses dashboard:
 python3 wireless_dmx_dashboard.py --config config.example.toml --mega-port <monitor-device>
 ```
 
+Start explicitly in bridge mode (the default behavior):
+
+```bash
+python3 wireless_dmx_dashboard.py --bridge-mode
+```
+
+Start with normal DMX bridging disabled while retaining transmitter management
+and priority traffic:
+
+```bash
+python3 wireless_dmx_dashboard.py --management-only
+```
+
+These mode flags override the mode from the selected configuration for the
+current invocation only. They are mutually exclusive.
+
 or, after installing the package:
 
 ```bash

@@ -20,7 +20,7 @@ from .config import (CONFIG_DIRECTORY, apply_args, available_config_paths, last_
                      load_config, remember_config_path)
 from .config_editor import (EDITABLE_FIELDS, field_value, receiver_name, save_edited_config,
                              set_receiver_name, update_field)
-from .models import ChannelGate, DaemonConfig, DaemonHealth, DaemonSnapshot
+from .models import ChannelGate, DaemonConfig, DaemonHealth, DaemonMode, DaemonSnapshot
 
 
 RECEIVER_NAME_DISPLAY_WIDTH = 16
@@ -152,6 +152,12 @@ MAIN_COMMANDS = "[d] daemon  [r] telemetry  [s] SETTINGS  [u] MANUAL DMX  [n] na
 ADVANCED_COMMANDS = "[m] Mega  [a] acceptance  [b] abort Mega  [x] main  [q] quit"
 SETUP_COMMANDS = "[↑/↓/j/k] select  [e] edit  [w] save  [a] Save As  [x] discard  [q] quit"
 MANUAL_COMMANDS = "[↑/↓/j/k] select  [←/→] grid  [0-9] type value  [Enter] apply/send  [a] jump  [e] value  [+/-] nudge  [l] gate  [n/p] priority  [r] repeats  [t] TTL  [c] clear  [z] reset zero  [u] full  [g] grid  [x] main  [q] quit"
+MANAGEMENT_MANUAL_NOTICE = "MANAGEMENT-ONLY: manual universes are locked to PRIORITY; normal DMX packets are disabled."
+
+
+def manual_priority_locked(config: DaemonConfig) -> bool:
+    """Return whether the manual editor must use priority transmission."""
+    return config.mode == DaemonMode.MANAGEMENT_ONLY
 
 
 def grid_position(channel: int, columns: int = 16) -> tuple[int, int]:
@@ -316,7 +322,8 @@ class DashboardController:
             return
         self.service = WirelessDmxService(self.config)
         self.service.start()
-        self.log(f"daemon started; PTY={self.service.virtual.path}")
+        virtual_path = self.service.virtual.path if self.service.virtual.master_fd is not None else "-"
+        self.log(f"daemon started; PTY={virtual_path}")
 
     def stop_daemon(self) -> None:
         if self.service is None:
@@ -537,7 +544,12 @@ def render(stdscr, controller: DashboardController, show_logs: bool) -> None:
     title = "DMX NOW CONTROL CENTER"
     _safe_add(stdscr, 0, 2, title, color_attr("accent", True) | curses.A_REVERSE)
     _safe_add(stdscr, 0, max(2, width - 26), time.strftime("%Y-%m-%d %H:%M:%S"), curses.A_DIM)
-    _box(stdscr, 2, 1, 7, width // 2 - 1, "DAEMON")
+    # The daemon panel includes the configured role, reported transmitter role,
+    # synchronization state, PTY status, and (when present) the error line.
+    # Keep its bottom below the last possible content row; the previous fixed
+    # bottom of 7 caused the new status lines to overwrite the border.
+    top_panel_bottom = 10 if snapshot.last_error else 9
+    _box(stdscr, 2, 1, top_panel_bottom, width // 2 - 1, "DAEMON")
     _box(stdscr, 2, width // 2, 7, width - 2, "DMX / PACER")
     health_color = "healthy" if snapshot.health.value == "running" else "critical"
     tx_color = "healthy" if snapshot.transmitter_connected else "critical"
@@ -547,9 +559,12 @@ def render(stdscr, controller: DashboardController, show_logs: bool) -> None:
     mode_color = "warning" if mode == "management_only" else "healthy"
     _safe_add(stdscr, 4, 3, f"Mode         : {mode.upper()}", color_attr(mode_color, True))
     _safe_add(stdscr, 5, 3, f"Transmitter  : {'CONNECTED' if snapshot.transmitter_connected else 'OFFLINE'}", color_attr(tx_color, True))
-    _safe_add(stdscr, 6, 3, f"ENTTEC PTY   : {snapshot.virtual_port or '-'}", color_attr("accent"))
-    _safe_add(stdscr, 7, 3, f"Raw DMX PTY  : {controller.service.raw_virtual.path if controller.service and controller.service.raw_virtual.master_fd is not None else '-'}", color_attr("accent"))
-    _safe_add(stdscr, 8, 3, f"Lighting app : {'CONNECTED' if snapshot.virtual_client_connected else 'WAITING'}", color_attr(client_color, True))
+    active_mode = snapshot.transmitter_mode or "unknown"
+    sync_color = "healthy" if snapshot.transmitter_mode_sync == "synchronized" else "critical"
+    _safe_add(stdscr, 6, 3, f"TX mode      : {active_mode.upper()} ({snapshot.transmitter_mode_sync.upper()})", color_attr(sync_color, True))
+    _safe_add(stdscr, 7, 3, f"ENTTEC PTY   : {snapshot.virtual_port or '-'}", color_attr("accent"))
+    _safe_add(stdscr, 8, 3, f"Raw DMX PTY  : {controller.service.raw_virtual.path if controller.service and controller.service.raw_virtual.master_fd is not None else '-'}", color_attr("accent"))
+    _safe_add(stdscr, 9, 3, f"Lighting app : {'CONNECTED' if snapshot.virtual_client_connected else 'WAITING'}", color_attr(client_color, True))
     x = width // 2 + 2
     _safe_add(stdscr, 3, x, f"Input        : {snapshot.dmx.valid_dmx_frames:>8} {bar(snapshot.dmx.valid_dmx_frames, max(1, snapshot.dmx.valid_dmx_frames))}")
     _safe_add(stdscr, 4, x, f"Submitted    : {snapshot.dmx.frames_submitted:>8} {bar(snapshot.dmx.frames_submitted, max(1, snapshot.dmx.valid_dmx_frames))}", color_attr("healthy"))
@@ -558,9 +573,12 @@ def render(stdscr, controller: DashboardController, show_logs: bool) -> None:
     _safe_add(stdscr, 6, x, f"Target rate  : {controller.config.pacer_rate_hz:.1f} Hz  Art-Net: "
               f"{'ON' if controller.config.artnet_enabled else 'OFF'}:{controller.config.artnet_port}", color_attr("accent", True))
     priority_event = latest_priority_event(controller)
-    _safe_add(stdscr, 8, 3, priority_feedback(priority_event), color_attr("warning" if priority_event and not priority_event.get("ack_complete") else "accent", True))
-    _box(stdscr, 9, 1, max(11, 12 + len(snapshot.receivers)), width - 2, "RECEIVERS")
-    row = 10
+    _safe_add(stdscr, 9, 3, priority_feedback(priority_event), color_attr("warning" if priority_event and not priority_event.get("ack_complete") else "accent", True))
+    if snapshot.last_error:
+        _safe_add(stdscr, 10, 3, f"ERROR: {snapshot.last_error}", color_attr("critical", True))
+    receiver_top = top_panel_bottom + 1
+    _box(stdscr, receiver_top, 1, max(receiver_top + 2, receiver_top + 3 + len(snapshot.receivers)), width - 2, "RECEIVERS")
+    row = receiver_top + 1
     _safe_add(stdscr, row, 3, "NAME/ID                        LINK     BATTERY  RSSI             LAST SEEN  COMPLETE  INCOMPLETE", color_attr("accent", True))
     for receiver in snapshot.receivers:
         row += 1
@@ -637,11 +655,15 @@ def render_manual(stdscr, controller: DashboardController, channel: int, priorit
     _safe_add(stdscr, 0, 2, "WIRELESS DMX MANUAL TRANSMISSION", color_attr("accent", True) | curses.A_REVERSE)
     service = controller.service
     universe = service.manual_universe_snapshot() if service else bytes(512)
+    management_only = manual_priority_locked(controller.config)
+    priority = priority or management_only
     mode = "HIGH PRIORITY" if priority else "NORMAL"
     mode_color = "warning" if priority else "healthy"
     _safe_add(stdscr, 1, 2, f"Mode: {mode}   Repeat: {repeat_count}   TTL: {ttl_seconds:.1f}s   "
               f"Priority queue: {service.snapshot().priority.queue_depth if service else 0}", color_attr(mode_color, True))
-    if priority:
+    if management_only:
+        _safe_add(stdscr, 2, 2, MANAGEMENT_MANUAL_NOTICE, color_attr("critical", True))
+    elif priority:
         _safe_add(stdscr, 2, 2, "WARNING: priority mode uses the bounded priority scheduler; receiver confirmation is not enabled yet.", color_attr("warning", True))
     if full_mode and grid_mode:
         _box(stdscr, 4, 1, max(5, height - 4), width - 2, "FULL UNIVERSE HEX GRID")
@@ -907,6 +929,7 @@ def run_dashboard(stdscr, controller: DashboardController) -> None:
             continue
         if key in (ord("u"), ord("U")) and not advanced and not setup and not manual:
             manual = True
+            manual_priority = manual_priority_locked(controller.config)
             manual_message = ""
             continue
         if manual:
@@ -954,7 +977,11 @@ def run_dashboard(stdscr, controller: DashboardController) -> None:
                 except PermissionError as exc:
                     manual_message = str(exc)
             elif key in (ord("n"), ord("N")):
-                manual_priority = False
+                if manual_priority_locked(controller.config):
+                    manual_priority = True
+                    manual_message = "management-only mode: normal transmission is disabled; priority remains enabled"
+                else:
+                    manual_priority = False
             elif key in (ord("p"), ord("P")):
                 manual_priority = True
             elif key in (ord("c"), ord("C")) and controller.service:
@@ -997,8 +1024,9 @@ def run_dashboard(stdscr, controller: DashboardController) -> None:
                         manual_message = f"channel {manual_channel} set to {value}"
                         manual_typed_value = ""
                         continue
-                    priority_id = controller.service.send_manual(manual_priority, manual_repeat, manual_ttl)
-                    if manual_priority:
+                    send_priority = manual_priority or manual_priority_locked(controller.config)
+                    priority_id = controller.service.send_manual(send_priority, manual_repeat, manual_ttl)
+                    if send_priority:
                         manual_message = priority_feedback(controller.service._priority_events.get(priority_id))
                         priority_alert_event = controller.service._priority_events.get(priority_id)
                         priority_alert = True
@@ -1108,10 +1136,18 @@ def run_dashboard(stdscr, controller: DashboardController) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="wireless-dmx-dashboard")
-    parser.add_argument("--config")
-    parser.add_argument("--mega-port", default="/dev/ttyUSB1")
-    parser.add_argument("--no-daemon", action="store_true")
+    parser = argparse.ArgumentParser(
+        prog="wireless-dmx-dashboard",
+        description="DMX Now terminal dashboard and transmitter management interface.",
+    )
+    parser.add_argument("--config", help="TOML/config file; defaults to the selected/default configuration")
+    parser.add_argument("--mega-port", default="/dev/ttyUSB1", help="Arduino Mega monitor serial device")
+    parser.add_argument("--no-daemon", action="store_true", help="start the dashboard without starting the daemon")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--management-only", action="store_true",
+                      help="start in management-only mode; disable normal DMX inputs/output")
+    mode.add_argument("--bridge-mode", action="store_true",
+                      help="start in bridge mode; enable normal DMX bridge behavior")
     parser.add_argument("--config-path", help="path to save from setup editor; defaults to selected config")
     return parser
 
@@ -1127,6 +1163,7 @@ def main(argv=None) -> int:
         config_path = remembered or str(CONFIG_DIRECTORY / "default.conf")
         config = load_config(config_path if Path(config_path).exists() else None)
         config_explicit = remembered is not None
+    config = apply_args(config, args)
     controller = DashboardController(config, args.mega_port, args.config_path or config_path,
                                      config_explicit=config_explicit)
     try:

@@ -16,7 +16,9 @@ from .pacer import DmxPacer
 from .telemetry import TelemetryStore
 from .transmitter.connection import TransmitterConnection
 from .transmitter.management import (CacheClearedResponse, ManagementParser, PriorityAckReport,
-                                     clear_receiver_cache_request, get_priority_acks_request, get_telemetry_request,
+                                     TransmitterModeResponse,
+                                      clear_receiver_cache_request, get_priority_acks_request, get_telemetry_request,
+                                      get_transmitter_mode_request,
                                       mark_next_priority, set_receiver_failsafe_request, set_receiver_output_request,
                                       locate_receiver_request)
 from .protocols import DMX_GATE_MASK_SIZE
@@ -118,6 +120,13 @@ class WirelessDmxService:
         self._failsafe_generation = int(time.time()) & 0xFFFFFFFF
         self._last_failsafe_send = 0.0
         self._logger = logging.getLogger("wireless_dmx.service")
+        self._transmitter_mode_acknowledged = False
+        self._transmitter_mode_query_pending = False
+        self._transmitter_mode_set_pending = False
+        self._transmitter_mode_current: int | None = None
+        self._transmitter_mode_sync = "pending"
+        self._transmitter_mode_request_at = 0.0
+        self._last_transmitter_connected = False
 
     def set_manual_channel(self, channel: int, value: int) -> None:
         if not 1 <= channel <= 512:
@@ -286,7 +295,7 @@ class WirelessDmxService:
             if self.artnet:
                 self.artnet.start()
         self.transmitter.start()
-        self._send_cache_clear()
+        self._send_transmitter_mode_query()
         self.pacer.start()
         self._stop.clear()
         self._thread = Thread(target=self._run, name="wireless-dmx-service", daemon=True)
@@ -327,11 +336,15 @@ class WirelessDmxService:
             "retry_attempts": self._priority_retry_attempts,
             "retry_recovered": self._priority_retry_recovered,
             "retry_failures": self._priority_retry_failures})
+        mode_name = ("management_only" if self._transmitter_mode_current == 1 else
+                      "bridge" if self._transmitter_mode_current == 0 else None)
         return DaemonSnapshot(health=self._health, virtual_port=virtual_path,
                               transmitter_connected=self.transmitter.connected,
                               virtual_client_connected=self.virtual.client_connected,
                               dmx=stats, receivers=self.telemetry.snapshot(),
                                priority=priority,
+                              transmitter_mode=mode_name,
+                              transmitter_mode_sync=self._transmitter_mode_sync,
                               telemetry=TelemetryStatus(
                                   enabled=self.config.telemetry_enabled,
                                   request_in_flight=self._telemetry_request_started > 0,
@@ -350,11 +363,28 @@ class WirelessDmxService:
                               last_error=self._last_error)
 
     def _send_cache_clear(self) -> None:
+        self._cache_clear_acknowledged = False
         self.transmitter.send_immediate(clear_receiver_cache_request())
         self._cache_clear_sent += 1
         self._cache_clear_retries = max(0, self._cache_clear_sent - 1)
         self._cache_clear_sent_at = time.monotonic()
         self._logger.info("receiver_cache_clear_sent attempt=%s", self._cache_clear_sent)
+
+    def _send_transmitter_mode_query(self) -> None:
+        if self.transmitter.send_immediate(get_transmitter_mode_request()):
+            self._transmitter_mode_query_pending = True
+            self._transmitter_mode_set_pending = False
+            self._transmitter_mode_request_at = time.monotonic()
+            self._logger.info("transmitter_mode_query_sent")
+
+    def _send_transmitter_mode(self) -> None:
+        from .transmitter.management import set_transmitter_mode_request
+        mode = 1 if self.config.mode == DaemonMode.MANAGEMENT_ONLY else 0
+        if self.transmitter.send_immediate(set_transmitter_mode_request(mode)):
+            self._transmitter_mode_acknowledged = False
+            self._transmitter_mode_query_pending = False
+            self._transmitter_mode_set_pending = True
+            self._logger.info("transmitter_mode_requested mode=%s", self.config.mode.value)
 
     def _send_universe(self, universe: bytes) -> None:
         if self.config.mode == DaemonMode.MANAGEMENT_ONLY:
@@ -461,6 +491,32 @@ class WirelessDmxService:
                 self._report_part_times.clear()
                 self._logger.info("receiver_cache_cleared")
                 continue
+            if isinstance(part, TransmitterModeResponse):
+                requested = 1 if self.config.mode == DaemonMode.MANAGEMENT_ONLY else 0
+                self._transmitter_mode_current = part.mode
+                self._transmitter_mode_query_pending = False
+                if part.mode == requested and part.accepted:
+                    self._transmitter_mode_acknowledged = True
+                    self._transmitter_mode_set_pending = False
+                    self._transmitter_mode_sync = "synchronized"
+                    if self._health == DaemonHealth.TRANSMITTER_MODE_REJECTED:
+                        self._health = DaemonHealth.RUNNING
+                        self._last_error = None
+                    self._send_cache_clear()
+                elif part.mode != requested and part.accepted:
+                    self._send_transmitter_mode()
+                else:
+                    self._transmitter_mode_acknowledged = False
+                    self._transmitter_mode_set_pending = False
+                    self._transmitter_mode_sync = "rejected"
+                    active = "management_only" if part.mode == 1 else "bridge" if part.mode == 0 else f"unknown({part.mode})"
+                    requested_name = "management_only" if requested == 1 else "bridge"
+                    self._last_error = (f"transmitter rejected requested mode {requested_name}; "
+                                        f"active mode remains {active} (possibly statically locked)")
+                    self._health = DaemonHealth.TRANSMITTER_MODE_REJECTED
+                self._logger.info("transmitter_mode_response accepted=%s mode=%s",
+                                  part.accepted, part.mode)
+                continue
             if isinstance(part, PriorityAckReport):
                 self._consume_priority_ack_report(part)
                 continue
@@ -542,6 +598,10 @@ class WirelessDmxService:
     def _run(self) -> None:
         while not self._stop.is_set():
             try:
+                connected = self.transmitter.connected
+                if connected and not self._last_transmitter_connected:
+                    self._send_transmitter_mode_query()
+                self._last_transmitter_connected = connected
                 incoming = self.virtual.read()
                 if incoming:
                     for frame in self.enttec.feed(incoming):
@@ -558,6 +618,18 @@ class WirelessDmxService:
                         self._accept_source_frame(data, "artnet")
                 now = time.monotonic()
                 self._service_priority_retries(now)
+                if (self._transmitter_mode_query_pending and
+                        now - self._transmitter_mode_request_at >= self._cache_clear_retry_interval):
+                    self._send_transmitter_mode_query()
+                if not self._transmitter_mode_acknowledged:
+                    # Do not send fail-safe, telemetry, or ACK-poll traffic
+                    # until the transmitter role has been discovered and, if
+                    # necessary, changed to match the daemon configuration.
+                    if (not self._transmitter_mode_query_pending and
+                            not self._transmitter_mode_set_pending):
+                        self._send_transmitter_mode_query()
+                    time.sleep(0.001)
+                    continue
                 if not self._cache_clear_acknowledged:
                     if (now - self._cache_clear_sent_at >= self._cache_clear_retry_interval):
                         self._send_cache_clear()

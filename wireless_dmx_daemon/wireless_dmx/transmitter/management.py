@@ -13,6 +13,8 @@ from ..protocols import (
     MANAGEMENT_CLEAR_RECEIVER_CACHE, MANAGEMENT_CACHE_CLEARED,
     MANAGEMENT_SET_RECEIVER_FAILSAFE,
     MANAGEMENT_SET_RECEIVER_OUTPUT, MANAGEMENT_LOCATE_RECEIVER,
+    MANAGEMENT_SET_TRANSMITTER_MODE, MANAGEMENT_TRANSMITTER_MODE,
+    MANAGEMENT_GET_TRANSMITTER_MODE,
     MANAGEMENT_RECEIVER_TELEMETRY, MANAGEMENT_SYNC, ProtocolError, crc16_ccitt,
 )
 from ..protocols import DMX_GATE_MASK_SIZE
@@ -47,6 +49,16 @@ class CacheClearedResponse:
     acknowledged: bool = True
 
 
+@dataclass(frozen=True)
+class TransmitterModeResponse:
+    status: int
+    mode: int
+
+    @property
+    def accepted(self) -> bool:
+        return self.status == 0
+
+
 def get_telemetry_request() -> bytes:
     body = bytes((MANAGEMENT_PROTO_VERSION, MANAGEMENT_GET_RECEIVER_TELEMETRY, 0, 0))
     return MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body))
@@ -59,6 +71,19 @@ def get_priority_acks_request() -> bytes:
 
 def clear_receiver_cache_request() -> bytes:
     body = bytes((MANAGEMENT_PROTO_VERSION, MANAGEMENT_CLEAR_RECEIVER_CACHE, 0, 0))
+    return MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body))
+
+
+def set_transmitter_mode_request(mode: int) -> bytes:
+    if mode not in (0, 1):
+        raise ValueError("transmitter mode must be 0 (bridge) or 1 (management-only)")
+    payload = bytes((mode,))
+    body = bytes((MANAGEMENT_PROTO_VERSION, MANAGEMENT_SET_TRANSMITTER_MODE)) + struct.pack("<H", 1) + payload
+    return MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body))
+
+
+def get_transmitter_mode_request() -> bytes:
+    body = bytes((MANAGEMENT_PROTO_VERSION, MANAGEMENT_GET_TRANSMITTER_MODE, 0, 0))
     return MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body))
 
 
@@ -136,6 +161,10 @@ def parse_management_frame(frame: bytes) -> TelemetryReportPart:
         if length != 0:
             raise ProtocolError("invalid cache clear response")
         return CacheClearedResponse()
+    if opcode == MANAGEMENT_TRANSMITTER_MODE:
+        if length != 2:
+            raise ProtocolError("invalid transmitter mode response")
+        return TransmitterModeResponse(frame[6], frame[7])
     if opcode != MANAGEMENT_RECEIVER_TELEMETRY:
         raise ProtocolError("unexpected management response")
     if length < PART_HEADER.size:

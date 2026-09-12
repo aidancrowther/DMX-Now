@@ -13,8 +13,8 @@
  *     -> bounded SPSC handoff ring
  *     -> loop(): validate, assemble into staging, wrap-safe sequence check
  *     -> on COMPLETE + configured validation: pointer-swap promote to active
- *     -> dmxA.setChans(active)   (espDMX copies into its own buffer)
- *     -> espDMX self-refreshes the last active universe continuously.
+ *     -> normal build: dmxA.setChans(active) and espDMX self-refreshes output
+ *     -> diagnostic build: emit the active universe over UART0 instead
  *   - Low-rate ReceiverTelemetryPacket broadcast with deterministic phase and
  *     bounded retry backoff so multiple receivers do not transmit together.
  *
@@ -23,9 +23,10 @@
  *   GPIO2 LOW  -> transistor OFF -> DE HIGH -> DMX output ENABLED
  *   Kept disabled during boot/init; enabled once after safe init and left on.
  *
- * NOTE: espDMX dmx_init() calls system_set_os_print(0) +
- * ets_install_putc1(&uart_ignore_char), so the Serial console is dead after
- * dmxA.begin(). No Serial logging is performed in this sketch.
+ * Define RECEIVER_DIAGNOSTIC_SERIAL for a test image that completely disables
+ * physical DMX output and emits binary promoted-universe records on UART0.
+ * This is intentionally not a text log: a complete 512-byte record fits within
+ * the 115200-baud diagnostic bandwidth at the validated wireless rates.
  */
 
 #include <Arduino.h>
@@ -93,6 +94,24 @@ static const unsigned long TRANSMITTER_RESET_RECOVERY_MS = 3000UL;
  */
 #ifndef RX_VALIDATE_TEST_PATTERN
 #define RX_VALIDATE_TEST_PATTERN 0
+#endif
+#ifndef RECEIVER_DIAGNOSTIC_SERIAL
+#define RECEIVER_DIAGNOSTIC_SERIAL 0
+#endif
+#ifndef RECEIVER_DIAGNOSTIC_BAUD
+#define RECEIVER_DIAGNOSTIC_BAUD 115200UL
+#endif
+#if RECEIVER_DIAGNOSTIC_SERIAL && RECEIVER_DIAGNOSTIC_BAUD < 115200UL
+#error RECEIVER_DIAGNOSTIC_BAUD must be at least 115200
+#endif
+
+#if RECEIVER_DIAGNOSTIC_SERIAL
+#define RECEIVER_DIAGNOSTIC_MAGIC_0 'R'
+#define RECEIVER_DIAGNOSTIC_MAGIC_1 'D'
+#define RECEIVER_DIAGNOSTIC_MAGIC_2 'X'
+#define RECEIVER_DIAGNOSTIC_MAGIC_3 '1'
+#define RECEIVER_DIAGNOSTIC_RECORD_NORMAL 1U
+#define RECEIVER_DIAGNOSTIC_RECORD_PRIORITY 2U
 #endif
 
 /* Bounded callback->loop handoff ring. One more than QuickESPNow's own RX
@@ -291,9 +310,46 @@ static uint16_t telemetryRetryCount = 0;
  * during locate, but espDMX must not be allowed to remux GPIO1 or restart its
  * TX state machine until the locator releases the pins. */
 static void commitDmxUniverse(const uint8_t* universe) {
+#if RECEIVER_DIAGNOSTIC_SERIAL
+    (void)universe;
+    return;
+#else
     if (locateActive) return;
     dmxA.setChans(const_cast<uint8_t*>(universe), DMX_UNIVERSE_SIZE, 1);
+#endif
 }
+
+#if RECEIVER_DIAGNOSTIC_SERIAL
+static uint16_t diagnosticCrc16(const uint8_t* data, uint16_t length) {
+    uint16_t crc = 0xFFFFU;
+    for (uint16_t i = 0; i < length; i++) {
+        crc ^= (uint16_t)data[i] << 8;
+        for (uint8_t bit = 0; bit < 8; bit++)
+            crc = (crc & 0x8000U) ? (uint16_t)((crc << 1) ^ 0x1021U)
+                                  : (uint16_t)(crc << 1);
+    }
+    return crc;
+}
+
+static void emitDiagnosticUniverse(uint8_t recordType, uint32_t sequence,
+                                    const uint8_t* universe) {
+    uint8_t record[4 + 1 + 4 + DMX_UNIVERSE_SIZE + 2];
+    uint16_t offset = 0;
+    record[offset++] = RECEIVER_DIAGNOSTIC_MAGIC_0;
+    record[offset++] = RECEIVER_DIAGNOSTIC_MAGIC_1;
+    record[offset++] = RECEIVER_DIAGNOSTIC_MAGIC_2;
+    record[offset++] = RECEIVER_DIAGNOSTIC_MAGIC_3;
+    record[offset++] = recordType;
+    memcpy(record + offset, &sequence, sizeof(sequence));
+    offset += sizeof(sequence);
+    memcpy(record + offset, universe, DMX_UNIVERSE_SIZE);
+    offset += DMX_UNIVERSE_SIZE;
+    const uint16_t crc = diagnosticCrc16(record, offset);
+    record[offset++] = (uint8_t)crc;
+    record[offset++] = (uint8_t)(crc >> 8);
+    Serial.write(record, offset);
+}
+#endif
 
 static uint32_t saturatingU32(unsigned long value) {
     return (value > 0xFFFFFFFFUL) ? 0xFFFFFFFFUL : (uint32_t)value;
@@ -318,6 +374,11 @@ static void recoverFailsafeOutput(void) {
 }
 
 static void locateReceiver(uint16_t seconds) {
+#if RECEIVER_DIAGNOSTIC_SERIAL
+    (void)seconds;
+    /* Diagnostic images have no physical DMX output or locator GPIO behavior. */
+    return;
+#else
     if (locateActive) return;
     locateActive = true;
     locateRestoreEnabled = outputOverrideActive ? outputOverrideEnabled : dmxOutputEnabled;
@@ -332,9 +393,13 @@ static void locateReceiver(uint16_t seconds) {
     digitalWrite(PIN_DMX_DATA, LOW);
     digitalWrite(PIN_DMX_ENABLE, HIGH);
     dmxOutputEnabled = false;
+#endif
 }
 
 static void serviceLocate(void) {
+#if RECEIVER_DIAGNOSTIC_SERIAL
+    return;
+#else
     if (!locateActive) return;
     const unsigned long now = millis();
     if ((long)(now - locateEndMs) >= 0) {
@@ -353,6 +418,7 @@ static void serviceLocate(void) {
         digitalWrite(PIN_DMX_ENABLE, locatePulseLevel ? HIGH : LOW);
         locateNextPulseMs = now + LOCATE_PULSE_HALF_PERIOD_MS;
     }
+#endif
 }
 
 static void incrementCounter(unsigned long& counter) {
@@ -691,6 +757,10 @@ static void processPriorityPacket(const uint8_t* pkt, uint8_t len, int8_t rssi,
             gateMissing = false;
         }
         commitDmxUniverse(activeUniverse);
+#if RECEIVER_DIAGNOSTIC_SERIAL
+        emitDiagnosticUniverse(RECEIVER_DIAGNOSTIC_RECORD_PRIORITY,
+                                priorityFrameSequence, activeUniverse);
+#endif
         lastActiveSequence = priorityFrameSequence;
         hasActiveWirelessFrame = true;
         lastCompletionTimeMs = millis();
@@ -840,6 +910,9 @@ static void promoteActive(uint32_t seq) {
 
     /* Load the newly active universe into the physical DMX output. */
         commitDmxUniverse(activeUniverse);
+#if RECEIVER_DIAGNOSTIC_SERIAL
+    emitDiagnosticUniverse(RECEIVER_DIAGNOSTIC_RECORD_NORMAL, seq, activeUniverse);
+#endif
     recoverFailsafeOutput();
 
     /* Reset staging metadata for the next frame (do NOT clear the 512 bytes). */
@@ -1150,6 +1223,10 @@ void setup(void) {
     hardGatesActive = false;
     clearPriorityGateMetadata();
 
+    /* The diagnostic image owns UART0 as a binary observation stream. */
+#if RECEIVER_DIAGNOSTIC_SERIAL
+    Serial.begin(RECEIVER_DIAGNOSTIC_BAUD, SERIAL_8N1);
+#else
     /* Initialize espDMX on UART0/GPIO1 (this takes over the console). */
     dmxA.begin();
 
@@ -1160,8 +1237,11 @@ void setup(void) {
      * valid (zero) universe is loaded. Left enabled: DMX output is
      * continuous, independent of wireless updates. */
     setDmxOutputEnabled(RECEIVER_FAILSAFE_DEFAULT_MODE != RECEIVER_FAILSAFE_DISABLE_LINE);
+#endif
 
+#if !RECEIVER_DIAGNOSTIC_SERIAL
     delay(200);
+#endif
 
     scheduleTelemetry(millis(), true);
 }

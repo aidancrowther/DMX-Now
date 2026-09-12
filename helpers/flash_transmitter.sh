@@ -33,6 +33,28 @@ BINARY="${SKETCH_DIR}/build/esp8266.esp8266.generic/transmitter.ino.bin"
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        -h|--help)
+            cat <<'EOF'
+Usage: flash_transmitter.sh [OPTIONS]
+
+Compile the integrated ESP8266 transmitter. Compilation is the default;
+use -f to flash after compiling.
+
+Options:
+  -f                         Flash the compiled image.
+  --port PORT                ESP8266 programming port (default: /dev/ttyUSB0).
+  --bridge                   Runtime-switchable bridge-capable image (default).
+  --management-only          Lock image to management-only behavior.
+  --lock-bridge              Lock runtime role to bridge.
+  --lock-management-only     Lock runtime role to management-only.
+  --define DEFINE            Add an extra compiler definition.
+  -h, --help                 Show this help.
+
+Runtime-capable images can be switched by the daemon through the management
+protocol. Locked images reject incompatible role requests.
+EOF
+            exit 0
+            ;;
         -f)
             FLASH=true
             shift
@@ -79,6 +101,18 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
 
+        --lock-bridge)
+            ROLE="locked-bridge"
+            EXTRA_FLAGS+=("-DTRANSMITTER_LOCK_BRIDGE")
+            shift
+            ;;
+
+        --lock-management-only)
+            ROLE="locked-management-only"
+            EXTRA_FLAGS+=("-DTRANSMITTER_LOCK_MANAGEMENT_ONLY")
+            shift
+            ;;
+
         --)
             shift
             break
@@ -86,7 +120,7 @@ while [[ $# -gt 0 ]]; do
 
         *)
             echo "Unknown argument: $1" >&2
-            echo "Usage: $0 [-f] [--bridge|--management-only] [--port /dev/ttyUSB0] [--define -DEXTRA]" >&2
+            echo "Usage: $0 [-f] [--bridge|--management-only|--lock-bridge|--lock-management-only] [--port /dev/ttyUSB0] [--define -DEXTRA]" >&2
             exit 1
             ;;
     esac

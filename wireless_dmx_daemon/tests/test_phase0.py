@@ -4,12 +4,24 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 
 from wireless_dmx.models import DaemonConfig, DaemonHealth, DaemonSnapshot, ReceiverLinkState
 from wireless_dmx.protocols import MANAGEMENT_SYNC, crc16_ccitt
+from wireless_dmx.cli import parser
 
 
 class Phase0Tests(unittest.TestCase):
+    def test_cli_help_describes_operating_modes(self):
+        output = StringIO()
+        with redirect_stdout(output):
+            with self.assertRaises(SystemExit):
+                parser().parse_args(["run", "--help"])
+        text = output.getvalue()
+        self.assertIn("disable normal DMX inputs/output", text)
+        self.assertIn("normal DMX bridge behavior", text)
+
     def test_default_config_is_validated_for_deployment(self):
         config = DaemonConfig()
         config.validate()

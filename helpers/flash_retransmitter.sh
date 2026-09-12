@@ -18,6 +18,16 @@ Usage: flash_retransmitter.sh [-f] [--port PORT] [--channel N] [--universe N]
                               [--define DEFINE]
 
 Compile-only is the default. Use -f to flash after compiling.
+
+Options:
+  --channel N         ESP-NOW channel (default: 1).
+  --universe N        Wireless universe ID (default: 1).
+  --rate HZ           Wireless refresh rate (default: 20 Hz).
+  --accept-partial    Accept shorter DMX frames and zero-fill through channel 512.
+  --menuconfig        Prompt for channel, universe, and rate settings.
+  --define DEFINE     Add an extra compiler definition.
+  --port PORT         ESP8266 programming port when -f is used.
+  -f                  Flash after compiling.
 EOF
             exit 0
             ;;

@@ -77,6 +77,36 @@ class ServiceTests(unittest.TestCase):
         finally:
             service.stop()
 
+    def test_start_queries_transmitter_mode_before_cache_clear(self):
+        fake = FakeSerial()
+        service = WirelessDmxService(
+            DaemonConfig(mode=DaemonMode.MANAGEMENT_ONLY, virtual_serial_enabled=False,
+                         raw_virtual_serial_enabled=False, artnet_enabled=False, virtual_port_path=""),
+            serial_factory=lambda: fake)
+        service.start()
+        try:
+            deadline = time.monotonic() + 1
+            while time.monotonic() < deadline and len(fake.writes) < 2:
+                time.sleep(0.01)
+            self.assertGreaterEqual(len(fake.writes), 2)
+            self.assertEqual(fake.writes[0][3], 0x09)
+            self.assertEqual(fake.writes[0][4:6], b"\x00\x00")
+            self.assertNotEqual(fake.writes[1][3], 0x04)
+        finally:
+            service.stop()
+
+    def test_rejected_transmitter_mode_is_reported_as_error(self):
+        service = WirelessDmxService(DaemonConfig(mode=DaemonMode.BRIDGE),
+                                     serial_factory=lambda: FakeSerial())
+        body = bytes((1, 0x88, 2, 0, 1, 1))
+        frame = MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body))
+        service._on_transmitter_data(frame)
+        snapshot = service.snapshot()
+        self.assertEqual(snapshot.health.value, "transmitter_mode_rejected")
+        self.assertEqual(snapshot.transmitter_mode, "management_only")
+        self.assertEqual(snapshot.transmitter_mode_sync, "rejected")
+        self.assertIn("rejected requested mode bridge", snapshot.last_error)
+
     def test_service_accepts_raw_dmx_universe(self):
         backend = LinuxPtyBackend()
         raw_backend = LinuxPtyBackend()
@@ -173,8 +203,11 @@ class ServiceTests(unittest.TestCase):
             time.sleep(0.05)
             self.assertFalse(service.snapshot().telemetry.cache_clear_acknowledged)
             self.assertFalse(any(write[3] == 0x81 for write in fake.writes if len(write) > 3))
-            body = bytes((1, MANAGEMENT_CACHE_CLEARED, 0, 0))
-            fake.reads.append(MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body)))
+            mode_body = bytes((1, 0x88, 2, 0, 0, 0))
+            cache_body = bytes((1, MANAGEMENT_CACHE_CLEARED, 0, 0))
+            fake.reads.append(
+                MANAGEMENT_SYNC + mode_body + struct.pack("<H", crc16_ccitt(mode_body)) +
+                MANAGEMENT_SYNC + cache_body + struct.pack("<H", crc16_ccitt(cache_body)))
             deadline = time.monotonic() + 1
             while time.monotonic() < deadline and not service.snapshot().telemetry.cache_clear_acknowledged:
                 time.sleep(0.01)
@@ -471,8 +504,11 @@ class ServiceTests(unittest.TestCase):
         )
         service.start()
         try:
-            body = bytes((1, MANAGEMENT_CACHE_CLEARED, 0, 0))
-            fake.reads.append(MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body)))
+            mode_body = bytes((1, 0x88, 2, 0, 0, 0))
+            cache_body = bytes((1, MANAGEMENT_CACHE_CLEARED, 0, 0))
+            fake.reads.append(
+                MANAGEMENT_SYNC + mode_body + struct.pack("<H", crc16_ccitt(mode_body)) +
+                MANAGEMENT_SYNC + cache_body + struct.pack("<H", crc16_ccitt(cache_body)))
             deadline = time.monotonic() + 2.0
             while time.monotonic() < deadline and service.snapshot().telemetry.requests_sent < 3:
                 time.sleep(0.01)
