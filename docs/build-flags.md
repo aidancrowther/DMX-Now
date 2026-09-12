@@ -94,6 +94,15 @@ through channel 512. The helper shortcut is:
 
 This flag does not accept malformed frames or nonzero start codes.
 
+Partial support is deliberately opt-in rather than always enabled. The added
+processing is negligible because the retransmitter already maintains and clears
+a 512-channel destination buffer. The operational risk is different: a
+truncated but otherwise valid physical DMX frame becomes an accepted short
+universe and zeroes its tail. Strict mode instead preserves the last complete
+universe, which is safer for accidental source interruptions. Partial support
+also depends on the pinned `LXESP8266DMX` callback threshold (`DMX_MIN_SLOTS`,
+currently 24); frames below that threshold do not produce a usable callback.
+
 ## Fault-injection flags
 
 These flags are defined in the transmitter/receiver test-hook comments and are

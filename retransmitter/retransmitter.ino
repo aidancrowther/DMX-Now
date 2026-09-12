@@ -35,6 +35,7 @@
 
 static LX8266DMX& dmxInput = ESP8266DMX;
 static volatile bool inputFramePending = false;
+static volatile uint16_t inputFrameSlots = 0;
 static volatile uint32_t inputFramesReceived = 0;
 static uint8_t g_universe[DMX_UNIVERSE_SIZE];
 static uint8_t g_txUniverse[DMX_UNIVERSE_SIZE];
@@ -60,6 +61,7 @@ static void inputFrameReceived(int slots) {
 #endif
     ) {
         inputFramePending = true;
+        inputFrameSlots = static_cast<uint16_t>(slots);
         if (inputFramesReceived < 0xFFFFFFFFUL) inputFramesReceived++;
     }
 }
@@ -68,6 +70,7 @@ static void copyCompletedInput(void) {
     if (!inputFramePending) return;
     noInterrupts();
     inputFramePending = false;
+    const uint16_t slots = inputFrameSlots;
     interrupts();
     /* LXESP8266DMX exposes one receive buffer rather than a double buffer.
      * Quiesce its UART interrupt while copying the completed frame so the next
@@ -75,11 +78,10 @@ static void copyCompletedInput(void) {
      * arriving during this short handoff is intentionally dropped; latest-state
      * wireless pacing makes that safer than forwarding mixed channel data. */
     dmxInput.stop();
-    uint8_t* received = dmxInput.receivedData();
-    const uint16_t slots = dmxInput.numberOfSlots();
-    if (received != nullptr && received[0] == 0 && slots > 0 && slots <= DMX_UNIVERSE_SIZE) {
+    uint8_t* completed = dmxInput.dmxData();
+    if (completed != nullptr && completed[0] == 0 && slots > 0 && slots <= DMX_UNIVERSE_SIZE) {
         memset(g_universe, 0, sizeof(g_universe));
-        memcpy(g_universe, received + 1, slots);
+        memcpy(g_universe, completed + 1, slots);
         haveUniverse = true;
     }
     dmxInput.startInput();

@@ -33,6 +33,7 @@ static unsigned long dynamicIntervalMs = 1000UL;
 static uint8_t dynamicEpoch = 0;
 static unsigned long nextDynamicAt = 0;
 static unsigned long nextSourceFrameAt = 0;
+static bool sourceEnabled = true;
 static RecordState recordState = RECORD_IDLE;
 static unsigned long settleUntil = 0;
 static unsigned long measureUntil = 0;
@@ -133,7 +134,7 @@ static void sendSourceDmx(void) {
     delayMicroseconds(DMX_SOURCE_BREAK_US);
     Serial1.end();
     Serial1.begin(DMX_SOURCE_BAUD, SERIAL_8N2);
-    Serial1.write(sourceFrame, sizeof(sourceFrame));
+    Serial1.write(sourceFrame, generatorSlots + 1U);
     Serial1.flush();
     delayMicroseconds(DMX_SOURCE_MAB_US);
 }
@@ -202,9 +203,9 @@ static void processCommand(char* command, unsigned long now) {
         generatorPattern = GENERATOR_SHORT; generatorSlots = (uint16_t)a; generatorBase = (uint8_t)b;
         applyGenerator(); Serial.println("ACK GENERATE");
     } else if (!strcmp(command, "STOP")) {
-        recordState = RECORD_IDLE; Serial.println("ACK STOP");
+        recordState = RECORD_IDLE; sourceEnabled = false; Serial1.end(); Serial.println("ACK STOP");
     } else if (sscanf(command, "START %lu %lu", &a, &b) == 2 && b > 0) {
-        resetMetrics(); settleUntil = now + a * 1000UL; measureUntil = settleUntil + b * 1000UL;
+        resetMetrics(); sourceEnabled = true; settleUntil = now + a * 1000UL; measureUntil = settleUntil + b * 1000UL;
         recordState = a ? RECORD_SETTLE : RECORD_MEASURE;
         if (!a) measureStart = now;
         Serial.println("ACK START");
@@ -246,7 +247,7 @@ void loop(void) {
     const unsigned long now = millis();
     pollCommands(now);
     updateDynamicGenerator(now);
-    if (now >= nextSourceFrameAt) {
+    if (sourceEnabled && now >= nextSourceFrameAt) {
         sendSourceDmx();
         nextSourceFrameAt = now + 40UL;
     }

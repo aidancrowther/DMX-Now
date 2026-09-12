@@ -49,18 +49,25 @@ def main() -> int:
     parser.add_argument("--receiver-port", required=True, help="diagnostic receiver USB serial port")
     parser.add_argument("--receiver-baud", type=int, default=460800)
     parser.add_argument("--seconds", type=int, default=30)
-    parser.add_argument("--pattern", choices=("const", "ramp", "dynamic"), default="dynamic")
+    parser.add_argument("--pattern", choices=("const", "ramp", "dynamic", "short"), default="dynamic")
     parser.add_argument("--value", type=int, default=77)
+    parser.add_argument("--slots", type=int, default=512,
+                        help="physical DMX slot count for short pattern")
+    parser.add_argument("--accept-partial", action="store_true",
+                        help="expect the retransmitter partial-universe build")
     parser.add_argument("--change-ms", type=int, default=1000,
                         help="dynamic generator epoch interval in milliseconds")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if (not 0 <= args.value <= 255 or args.seconds <= 0 or
-            args.change_ms < 100 or args.change_ms > 60000):
-        parser.error("value must be 0..255, seconds positive, and change-ms 100..60000")
+            args.change_ms < 100 or args.change_ms > 60000 or
+            not 1 <= args.slots <= 512):
+        parser.error("value 0..255, positive seconds, change-ms 100..60000, slots 1..512")
 
     frame_command = (f"GENERATE DYNAMIC {args.value} {args.change_ms}"
                      if args.pattern == "dynamic" else
+                     f"GENERATE SHORT {args.slots} {args.value}"
+                     if args.pattern == "short" else
                      f"GENERATE {'CONST' if args.pattern == 'const' else 'RAMP'} {args.value}")
     summary: dict[str, object] = {"passed": False, "seconds": args.seconds,
                                   "pattern": args.pattern, "value": args.value,
@@ -82,8 +89,29 @@ def main() -> int:
     ))
     try:
         wait_line(mega, "READY RETRANSMITTER_E2E_MEGA", 10)
-        command(mega, frame_command, "ACK GENERATE")
+        if args.pattern == "short":
+            # Establish a known full-universe baseline before changing the
+            # physical source length. This is required to distinguish strict
+            # retention from an absent diagnostic record.
+            command(mega, f"GENERATE CONST {args.value}", "ACK GENERATE")
+        else:
+            command(mega, frame_command, "ACK GENERATE")
         service.start()
+        if args.pattern == "short":
+            command(mega, "START 3 5", "ACK START")
+            baseline_deadline = time.monotonic() + 20
+            while time.monotonic() < baseline_deadline:
+                receiver.read(4096)
+                line = mega.readline().decode(errors="replace").strip()
+                if line.startswith("RESULT "):
+                    break
+            else:
+                raise TimeoutError("waiting for baseline Mega RESULT")
+            # Discard baseline observations and parser alignment state. The
+            # following short phase owns the verdict for this invocation.
+            records = []
+            diagnostic = ReceiverDiagnosticParser()
+            command(mega, frame_command, "ACK GENERATE")
         command(mega, f"START 3 {args.seconds}", "ACK START")
         deadline = time.monotonic() + args.seconds + 15
         settle_until = time.monotonic() + 3.0
@@ -167,6 +195,8 @@ def main() -> int:
         summary["telemetry_samples"] = telemetry_samples
         expected = (bytes([args.value]) * 512 if args.pattern == "const" else
                     bytes((args.value + index) & 0xFF for index in range(512)))
+        if args.pattern == "short":
+            expected = bytes((args.value + index) & 0xFF for index in range(args.slots)) + bytes(512 - args.slots)
         if args.pattern == "dynamic":
             summary["diagnostic_matching_records"] = sum(
                 record.record_type == 1 and
@@ -197,8 +227,25 @@ def main() -> int:
                                                  "mismatches": mismatches[:10]})
             summary["diagnostic_invalid_records"] = invalid_dynamic
             summary["diagnostic_invalid_examples"] = invalid_examples
+        elif args.pattern == "short":
+            short_matches = sum(record.record_type == 1 and record.universe == expected
+                                for record in records)
+            short_promotions = sum(record.record_type == 1 and
+                                    record.universe[:args.slots] == expected[:args.slots] and
+                                    record.universe[args.slots:] == bytes(512 - args.slots)
+                                    for record in records)
+            summary["diagnostic_matching_records"] = short_matches
+            summary["diagnostic_normal_records"] = sum(record.record_type == 1 for record in records)
+            summary["diagnostic_short_promotions"] = short_promotions
+            summary["diagnostic_invalid_records"] = []
+            # A strict image must retain the prior complete universe rather
+            # than promote the short source frame. A partial image must produce
+            # the exact requested prefix and a zero-filled tail.
+            summary["short_expectation_met"] = (
+                short_promotions > 0 if args.accept_partial else short_promotions == 0)
         else:
             summary["diagnostic_invalid_records"] = []
+            summary["short_expectation_met"] = True
         summary["telemetry_requests_sent"] = telemetry_samples[-1]["requests_sent"] if telemetry_samples else 0
         summary["telemetry_reports_received"] = telemetry_samples[-1]["reports_received"] if telemetry_samples else 0
         summary["telemetry_bad_samples"] = [sample for sample in telemetry_samples
@@ -208,13 +255,17 @@ def main() -> int:
                                              sample["last_error"]]
         summary["telemetry_progressed"] = summary["telemetry_reports_received"] > 0
         summary["transmitter_connected"] = service.snapshot().transmitter_connected
-        summary["passed"] = (summary["diagnostic_matching_records"] > 0 and
+        content_records_present = (summary["diagnostic_normal_records"] > 0
+                                    if args.pattern == "short" else
+                                    summary["diagnostic_matching_records"] > 0)
+        summary["passed"] = (content_records_present and
                               summary["diagnostic_bad_crc_after_content_ready"] == 0 and
                               summary["diagnostic_unknown_after_content_ready"] == 0 and
                               not summary["diagnostic_invalid_records"] and
                               service.snapshot().transmitter_connected and
                               summary["telemetry_progressed"] and
-                              not summary["telemetry_bad_samples"])
+                              not summary["telemetry_bad_samples"] and
+                              summary.get("short_expectation_met", True))
         print(json.dumps(summary, indent=2, default=str), flush=True)
         if args.output:
             args.output.write_text(json.dumps(summary, indent=2, default=str) + "\n", encoding="utf-8")

@@ -90,7 +90,7 @@ during software-only validation.
 ## Mega command protocol
 
 The Mega uses `/dev/ttyUSB1` at 115200 8N1. The diagnostic receiver uses
-`/dev/ttyUSB2` at 115200 8N1.
+`/dev/ttyUSB2` at 460800 8N1.
 
 ```text
 GENERATE CONST <value>
@@ -160,8 +160,9 @@ Compile commands:
 ./helpers/flash_retransmitter_e2e_mega.sh
 ```
 
-These commands compile only. Flashing is intentionally not performed by the
-software preparation workflow.
+These commands compile only. Flashing the retransmitter itself requires its
+ESP8266 programming port; the host management transmitter and diagnostic
+receiver use their separate ports.
 
 All ESP-NOW devices must use the same channel and universe settings. The
 re-transmitter is the only normal-DMX authority. The management transmitter is
@@ -206,6 +207,36 @@ are zero and do not retain values from a previous longer frame.
 
 The pinned `LXESP8266DMX` library has a minimum callback threshold, so very
 short frames below that threshold are not expected to produce callbacks.
+
+The `--accept-partial` build remains opt-in. It accepts callback-complete DMX
+frames from the library's minimum slot threshold through 511 slots, copies the
+completed frame, and zero-fills the remaining channels. Strict builds reject
+those frames and retain the last accepted complete universe. This is not a
+meaningful CPU/RAM optimization: the destination buffer already exists and is
+cleared before copying. The reason strict mode remains the default is safety:
+an accidentally truncated physical frame is indistinguishable from an
+intentional short universe once partial mode is enabled.
+
+The retransmitter must be rebuilt and flashed whenever this flag changes; it is
+not a runtime setting. Partial-mode tests must verify that no tail channel
+retains data from the previous full universe.
+
+The live runner selects the source length with `--pattern short --slots N`.
+Pass `--accept-partial` only when the retransmitter was built with
+`--accept-partial`; without it, the runner requires that no exact short,
+zero-filled universe is promoted. Representative commands are:
+
+```bash
+# Strict image: short frames must not be promoted.
+python3 wireless_dmx_daemon/tests/run_retransmitter_acceptance.py \
+  --tx-port /dev/ttyUSB0 --mega-port /dev/ttyUSB1 --receiver-port /dev/ttyUSB2 \
+  --pattern short --slots 236 --value 99 --seconds 20
+
+# Partial image: channels 1..N must match and N+1..512 must be zero.
+python3 wireless_dmx_daemon/tests/run_retransmitter_acceptance.py \
+  --tx-port /dev/ttyUSB0 --mega-port /dev/ttyUSB1 --receiver-port /dev/ttyUSB2 \
+  --pattern short --slots 236 --value 99 --accept-partial --seconds 20
+```
 
 ### 4. Input interruption and recovery
 
