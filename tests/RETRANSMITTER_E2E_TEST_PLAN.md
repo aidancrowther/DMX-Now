@@ -95,6 +95,7 @@ The Mega uses `/dev/ttyUSB1` at 115200 8N1. The diagnostic receiver uses
 ```text
 GENERATE CONST <value>
 GENERATE RAMP <base>
+GENERATE DYNAMIC <base> <change_ms>
 GENERATE SHORT <slots> <base>
 STOP
 START <settle_seconds> <measure_seconds>
@@ -102,9 +103,12 @@ STATUS
 ABORT
 ```
 
-The generated DMX is sent through USART1 using `DMXSerial` with the global
-`DMX_USE_PORT1` build flag. Reconstructed data is read from the diagnostic
-receiver's `/dev/ttyUSB2` binary stream.
+The generated DMX is sent through USART1 as an explicit 513-byte DMX frame
+(start code plus channels 1 through 512). The dynamic generator changes channel
+1 once per requested interval while keeping the remaining channels deterministic;
+this avoids manufacturing torn source frames while still exercising changing
+data. Reconstructed data is read from the diagnostic receiver's `/dev/ttyUSB2`
+binary stream.
 
 The Mega reports finite results such as:
 
@@ -219,11 +223,40 @@ Run the daemon in management-only mode against `/dev/ttyUSB0`. Confirm:
 - management transmitter absence does not stop normal retransmission;
 - daemon/transmitter reconnect does not corrupt the normal universe.
 
+The extended dynamic soak uses:
+
+```bash
+python3 wireless_dmx_daemon/tests/run_retransmitter_acceptance.py \
+  --tx-port /dev/ttyUSB0 --mega-port /dev/ttyUSB1 \
+  --receiver-port /dev/ttyUSB2 --receiver-baud 460800 \
+  --seconds 900 --pattern dynamic --change-ms 1000
+```
+
+The runner samples daemon state once per second but leaves telemetry requests
+under service control. With `telemetry_interval_seconds = 10`, the completed
+900-second run produced 91 requests and 91 reports, with zero telemetry failures.
+It produced 7,991 valid diagnostic normal-universe records and zero invalid
+promotions. A diagnostic CRC count before content synchronization may be
+nonzero due to startup stream alignment; CRC errors after the first valid
+dynamic promotion fail the run.
+
 ### 6. Priority and gates
 
 Use the management-only daemon to send a priority universe and gate metadata.
 Confirm priority ACKs, locked-channel behavior, open-channel following, and
 normal retransmission after priority completion.
+
+The gate distinction is important for a standalone retransmitter:
+
+- `MANAGEMENT_ONLY` is a daemon-side soft gate. It blocks ordinary source frames
+  that enter the daemon, but cannot filter normal packets generated independently
+  by the physical retransmitter. Its host-side behavior is covered by the service
+  tests and must not be treated as receiver-side persistence.
+- `LOCKED` is receiver-side hard-gate metadata carried by a priority transaction.
+  Test channels on both sides of fragment boundaries, require
+  `PRIORITY_COMPLETE_GATE_APPLIED`, verify locked values persist through normal
+  retransmitter traffic, then explicitly clear the mask and verify normal output
+  recovery.
 
 ### 7. Runtime mode and lock behavior
 
