@@ -28,6 +28,9 @@ from wireless_dmx.receiver_diagnostic import ReceiverDiagnosticParser
 def wait_line(port: serial.Serial, prefix: str, timeout: float) -> str:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
+        # pyserial's timeout is normally bounded, but keep each read bounded
+        # independently so a driver/backend cannot make a finite test hang.
+        port.timeout = min(0.2, max(0.01, deadline - time.monotonic()))
         line = port.readline().decode(errors="replace").strip()
         if line:
             print("MEGA " + line, flush=True)
@@ -102,6 +105,7 @@ def main() -> int:
             baseline_deadline = time.monotonic() + 20
             while time.monotonic() < baseline_deadline:
                 receiver.read(4096)
+                mega.timeout = min(0.2, max(0.01, baseline_deadline - time.monotonic()))
                 line = mega.readline().decode(errors="replace").strip()
                 if line.startswith("RESULT "):
                     break
@@ -149,6 +153,7 @@ def main() -> int:
                             diagnostic_unknown_at_content_ready = diagnostic.records_unknown_type
                         if content_ready or args.pattern != "dynamic":
                             records.append(received)
+            mega.timeout = min(0.2, max(0.01, deadline - time.monotonic()))
             line = mega.readline().decode(errors="replace").strip()
             if line:
                 print("MEGA " + line, flush=True)
