@@ -79,6 +79,7 @@ def main() -> int:
     receiver = serial.Serial(args.receiver_port, args.receiver_baud, timeout=0.05)
     diagnostic = ReceiverDiagnosticParser()
     records = []
+    baseline_records = []
     service = WirelessDmxService(DaemonConfig(
         transmitter_device=args.tx_port,
         mode=DaemonMode.MANAGEMENT_ONLY,
@@ -104,7 +105,9 @@ def main() -> int:
             command(mega, "START 3 5", "ACK START")
             baseline_deadline = time.monotonic() + 20
             while time.monotonic() < baseline_deadline:
-                receiver.read(4096)
+                data = receiver.read(4096)
+                if data:
+                    baseline_records.extend(diagnostic.feed(data))
                 mega.timeout = min(0.2, max(0.01, baseline_deadline - time.monotonic()))
                 line = mega.readline().decode(errors="replace").strip()
                 if line.startswith("RESULT "):
@@ -248,6 +251,11 @@ def main() -> int:
             # the exact requested prefix and a zero-filled tail.
             summary["short_expectation_met"] = (
                 short_promotions > 0 if args.accept_partial else short_promotions == 0)
+            summary["baseline_normal_records"] = sum(record.record_type == 1
+                                                      for record in baseline_records)
+            summary["baseline_complete_matches"] = sum(
+                record.record_type == 1 and record.universe == expected
+                for record in baseline_records)
         else:
             summary["diagnostic_invalid_records"] = []
             summary["short_expectation_met"] = True
@@ -260,8 +268,9 @@ def main() -> int:
                                              sample["last_error"]]
         summary["telemetry_progressed"] = summary["telemetry_reports_received"] > 0
         summary["transmitter_connected"] = service.snapshot().transmitter_connected
-        content_records_present = (summary["diagnostic_normal_records"] > 0
-                                    if args.pattern == "short" else
+        content_records_present = ((summary["baseline_complete_matches"] > 0 and
+                                    summary["diagnostic_normal_records"] >= 0)
+                                   if args.pattern == "short" else
                                     summary["diagnostic_matching_records"] > 0)
         summary["passed"] = (content_records_present and
                               summary["diagnostic_bad_crc_after_content_ready"] == 0 and

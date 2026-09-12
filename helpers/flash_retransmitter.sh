@@ -8,6 +8,7 @@ PORT="/dev/ttyUSB0"
 FLASH=false
 MENUCONFIG=false
 EXTRA_FLAGS=()
+PARTIAL_MODE=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -40,7 +41,7 @@ EOF
         --universe=*) EXTRA_FLAGS+=("-DRETRANSMITTER_UNIVERSE_ID=${1#--universe=}"); shift ;;
         --rate) [[ $# -ge 2 ]] || { echo "--rate requires a value" >&2; exit 2; }; EXTRA_FLAGS+=("-DRETRANSMITTER_WIRELESS_REFRESH_HZ=$2"); shift 2 ;;
         --rate=*) EXTRA_FLAGS+=("-DRETRANSMITTER_WIRELESS_REFRESH_HZ=${1#--rate=}"); shift ;;
-        --accept-partial) EXTRA_FLAGS+=("-DRETRANSMITTER_ACCEPT_PARTIAL_UNIVERSE=1"); shift ;;
+        --accept-partial) PARTIAL_MODE=1; shift ;;
         --define) [[ $# -ge 2 ]] || { echo "--define requires a value" >&2; exit 2; }; EXTRA_FLAGS+=("$2"); shift 2 ;;
         --define=*) EXTRA_FLAGS+=("${1#--define=}"); shift ;;
         --menuconfig) MENUCONFIG=true; shift ;;
@@ -57,10 +58,14 @@ if [[ "$MENUCONFIG" == true ]]; then
     read -r -p "TX overhead ms [27]: " value; value=${value:-27}; EXTRA_FLAGS+=("-DRETRANSMITTER_TX_OVERHEAD_MS=$value")
     read -r -p "Accept partial DMX universes? [y/N]: " value
     case "${value,,}" in
-        y|yes) EXTRA_FLAGS+=("-DRETRANSMITTER_ACCEPT_PARTIAL_UNIVERSE=1") ;;
+        y|yes) PARTIAL_MODE=1 ;;
         *) : ;;
     esac
 fi
+
+# Always pass the mode explicitly. This prevents an Arduino build cache from
+# reusing an object compiled with partial support after a strict build request.
+EXTRA_FLAGS+=("-DRETRANSMITTER_ACCEPT_PARTIAL_UNIVERSE=${PARTIAL_MODE}")
 
 QESPNOW_LIB="${PROJECT_ROOT}/libraries/QuickESPNow"
 PROTOCOL_LIB="${PROJECT_ROOT}/libraries/WirelessDMX"

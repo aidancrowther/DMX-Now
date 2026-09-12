@@ -86,6 +86,8 @@ preferred for repeatable builds. Relevant definitions are
 `RETRANSMITTER_ESPNOW_CHANNEL`, `RETRANSMITTER_UNIVERSE_ID`,
 `RETRANSMITTER_WIRELESS_REFRESH_HZ`, `RETRANSMITTER_TX_DRAIN_TIMEOUT_MS`,
 `RETRANSMITTER_TX_OVERHEAD_MS`, and `RETRANSMITTER_ACCEPT_PARTIAL_UNIVERSE`.
+The helper always passes this last definition explicitly as `0` or `1`, which
+prevents a cached partial build from being reused for a strict build.
 
 The generic `--define DEFINE` option remains available for test-only or future
 compile definitions that are not part of the retransmitter's normal menu.
