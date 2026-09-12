@@ -79,9 +79,16 @@ packets, and waits for its first complete physical universe before transmitting.
 ```
 
 The helper is compile-only unless `-f` is supplied. `--menuconfig` is a small
-interactive Bash configuration menu; command-line flags remain preferred for
-repeatable builds. Relevant definitions are `RETRANSMITTER_ESPNOW_CHANNEL`,
-`RETRANSMITTER_UNIVERSE_ID`, and `RETRANSMITTER_WIRELESS_REFRESH_HZ`.
+interactive Bash configuration menu covering channel, universe, wireless rate,
+TX drain timeout, TX overhead, and strict/partial-universe mode; it defaults to
+strict mode when the partial question is left blank. Command-line flags remain
+preferred for repeatable builds. Relevant definitions are
+`RETRANSMITTER_ESPNOW_CHANNEL`, `RETRANSMITTER_UNIVERSE_ID`,
+`RETRANSMITTER_WIRELESS_REFRESH_HZ`, `RETRANSMITTER_TX_DRAIN_TIMEOUT_MS`,
+`RETRANSMITTER_TX_OVERHEAD_MS`, and `RETRANSMITTER_ACCEPT_PARTIAL_UNIVERSE`.
+
+The generic `--define DEFINE` option remains available for test-only or future
+compile definitions that are not part of the retransmitter's normal menu.
 
 By default, the re-transmitter requires a complete 512-channel physical DMX
 frame. The opt-in `RETRANSMITTER_ACCEPT_PARTIAL_UNIVERSE=1` build accepts a

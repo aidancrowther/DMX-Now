@@ -24,7 +24,7 @@ Options:
   --universe N        Wireless universe ID (default: 1).
   --rate HZ           Wireless refresh rate (default: 20 Hz).
   --accept-partial    Accept shorter DMX frames and zero-fill through channel 512.
-  --menuconfig        Prompt for channel, universe, and rate settings.
+  --menuconfig        Prompt for all retransmitter build options.
   --define DEFINE     Add an extra compiler definition.
   --port PORT         ESP8266 programming port when -f is used.
   -f                  Flash after compiling.
@@ -53,6 +53,13 @@ if [[ "$MENUCONFIG" == true ]]; then
     read -r -p "ESP-NOW channel [1]: " value; value=${value:-1}; EXTRA_FLAGS+=("-DRETRANSMITTER_ESPNOW_CHANNEL=$value")
     read -r -p "Universe ID [1]: " value; value=${value:-1}; EXTRA_FLAGS+=("-DRETRANSMITTER_UNIVERSE_ID=$value")
     read -r -p "Wireless rate Hz [20]: " value; value=${value:-20}; EXTRA_FLAGS+=("-DRETRANSMITTER_WIRELESS_REFRESH_HZ=$value")
+    read -r -p "TX drain timeout ms [100]: " value; value=${value:-100}; EXTRA_FLAGS+=("-DRETRANSMITTER_TX_DRAIN_TIMEOUT_MS=$value")
+    read -r -p "TX overhead ms [27]: " value; value=${value:-27}; EXTRA_FLAGS+=("-DRETRANSMITTER_TX_OVERHEAD_MS=$value")
+    read -r -p "Accept partial DMX universes? [y/N]: " value
+    case "${value,,}" in
+        y|yes) EXTRA_FLAGS+=("-DRETRANSMITTER_ACCEPT_PARTIAL_UNIVERSE=1") ;;
+        *) : ;;
+    esac
 fi
 
 QESPNOW_LIB="${PROJECT_ROOT}/libraries/QuickESPNow"
