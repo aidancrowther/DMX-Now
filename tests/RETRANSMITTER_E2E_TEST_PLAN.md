@@ -221,6 +221,13 @@ The retransmitter must be rebuilt and flashed whenever this flag changes; it is
 not a runtime setting. Partial-mode tests must verify that no tail channel
 retains data from the previous full universe.
 
+The retransmitter callback handoff must be treated as a synchronized operation:
+the pinned `LXESP8266DMX` library copies every callback-complete frame into a
+shared completed buffer before calling the application callback. The
+retransmitter therefore records every valid callback slot count and applies
+strict/partial acceptance only while the input interrupt is quiesced. This
+prevents a rejected short frame from being paired with a stale 512-slot notice.
+
 The live runner selects the source length with `--pattern short --slots N`.
 Pass `--accept-partial` only when the retransmitter was built with
 `--accept-partial`; without it, the runner requires that no exact short,

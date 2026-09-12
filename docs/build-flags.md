@@ -90,6 +90,9 @@ The helper always passes this last definition explicitly as `0` or `1`, which
 prevents a cached partial build from being reused for a strict build.
 It also invokes Arduino CLI with `--clean` so each flashed image is rebuilt from
 the requested compile options rather than relying on a shared sketch cache.
+Strict and partial builds are exported to separate `retransmitter/build/strict`
+and `retransmitter/build/partial` directories. The helper prints the selected
+mode, binary path, and SHA-256 before flashing.
 
 The generic `--define DEFINE` option remains available for test-only or future
 compile definitions that are not part of the retransmitter's normal menu.

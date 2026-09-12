@@ -71,15 +71,21 @@ QESPNOW_LIB="${PROJECT_ROOT}/libraries/QuickESPNow"
 PROTOCOL_LIB="${PROJECT_ROOT}/libraries/WirelessDMX"
 INPUT_LIB="${PROJECT_ROOT}/libraries/LXESP8266DMX"
 SKETCH_DIR="${PROJECT_ROOT}/retransmitter"
-BINARY="${SKETCH_DIR}/build/esp8266.esp8266.generic/retransmitter.ino.bin"
+BUILD_MODE="strict"
+if [[ "$PARTIAL_MODE" == 1 ]]; then BUILD_MODE="partial"; fi
+BUILD_DIR="${SKETCH_DIR}/build/${BUILD_MODE}"
+BINARY="${BUILD_DIR}/retransmitter.ino.bin"
 # Rebuild from a clean sketch cache every time. Strict and partial images differ
 # only by a compile-time define; reusing Arduino's cached objects can otherwise
 # make a newly requested mode indistinguishable from the previous build.
-CMD=("$ARDUINO_CLI" compile --clean -b esp8266:esp8266:generic --library "$QESPNOW_LIB" --library "$PROTOCOL_LIB" --library "$INPUT_LIB")
+CMD=("$ARDUINO_CLI" compile --clean --build-path "$BUILD_DIR" -b esp8266:esp8266:generic --library "$QESPNOW_LIB" --library "$PROTOCOL_LIB" --library "$INPUT_LIB")
 if [[ ${#EXTRA_FLAGS[@]} -gt 0 ]]; then CMD+=(--build-property "build.extra_flags= ${EXTRA_FLAGS[*]}"); fi
 CMD+=("$SKETCH_DIR" -e)
 echo "Retransmitter compile: ${EXTRA_FLAGS[*]:-defaults}"
+echo "Build mode: ${BUILD_MODE}"
+echo "Build directory: ${BUILD_DIR}"
 "${CMD[@]}"
 if [[ "$FLASH" != true ]]; then exit 0; fi
 [[ -f "$BINARY" ]] || { echo "Expected binary not found: $BINARY" >&2; exit 1; }
+echo "Binary SHA-256: $(sha256sum "$BINARY" | awk '{print $1}')"
 esptool --port "$PORT" write-flash 0x0000 "$BINARY"

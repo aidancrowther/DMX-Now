@@ -53,13 +53,12 @@ static constexpr unsigned long TX_INTERVAL_MS =
         ? (1000UL / RETRANSMITTER_WIRELESS_REFRESH_HZ - RETRANSMITTER_TX_OVERHEAD_MS) : 0UL;
 
 static void inputFrameReceived(int slots) {
-    if (slots > 0 &&
-#if RETRANSMITTER_ACCEPT_PARTIAL_UNIVERSE
-        slots <= DMX_UNIVERSE_SIZE
-#else
-        slots >= DMX_UNIVERSE_SIZE
-#endif
-    ) {
+    /* Publish every callback-complete frame. Filtering here is unsafe because
+     * LXESP8266DMX has already copied even rejected short frames into its
+     * shared completed-data buffer before invoking this callback. The
+     * foreground handoff applies strict/partial policy while pairing this
+     * slot count with the same quiesced completed buffer. */
+    if (slots > 0 && slots <= DMX_UNIVERSE_SIZE) {
         inputFramePending = true;
         inputFrameSlots = static_cast<uint16_t>(slots);
         if (inputFramesReceived < 0xFFFFFFFFUL) inputFramesReceived++;
@@ -67,19 +66,25 @@ static void inputFrameReceived(int slots) {
 }
 
 static void copyCompletedInput(void) {
-    if (!inputFramePending) return;
     noInterrupts();
-    inputFramePending = false;
-    const uint16_t slots = inputFrameSlots;
-    interrupts();
-    /* LXESP8266DMX exposes one receive buffer rather than a double buffer.
-     * Quiesce its UART interrupt while copying the completed frame so the next
-     * physical frame cannot overwrite the snapshot halfway through. A frame
-     * arriving during this short handoff is intentionally dropped; latest-state
-     * wireless pacing makes that safer than forwarding mixed channel data. */
+    if (!inputFramePending) {
+        interrupts();
+        return;
+    }
+    /* Stop the library while interrupts are masked. This makes the pending
+     * slot count and completed data buffer one atomic handoff. */
     dmxInput.stop();
+    const uint16_t slots = inputFrameSlots;
+    inputFramePending = false;
+    interrupts();
+
+#if RETRANSMITTER_ACCEPT_PARTIAL_UNIVERSE
+    const bool accepted = slots > 0 && slots <= DMX_UNIVERSE_SIZE;
+#else
+    const bool accepted = slots == DMX_UNIVERSE_SIZE;
+#endif
     uint8_t* completed = dmxInput.dmxData();
-    if (completed != nullptr && completed[0] == 0 && slots > 0 && slots <= DMX_UNIVERSE_SIZE) {
+    if (accepted && completed != nullptr && completed[0] == 0) {
         memset(g_universe, 0, sizeof(g_universe));
         memcpy(g_universe, completed + 1, slots);
         haveUniverse = true;
