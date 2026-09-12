@@ -28,14 +28,13 @@ from wireless_dmx.receiver_diagnostic import ReceiverDiagnosticParser
 def wait_line(port: serial.Serial, prefix: str, timeout: float) -> str:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        # pyserial's timeout is normally bounded, but keep each read bounded
-        # independently so a driver/backend cannot make a finite test hang.
-        port.timeout = min(0.2, max(0.01, deadline - time.monotonic()))
-        line = port.readline().decode(errors="replace").strip()
-        if line:
-            print("MEGA " + line, flush=True)
-            if line.startswith(prefix):
-                return line
+        if port.in_waiting:
+            line = port.readline().decode(errors="replace").strip()
+            if line:
+                print("MEGA " + line, flush=True)
+                if line.startswith(prefix):
+                    return line
+        time.sleep(0.005)
     raise TimeoutError(f"waiting for {prefix!r}")
 
 
@@ -110,10 +109,10 @@ def main() -> int:
                 data = receiver.read(4096)
                 if data:
                     baseline_records.extend(diagnostic.feed(data))
-                mega.timeout = min(0.2, max(0.01, baseline_deadline - time.monotonic()))
-                line = mega.readline().decode(errors="replace").strip()
-                if line.startswith("RESULT "):
-                    baseline_result_seen = True
+                if mega.in_waiting:
+                    line = mega.readline().decode(errors="replace").strip()
+                    if line.startswith("RESULT "):
+                        baseline_result_seen = True
                 if (baseline_result_seen and
                         any(record.record_type == 1 and record.universe == baseline_expected
                             for record in baseline_records)):
@@ -163,13 +162,13 @@ def main() -> int:
                             diagnostic_unknown_at_content_ready = diagnostic.records_unknown_type
                         if content_ready or args.pattern != "dynamic":
                             records.append(received)
-            mega.timeout = min(0.2, max(0.01, deadline - time.monotonic()))
-            line = mega.readline().decode(errors="replace").strip()
-            if line:
-                print("MEGA " + line, flush=True)
-                if line.startswith("RESULT "):
-                    result = line
-                    break
+            if mega.in_waiting:
+                line = mega.readline().decode(errors="replace").strip()
+                if line:
+                    print("MEGA " + line, flush=True)
+                    if line.startswith("RESULT "):
+                        result = line
+                        break
             if now >= next_sample_at:
                 snapshot = service.snapshot()
                 telemetry_samples.append({
