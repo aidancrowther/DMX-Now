@@ -72,7 +72,10 @@ PROTOCOL_LIB="${PROJECT_ROOT}/libraries/WirelessDMX"
 INPUT_LIB="${PROJECT_ROOT}/libraries/LXESP8266DMX"
 SKETCH_DIR="${PROJECT_ROOT}/retransmitter"
 BINARY="${SKETCH_DIR}/build/esp8266.esp8266.generic/retransmitter.ino.bin"
-CMD=("$ARDUINO_CLI" compile -b esp8266:esp8266:generic --library "$QESPNOW_LIB" --library "$PROTOCOL_LIB" --library "$INPUT_LIB")
+# Rebuild from a clean sketch cache every time. Strict and partial images differ
+# only by a compile-time define; reusing Arduino's cached objects can otherwise
+# make a newly requested mode indistinguishable from the previous build.
+CMD=("$ARDUINO_CLI" compile --clean -b esp8266:esp8266:generic --library "$QESPNOW_LIB" --library "$PROTOCOL_LIB" --library "$INPUT_LIB")
 if [[ ${#EXTRA_FLAGS[@]} -gt 0 ]]; then CMD+=(--build-property "build.extra_flags= ${EXTRA_FLAGS[*]}"); fi
 CMD+=("$SKETCH_DIR" -e)
 echo "Retransmitter compile: ${EXTRA_FLAGS[*]:-defaults}"

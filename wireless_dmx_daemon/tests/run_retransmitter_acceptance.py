@@ -75,6 +75,7 @@ def main() -> int:
     summary: dict[str, object] = {"passed": False, "seconds": args.seconds,
                                   "pattern": args.pattern, "value": args.value,
                                   "change_ms": args.change_ms}
+    baseline_expected = bytes([args.value]) * 512
     mega = serial.Serial(args.mega_port, 115200, timeout=0.2)
     receiver = serial.Serial(args.receiver_port, args.receiver_baud, timeout=0.05)
     diagnostic = ReceiverDiagnosticParser()
@@ -104,6 +105,7 @@ def main() -> int:
         if args.pattern == "short":
             command(mega, "START 3 5", "ACK START")
             baseline_deadline = time.monotonic() + 20
+            baseline_result_seen = False
             while time.monotonic() < baseline_deadline:
                 data = receiver.read(4096)
                 if data:
@@ -111,9 +113,14 @@ def main() -> int:
                 mega.timeout = min(0.2, max(0.01, baseline_deadline - time.monotonic()))
                 line = mega.readline().decode(errors="replace").strip()
                 if line.startswith("RESULT "):
+                    baseline_result_seen = True
+                if (baseline_result_seen and
+                        any(record.record_type == 1 and record.universe == baseline_expected
+                            for record in baseline_records)):
                     break
-            else:
-                raise TimeoutError("waiting for baseline Mega RESULT")
+            if not any(record.record_type == 1 and record.universe == baseline_expected
+                       for record in baseline_records):
+                raise TimeoutError("waiting for baseline diagnostic universe")
             # Discard baseline observations and parser alignment state. The
             # following short phase owns the verdict for this invocation.
             records = []
@@ -254,7 +261,7 @@ def main() -> int:
             summary["baseline_normal_records"] = sum(record.record_type == 1
                                                       for record in baseline_records)
             summary["baseline_complete_matches"] = sum(
-                record.record_type == 1 and record.universe == expected
+                record.record_type == 1 and record.universe == baseline_expected
                 for record in baseline_records)
         else:
             summary["diagnostic_invalid_records"] = []
