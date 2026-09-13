@@ -111,3 +111,7 @@ records on UART0/GPIO1, read through the receiver's USB serial adapter. Use
 example, build with `--diagnostic --diagnostic-baud 460800` and run with
 `--receiver-baud 460800`. The Mega then only needs to generate physical DMX on
 USART1. The live runner uses `--receiver-port` for this diagnostic stream.
+Diagnostic records have the format `RDX1`, record type, little-endian frame
+sequence, six-byte source MAC, 512 promoted channel bytes, and CRC16. Always
+record and review the source MAC when more than one normal-DMX transmitter may
+be powered or within radio range.

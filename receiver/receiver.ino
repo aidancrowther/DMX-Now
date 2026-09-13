@@ -131,6 +131,7 @@ static uint8_t universeBufferB[DMX_UNIVERSE_SIZE];
 
 static uint8_t* stagingUniverse = universeBufferA; /* frame being assembled  */
 static uint8_t* activeUniverse  = universeBufferB; /* last complete universe */
+static uint8_t stagingSourceMac[6] = {0};
 
 /* Feature 14 priority reconstruction. Priority traffic uses its own staging
  * buffer so an incomplete urgent frame can never expose partial data. */
@@ -145,6 +146,7 @@ static uint8_t priorityFragmentCount = 0;
 static uint8_t priorityUniqueCount = 0;
 static uint32_t priorityReceivedMask = 0;
 static unsigned long priorityLastActivityMs = 0;
+static uint8_t prioritySourceMac[6] = {0};
 static uint8_t normalWriteAllowed[DMX_UNIVERSE_SIZE];
 static bool hardGatesActive = false;
 static uint8_t failsafeMode = RECEIVER_FAILSAFE_DEFAULT_MODE;
@@ -332,8 +334,9 @@ static uint16_t diagnosticCrc16(const uint8_t* data, uint16_t length) {
 }
 
 static void emitDiagnosticUniverse(uint8_t recordType, uint32_t sequence,
-                                    const uint8_t* universe) {
-    uint8_t record[4 + 1 + 4 + DMX_UNIVERSE_SIZE + 2];
+                                    const uint8_t* universe,
+                                    const uint8_t* sourceMac) {
+    uint8_t record[4 + 1 + 4 + 6 + DMX_UNIVERSE_SIZE + 2];
     uint16_t offset = 0;
     record[offset++] = RECEIVER_DIAGNOSTIC_MAGIC_0;
     record[offset++] = RECEIVER_DIAGNOSTIC_MAGIC_1;
@@ -342,6 +345,8 @@ static void emitDiagnosticUniverse(uint8_t recordType, uint32_t sequence,
     record[offset++] = recordType;
     memcpy(record + offset, &sequence, sizeof(sequence));
     offset += sizeof(sequence);
+    memcpy(record + offset, sourceMac, 6);
+    offset += 6;
     memcpy(record + offset, universe, DMX_UNIVERSE_SIZE);
     offset += DMX_UNIVERSE_SIZE;
     const uint16_t crc = diagnosticCrc16(record, offset);
@@ -759,7 +764,8 @@ static void processPriorityPacket(const uint8_t* pkt, uint8_t len, int8_t rssi,
         commitDmxUniverse(activeUniverse);
 #if RECEIVER_DIAGNOSTIC_SERIAL
         emitDiagnosticUniverse(RECEIVER_DIAGNOSTIC_RECORD_PRIORITY,
-                                priorityFrameSequence, activeUniverse);
+                                priorityFrameSequence, activeUniverse,
+                                prioritySourceMac);
 #endif
         lastActiveSequence = priorityFrameSequence;
         hasActiveWirelessFrame = true;
@@ -848,7 +854,8 @@ static bool popPendingFrag(uint8_t* outBuf, uint8_t& outLen, int8_t& outRssi,
 /* --------------------------------------------------------------------------
  * Staging state transitions (loop context only).
  * -------------------------------------------------------------------------- */
-static void stagingBegin(uint32_t seq, uint8_t fragCount) {
+static void stagingBegin(uint32_t seq, uint8_t fragCount,
+                         const uint8_t* sourceMac) {
     stagingActive         = true;
     stagingSequence       = seq;
     stagingFragmentCount  = fragCount;
@@ -856,6 +863,7 @@ static void stagingBegin(uint32_t seq, uint8_t fragCount) {
     stagingUniqueCount    = 0;
     coverageClear();
     stagingLastActivityMs = millis();
+    memcpy(stagingSourceMac, sourceMac, 6);
 }
 
 static void stagingAbandonIncomplete(void) {
@@ -911,7 +919,8 @@ static void promoteActive(uint32_t seq) {
     /* Load the newly active universe into the physical DMX output. */
         commitDmxUniverse(activeUniverse);
 #if RECEIVER_DIAGNOSTIC_SERIAL
-    emitDiagnosticUniverse(RECEIVER_DIAGNOSTIC_RECORD_NORMAL, seq, activeUniverse);
+    emitDiagnosticUniverse(RECEIVER_DIAGNOSTIC_RECORD_NORMAL, seq, activeUniverse,
+                           stagingSourceMac);
 #endif
     recoverFailsafeOutput();
 
@@ -1107,12 +1116,12 @@ static void processPacket(const uint8_t* pkt, uint8_t len, int8_t rssi,
     if (!stagingActive) {
         if (!hasActiveWirelessFrame) {
             /* First frame ever: accept ANY sequence (no seq-0 assumption). */
-            stagingBegin(seq, hdr.fragmentCount);
+            stagingBegin(seq, hdr.fragmentCount, sourceMac);
             acceptFragment(pkt, seq, hdr, tileOffset, tileLen, rssi);
             return;
         }
         if (seqIsNewer(seq, lastActiveSequence)) {
-            stagingBegin(seq, hdr.fragmentCount);
+            stagingBegin(seq, hdr.fragmentCount, sourceMac);
             acceptFragment(pkt, seq, hdr, tileOffset, tileLen, rssi);
             return;
         }
@@ -1122,7 +1131,7 @@ static void processPacket(const uint8_t* pkt, uint8_t len, int8_t rssi,
              * Permit establishing a new baseline (commits only if this frame
              * completes and passes the configured validation mode). */
             resetRebaselined++;
-            stagingBegin(seq, hdr.fragmentCount);
+            stagingBegin(seq, hdr.fragmentCount, sourceMac);
             acceptFragment(pkt, seq, hdr, tileOffset, tileLen, rssi);
             return;
         }
@@ -1149,7 +1158,7 @@ static void processPacket(const uint8_t* pkt, uint8_t len, int8_t rssi,
     if (seqIsNewer(seq, stagingSequence)) {
         /* A newer frame supersedes the incomplete one (fresh state wins). */
         stagingAbandonIncomplete();
-        stagingBegin(seq, hdr.fragmentCount);
+        stagingBegin(seq, hdr.fragmentCount, sourceMac);
         acceptFragment(pkt, seq, hdr, tileOffset, tileLen, rssi);
         return;
     }
@@ -1289,6 +1298,7 @@ void loop(void) {
         priorityReceivedMask = 0;
         priorityUniqueCount = 0;
         priorityCoverageClear();
+        memcpy(prioritySourceMac, sourceMac, 6);
     }
 
     if (priorityGateMetadataActive &&

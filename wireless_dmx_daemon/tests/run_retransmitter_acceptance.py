@@ -10,6 +10,7 @@ physical re-transmitter.
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import json
 import sys
 import time
@@ -202,6 +203,9 @@ def main() -> int:
         summary["diagnostic_records"] = len(records)
         summary["diagnostic_bad_crc"] = diagnostic.records_bad_crc
         summary["diagnostic_unknown_type"] = diagnostic.records_unknown_type
+        summary["diagnostic_source_macs"] = dict(Counter(
+            record.source_mac.hex(":") for record in records
+            if record.record_type == 1))
         summary["diagnostic_bad_crc_after_content_ready"] = max(
             0, diagnostic.records_bad_crc - diagnostic_bad_crc_at_content_ready)
         summary["diagnostic_unknown_after_content_ready"] = max(

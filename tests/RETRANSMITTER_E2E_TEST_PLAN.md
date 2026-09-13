@@ -53,12 +53,18 @@ Build the diagnostic receiver image with:
 The diagnostic stream is fixed binary records:
 
 ```text
-RDX1 | record type | little-endian frame sequence | 512 channel bytes | CRC16
+RDX1 | record type | little-endian frame sequence | source MAC (6 bytes) |
+     | 512 channel bytes | CRC16
 ```
 
 The receiver USB serial adapter must be configured for 115200 8N1. This is a
 logical reconstructed-DMX observation path; the receiver's physical MAX3485
 DMX output remains disabled in this image.
+
+Diagnostic records include the ESP-NOW source MAC for the promoted fragment
+sequence. This is important when more than one normal-DMX authority may be
+within radio range: content validation without source attribution cannot prove
+which transmitter produced a promotion.
 
 ## Software assets
 

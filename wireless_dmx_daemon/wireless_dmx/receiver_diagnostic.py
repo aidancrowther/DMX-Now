@@ -9,13 +9,14 @@ from .protocols import crc16_ccitt
 DIAGNOSTIC_MAGIC = b"RDX1"
 DIAGNOSTIC_NORMAL = 1
 DIAGNOSTIC_PRIORITY = 2
-DIAGNOSTIC_RECORD_SIZE = 4 + 1 + 4 + 512 + 2
+DIAGNOSTIC_RECORD_SIZE = 4 + 1 + 4 + 6 + 512 + 2
 
 
 @dataclass(frozen=True)
 class DiagnosticUniverse:
     record_type: int
     sequence: int
+    source_mac: bytes
     universe: bytes
 
 
@@ -47,4 +48,4 @@ class ReceiverDiagnosticParser:
                 self.records_unknown_type += 1
                 continue
             records.append(DiagnosticUniverse(record_type,
-                           int.from_bytes(frame[5:9], "little"), frame[9:521]))
+                           int.from_bytes(frame[5:9], "little"), frame[9:15], frame[15:527]))

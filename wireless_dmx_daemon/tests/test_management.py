@@ -40,17 +40,20 @@ def make_part(sequence, index, count, records):
 class ManagementTests(unittest.TestCase):
     def test_receiver_diagnostic_parser_round_trip_and_resynchronizes(self):
         universe = bytes([77]) * 512
-        body = DIAGNOSTIC_MAGIC + bytes((1,)) + (42).to_bytes(4, "little") + universe
+        source_mac = bytes.fromhex("18fe34daff38")
+        body = DIAGNOSTIC_MAGIC + bytes((1,)) + (42).to_bytes(4, "little") + source_mac + universe
         frame = body + crc16_ccitt(body).to_bytes(2, "little")
         parser = ReceiverDiagnosticParser()
         records = parser.feed(b"noise" + frame[:80])
         records += parser.feed(frame[80:])
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0].sequence, 42)
+        self.assertEqual(records[0].source_mac, source_mac)
         self.assertEqual(records[0].universe, universe)
 
     def test_receiver_diagnostic_parser_rejects_bad_crc(self):
-        body = DIAGNOSTIC_MAGIC + bytes((1,)) + (1).to_bytes(4, "little") + bytes(512)
+        body = (DIAGNOSTIC_MAGIC + bytes((1,)) + (1).to_bytes(4, "little") +
+                bytes.fromhex("18fe34daff38") + bytes(512))
         frame = bytearray(body + crc16_ccitt(body).to_bytes(2, "little"))
         frame[-1] ^= 0xFF
         parser = ReceiverDiagnosticParser()

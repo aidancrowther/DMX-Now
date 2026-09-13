@@ -41,5 +41,9 @@ For re-transmitter testing, a diagnostic receiver image can be built with
 espDMX and keeps the MAX3485 output disabled. It sends complete reconstructed
 universes as binary `RDX1` records over UART0/GPIO1 at 115200 8N1, allowing the
 USB programmer/serial adapter to be used as a logical DMX observation port.
+Each diagnostic record also includes the six-byte ESP-NOW source MAC for the
+promoted fragment sequence, before the 512 channel bytes. This permits tests to
+distinguish the intended physical retransmitter from another normal-DMX source
+within radio range.
 The diagnostic image is a test role and must be replaced with the production
 receiver image before normal fixture output is used.
