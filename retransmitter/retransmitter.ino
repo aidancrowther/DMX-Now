@@ -35,7 +35,7 @@
 
 static LX8266DMX& dmxInput = ESP8266DMX;
 static volatile bool inputFramePending = false;
-static volatile uint16_t inputFrameSlots = 0;
+static volatile uint8_t inputFrameSnapshot[DMX_UNIVERSE_SIZE];
 static volatile uint32_t inputFramesReceived = 0;
 static uint8_t g_universe[DMX_UNIVERSE_SIZE];
 static uint8_t g_txUniverse[DMX_UNIVERSE_SIZE];
@@ -52,44 +52,42 @@ static constexpr unsigned long TX_INTERVAL_MS =
     (1000UL / RETRANSMITTER_WIRELESS_REFRESH_HZ > RETRANSMITTER_TX_OVERHEAD_MS)
         ? (1000UL / RETRANSMITTER_WIRELESS_REFRESH_HZ - RETRANSMITTER_TX_OVERHEAD_MS) : 0UL;
 
-static void inputFrameReceived(int slots) {
-    /* Publish every callback-complete frame. Filtering here is unsafe because
-     * LXESP8266DMX has already copied even rejected short frames into its
-     * shared completed-data buffer before invoking this callback. The
-     * foreground handoff applies strict/partial policy while pairing this
-     * slot count with the same quiesced completed buffer. */
-    if (slots > 0 && slots <= DMX_UNIVERSE_SIZE) {
-        inputFramePending = true;
-        inputFrameSlots = static_cast<uint16_t>(slots);
-        if (inputFramesReceived < 0xFFFFFFFFUL) inputFramesReceived++;
-    }
-}
-
-static void copyCompletedInput(void) {
-    noInterrupts();
-    if (!inputFramePending) {
-        interrupts();
-        return;
-    }
-    /* Stop the library while interrupts are masked. This makes the pending
-     * slot count and completed data buffer one atomic handoff. */
-    dmxInput.stop();
-    const uint16_t slots = inputFrameSlots;
-    inputFramePending = false;
-    interrupts();
-
+ICACHE_RAM_ATTR static void inputFrameReceived(int slots) {
+    /* LXESP8266DMX has already copied this completed frame into dmxData() when
+     * it invokes the callback. Take a private snapshot now: the library buffer
+     * is reused by the receive ISR and is not double-buffered. In strict mode,
+     * reject short frames before publishing anything, so they cannot replace a
+     * previously accepted complete universe. */
 #if RETRANSMITTER_ACCEPT_PARTIAL_UNIVERSE
     const bool accepted = slots > 0 && slots <= DMX_UNIVERSE_SIZE;
 #else
     const bool accepted = slots == DMX_UNIVERSE_SIZE;
 #endif
+    if (!accepted) return;
+
     uint8_t* completed = dmxInput.dmxData();
-    if (accepted && completed != nullptr && completed[0] == 0) {
-        memset(g_universe, 0, sizeof(g_universe));
-        memcpy(g_universe, completed + 1, slots);
+    if (completed == nullptr || completed[0] != 0) return;
+
+    for (uint16_t index = 0; index < DMX_UNIVERSE_SIZE; index++) {
+        inputFrameSnapshot[index] = index < slots ? completed[index + 1] : 0;
+    }
+    inputFramePending = true;
+    if (inputFramesReceived < 0xFFFFFFFFUL) inputFramesReceived++;
+}
+
+static void copyCompletedInput(void) {
+    /* The callback owns the library-buffer read. Only transfer the completed
+     * private snapshot here, with interrupts masked so the callback cannot
+     * overwrite it during the copy. The DMX UART remains continuously active. */
+    noInterrupts();
+    if (inputFramePending) {
+        for (uint16_t index = 0; index < DMX_UNIVERSE_SIZE; index++) {
+            g_universe[index] = inputFrameSnapshot[index];
+        }
+        inputFramePending = false;
         haveUniverse = true;
     }
-    dmxInput.startInput();
+    interrupts();
 }
 
 static void submitFragment(uint8_t fragmentIndex) {
