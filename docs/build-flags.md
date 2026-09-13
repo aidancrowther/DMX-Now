@@ -80,42 +80,34 @@ packets, and waits for its first complete physical universe before transmitting.
 
 The helper is compile-only unless `-f` is supplied. `--menuconfig` is a small
 interactive Bash configuration menu covering channel, universe, wireless rate,
-TX drain timeout, TX overhead, and strict/partial-universe mode; it defaults to
-strict mode when the partial question is left blank. Command-line flags remain
-preferred for repeatable builds. Relevant definitions are
+TX drain timeout, and TX overhead. Partial-universe acceptance is now the only
+retransmitter mode. Command-line flags remain preferred for repeatable builds.
+Relevant definitions are
 `RETRANSMITTER_ESPNOW_CHANNEL`, `RETRANSMITTER_UNIVERSE_ID`,
 `RETRANSMITTER_WIRELESS_REFRESH_HZ`, `RETRANSMITTER_TX_DRAIN_TIMEOUT_MS`,
-`RETRANSMITTER_TX_OVERHEAD_MS`, and `RETRANSMITTER_ACCEPT_PARTIAL_UNIVERSE`.
-The helper always passes this last definition explicitly as `0` or `1`, which
-prevents a cached partial build from being reused for a strict build.
+and `RETRANSMITTER_TX_OVERHEAD_MS`.
 It also invokes Arduino CLI with `--clean` so each flashed image is rebuilt from
 the requested compile options rather than relying on a shared sketch cache.
-Strict and partial builds are exported to separate `retransmitter/build/strict`
-and `retransmitter/build/partial` directories. The helper prints the selected
-mode, binary path, and SHA-256 before flashing.
+The partial build is exported to `retransmitter/build/partial`. The helper
+prints the selected mode, binary path, and SHA-256 before flashing.
 
 The generic `--define DEFINE` option remains available for test-only or future
 compile definitions that are not part of the retransmitter's normal menu.
 
-By default, the re-transmitter requires a complete 512-channel physical DMX
-frame. The opt-in `RETRANSMITTER_ACCEPT_PARTIAL_UNIVERSE=1` build accepts a
-valid shorter DMX frame and zero-fills channels after the received slot count
-through channel 512. The helper shortcut is:
+The re-transmitter accepts valid physical DMX frames from the pinned library's
+minimum callback threshold through 512 slots and zero-fills channels after the
+received slot count through channel 512. The helper is:
 
 ```bash
-./helpers/flash_retransmitter.sh --accept-partial
+./helpers/flash_retransmitter.sh
 ```
 
-This flag does not accept malformed frames or nonzero start codes.
+Malformed frames and nonzero start codes remain rejected by the input library.
 
-Partial support is deliberately opt-in rather than always enabled. The added
-processing is negligible because the retransmitter already maintains and clears
-a 512-channel destination buffer. The operational risk is different: a
-truncated but otherwise valid physical DMX frame becomes an accepted short
-universe and zeroes its tail. Strict mode instead preserves the last complete
-universe, which is safer for accidental source interruptions. Partial support
-also depends on the pinned `LXESP8266DMX` callback threshold (`DMX_MIN_SLOTS`,
-currently 24); frames below that threshold do not produce a usable callback.
+The processing cost is negligible because the retransmitter already maintains
+and clears a 512-channel destination buffer. Partial operation depends on the
+pinned `LXESP8266DMX` callback threshold (`DMX_MIN_SLOTS`, currently 24); frames
+below that threshold do not produce a usable callback.
 
 ## Fault-injection flags
 

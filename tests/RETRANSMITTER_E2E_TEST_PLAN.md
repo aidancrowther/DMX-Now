@@ -152,7 +152,7 @@ Initial conservative setup:
 
 ```text
 Management transmitter: TRANSMITTER_LOCK_MANAGEMENT_ONLY
-Re-transmitter:         strict 512-slot build
+Re-transmitter:         partial-universe build
 Receiver:               production receiver firmware
 Mega:                   retransmitter_end_to_end sketch
 ```
@@ -189,22 +189,12 @@ Pass criteria:
 - all 512 channels match
 - no mixed-frame values
 
-### 2. Strict partial rejection
+### 2. Partial zero-fill and corruption detection
 
-With the default strict re-transmitter image:
-
-1. Establish a complete 512-slot value of 77.
-2. Generate a shorter physical universe of 99.
-3. Confirm the receiver remains at the previous complete universe.
-4. Restore a complete 512-slot universe of 99.
-5. Confirm recovery with no mixed frame.
-
-### 3. Partial zero-fill
-
-Reflash the re-transmitter with:
+Build and flash the sole supported partial-universe retransmitter image:
 
 ```bash
-./helpers/flash_retransmitter.sh --accept-partial
+./helpers/flash_retransmitter.sh -f --port <retransmitter-programmer>
 ```
 
 Test practical lengths supported by the pinned input library, including 25,
@@ -214,50 +204,50 @@ are zero and do not retain values from a previous longer frame.
 The pinned `LXESP8266DMX` library has a minimum callback threshold, so very
 short frames below that threshold are not expected to produce callbacks.
 
-The `--accept-partial` build remains opt-in. It accepts callback-complete DMX
-frames from the library's minimum slot threshold through 511 slots, copies the
-completed frame, and zero-fills the remaining channels. Strict builds reject
-those frames and retain the last accepted complete universe. This is not a
-meaningful CPU/RAM optimization: the destination buffer already exists and is
-cleared before copying. The reason strict mode remains the default is safety:
-an accidentally truncated physical frame is indistinguishable from an
-intentional short universe once partial mode is enabled.
-
-The retransmitter must be rebuilt and flashed whenever this flag changes; it is
-not a runtime setting. Partial-mode tests must verify that no tail channel
-retains data from the previous full universe.
+Partial mode accepts callback-complete DMX frames from the library's minimum
+slot threshold through 512 slots, copies the completed frame, and zero-fills
+the remaining channels. Tests must verify that no tail channel retains data
+from a previous longer frame.
 
 The retransmitter callback handoff must be treated as a synchronized operation:
 the pinned `LXESP8266DMX` library copies every callback-complete frame into a
 shared completed buffer before calling the application callback. The
-retransmitter therefore records every valid callback slot count and applies
-strict/partial acceptance only while the input interrupt is quiesced. This
-prevents a rejected short frame from being paired with a stale 512-slot notice.
+retransmitter snapshots each callback-complete frame into private storage and
+zero-fills its unused tail before the foreground handoff. This prevents a
+short frame from being paired with stale data from a previous longer frame.
 
-The live runner selects the source length with `--pattern short --slots N`.
-Pass `--accept-partial` only when the retransmitter was built with
-`--accept-partial`; without it, the runner requires that no exact short,
-zero-filled universe is promoted. Representative commands are:
+The live runner selects the source length with `--pattern short --slots N` or
+the frame-unique changing pattern with `--pattern dynamic-short --slots N`.
+Representative commands are:
 
 ```bash
-# Strict image: short frames must not be promoted.
+# Fixed partial image: channels 1..N must match and N+1..512 must be zero.
 python3 wireless_dmx_daemon/tests/run_retransmitter_acceptance.py \
   --tx-port /dev/ttyUSB0 --mega-port /dev/ttyUSB1 --receiver-port /dev/ttyUSB2 \
   --pattern short --slots 236 --value 99 --seconds 20
 
-# Partial image: channels 1..N must match and N+1..512 must be zero.
+# Frame-unique partial image: detects torn/mixed universes and tail retention.
 python3 wireless_dmx_daemon/tests/run_retransmitter_acceptance.py \
   --tx-port /dev/ttyUSB0 --mega-port /dev/ttyUSB1 --receiver-port /dev/ttyUSB2 \
-  --pattern short --slots 236 --value 99 --accept-partial --seconds 20
+  --pattern dynamic-short --slots 236 --value 99 --change-ms 100 --seconds 20 \
+  --expected-rate-hz 20 --rate-tolerance-hz 2
 ```
 
-### 4. Input interruption and recovery
+The production-rate gate requires the measured diagnostic promotion rate to be
+at least 18 Hz for a 20 Hz run. The runner also reports sequence gaps and the
+maximum/p95 promotion gaps separately, so packet loss is not hidden by an
+average rate. Repeat the frame-unique test at the fragment boundaries 25, 235,
+236, 237, 255, 256, 257, 471, 472, 473, 511, and 512 slots. A passing run has
+zero invalid/torn records, zero nonzero-tail violations, zero sequence
+backtracks, zero CRC errors, and no unexpected source MACs.
+
+### 3. Input interruption and recovery
 
 Stop and restart the Mega DMX generator, then reset the re-transmitter. Confirm
 the receiver holds the last complete universe during source loss and accepts a
 new complete universe after recovery.
 
-### 5. Management-only coexistence
+### 4. Management-only coexistence
 
 Run the daemon in management-only mode against `/dev/ttyUSB0`. Confirm:
 

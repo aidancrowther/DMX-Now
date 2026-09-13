@@ -23,7 +23,8 @@
 #define DMX_SOURCE_BREAK_US 100UL
 #define DMX_SOURCE_MAB_US 12UL
 
-enum GeneratorPattern { GENERATOR_CONST, GENERATOR_RAMP, GENERATOR_SHORT, GENERATOR_DYNAMIC };
+enum GeneratorPattern { GENERATOR_CONST, GENERATOR_RAMP, GENERATOR_SHORT,
+                        GENERATOR_DYNAMIC, GENERATOR_DYNAMIC_SHORT };
 enum RecordState { RECORD_IDLE, RECORD_SETTLE, RECORD_MEASURE };
 
 static GeneratorPattern generatorPattern = GENERATOR_CONST;
@@ -104,8 +105,15 @@ static void setExpected(void) {
          * place can race the UART ISR and create a torn physical source frame;
          * the fixed body keeps this harness from manufacturing invalid input
          * while still exercising dynamic retransmission data. */
-        else if (generatorPattern == GENERATOR_DYNAMIC) expected[channel] = channel == 1 ? dynamicEpoch : (uint8_t)(generatorBase + channel - 2);
-        else if (generatorPattern == GENERATOR_SHORT && channel > generatorSlots) expected[channel] = 0;
+        else if (generatorPattern == GENERATOR_DYNAMIC ||
+                 generatorPattern == GENERATOR_DYNAMIC_SHORT) {
+            expected[channel] = channel == 1
+                ? dynamicEpoch
+                : (uint8_t)(generatorBase + dynamicEpoch * 29U +
+                            channel * 37U + (channel >> 3) * 11U);
+            if (generatorPattern == GENERATOR_DYNAMIC_SHORT && channel > generatorSlots)
+                expected[channel] = 0;
+        } else if (generatorPattern == GENERATOR_SHORT && channel > generatorSlots) expected[channel] = 0;
         else expected[channel] = (uint8_t)(generatorBase + channel - 1);
     }
 }
@@ -116,10 +124,11 @@ static void applyGenerator(void) {
 }
 
 static void updateDynamicGenerator(unsigned long now) {
-    if (generatorPattern != GENERATOR_DYNAMIC || now < nextDynamicAt) return;
+    if ((generatorPattern != GENERATOR_DYNAMIC &&
+         generatorPattern != GENERATOR_DYNAMIC_SHORT) || now < nextDynamicAt) return;
     dynamicEpoch++;
     setExpected();
-    sourceFrame[1] = expected[1];
+    memcpy(sourceFrame, expected, sizeof(sourceFrame));
     nextDynamicAt = now + dynamicIntervalMs;
 }
 
@@ -197,6 +206,11 @@ static void processCommand(char* command, unsigned long now) {
                a <= 255 && b >= 100 && b <= 60000) {
         generatorPattern = GENERATOR_DYNAMIC; generatorSlots = DMX_SLOTS; generatorBase = (uint8_t)a;
         dynamicIntervalMs = b; dynamicEpoch = 0; applyGenerator();
+        nextDynamicAt = now + dynamicIntervalMs; Serial.println("ACK GENERATE");
+    } else if (sscanf(command, "GENERATE DYNAMIC_SHORT %lu %lu %lu", &a, &b, &dynamicIntervalMs) == 3 &&
+               a >= 1 && a <= DMX_SLOTS && b <= 255 && dynamicIntervalMs >= 100 && dynamicIntervalMs <= 60000) {
+        generatorPattern = GENERATOR_DYNAMIC_SHORT; generatorSlots = (uint16_t)a;
+        generatorBase = (uint8_t)b; dynamicEpoch = 0; applyGenerator();
         nextDynamicAt = now + dynamicIntervalMs; Serial.println("ACK GENERATE");
     } else if (sscanf(command, "GENERATE SHORT %lu %lu", &a, &b) == 2 &&
                a >= 1 && a <= DMX_SLOTS && b <= 255) {

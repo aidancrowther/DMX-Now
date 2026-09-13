@@ -24,6 +24,7 @@ sys.path.insert(0, str(ROOT))
 from wireless_dmx.app import WirelessDmxService
 from wireless_dmx.models import DaemonConfig, DaemonMode
 from wireless_dmx.receiver_diagnostic import ReceiverDiagnosticParser
+from wireless_dmx.retransmitter_patterns import dynamic_mismatches, dynamic_universe
 
 
 def wait_line(port: serial.Serial, prefix: str, timeout: float) -> str:
@@ -52,23 +53,28 @@ def main() -> int:
     parser.add_argument("--receiver-port", required=True, help="diagnostic receiver USB serial port")
     parser.add_argument("--receiver-baud", type=int, default=460800)
     parser.add_argument("--seconds", type=int, default=30)
-    parser.add_argument("--pattern", choices=("const", "ramp", "dynamic", "short"), default="dynamic")
+    parser.add_argument("--pattern", choices=("const", "ramp", "dynamic", "dynamic-short", "short"), default="dynamic")
     parser.add_argument("--value", type=int, default=77)
     parser.add_argument("--slots", type=int, default=512,
                         help="physical DMX slot count for short pattern")
-    parser.add_argument("--accept-partial", action="store_true",
-                        help="expect the retransmitter partial-universe build")
     parser.add_argument("--change-ms", type=int, default=1000,
                         help="dynamic generator epoch interval in milliseconds")
+    parser.add_argument("--expected-rate-hz", type=float, default=0.0,
+                        help="require this minimum diagnostic promotion rate (0 disables the gate)")
+    parser.add_argument("--rate-tolerance-hz", type=float, default=2.0,
+                        help="allowed rate below expected-rate-hz")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if (not 0 <= args.value <= 255 or args.seconds <= 0 or
             args.change_ms < 100 or args.change_ms > 60000 or
-            not 1 <= args.slots <= 512):
-        parser.error("value 0..255, positive seconds, change-ms 100..60000, slots 1..512")
+            not 1 <= args.slots <= 512 or args.expected_rate_hz < 0 or
+            args.rate_tolerance_hz < 0):
+        parser.error("value 0..255, positive seconds, change-ms 100..60000, slots 1..512, nonnegative rate settings")
 
     frame_command = (f"GENERATE DYNAMIC {args.value} {args.change_ms}"
                      if args.pattern == "dynamic" else
+                     f"GENERATE DYNAMIC_SHORT {args.slots} {args.value} {args.change_ms}"
+                     if args.pattern == "dynamic-short" else
                      f"GENERATE SHORT {args.slots} {args.value}"
                      if args.pattern == "short" else
                      f"GENERATE {'CONST' if args.pattern == 'const' else 'RAMP'} {args.value}")
@@ -80,6 +86,7 @@ def main() -> int:
     receiver = serial.Serial(args.receiver_port, args.receiver_baud, timeout=0.05)
     diagnostic = ReceiverDiagnosticParser()
     records = []
+    record_times = []
     baseline_records = []
     service = WirelessDmxService(DaemonConfig(
         transmitter_device=args.tx_port,
@@ -96,8 +103,8 @@ def main() -> int:
         wait_line(mega, "READY RETRANSMITTER_E2E_MEGA", 10)
         if args.pattern == "short":
             # Establish a known full-universe baseline before changing the
-            # physical source length. This is required to distinguish strict
-            # retention from an absent diagnostic record.
+            # physical source length. This proves the later zero-filled tail
+            # does not retain data from a previous longer universe.
             command(mega, f"GENERATE CONST {args.value}", "ACK GENERATE")
         else:
             command(mega, frame_command, "ACK GENERATE")
@@ -156,13 +163,14 @@ def main() -> int:
                         # Establish the content window on the first valid
                         # dynamic promotion. This avoids treating a final
                         # pre-source/boot universe as a failure at the settle
-                        # boundary, while every later promotion is strict.
+                        # boundary, while every later promotion is validated.
                         if not content_ready and args.pattern == "dynamic" and valid:
                             content_ready = True
                             diagnostic_bad_crc_at_content_ready = diagnostic.records_bad_crc
                             diagnostic_unknown_at_content_ready = diagnostic.records_unknown_type
                         if content_ready or args.pattern != "dynamic":
                             records.append(received)
+                            record_times.append(now)
             if mega.in_waiting:
                 line = mega.readline().decode(errors="replace").strip()
                 if line:
@@ -206,6 +214,38 @@ def main() -> int:
         summary["diagnostic_source_macs"] = dict(Counter(
             record.source_mac.hex(":") for record in records
             if record.record_type == 1))
+        normal_records = [record for record in records if record.record_type == 1]
+        sequences = [record.sequence for record in normal_records]
+        sequence_backtracks = sum(
+            1 for previous, current in zip(sequences, sequences[1:])
+            if current <= previous)
+        sequence_gaps = sum(
+            max(0, current - previous - 1)
+            for previous, current in zip(sequences, sequences[1:])
+            if current > previous)
+        summary["diagnostic_sequence_first"] = sequences[0] if sequences else None
+        summary["diagnostic_sequence_last"] = sequences[-1] if sequences else None
+        summary["diagnostic_sequence_backtracks"] = sequence_backtracks
+        summary["diagnostic_sequence_gaps"] = sequence_gaps
+        if len(record_times) >= 2:
+            gaps_ms = [(later - earlier) * 1000
+                       for earlier, later in zip(record_times, record_times[1:])]
+            summary["diagnostic_promotion_rate_hz"] = round(
+                (len(record_times) - 1) / (record_times[-1] - record_times[0]), 3)
+            summary["diagnostic_promotion_gap_ms_max"] = round(max(gaps_ms), 1)
+            summary["diagnostic_promotion_gap_ms_p95"] = round(
+                sorted(gaps_ms)[int(0.95 * (len(gaps_ms) - 1))], 1)
+        else:
+            summary["diagnostic_promotion_rate_hz"] = 0.0
+            summary["diagnostic_promotion_gap_ms_max"] = None
+            summary["diagnostic_promotion_gap_ms_p95"] = None
+        rate_floor = max(0.0, args.expected_rate_hz - args.rate_tolerance_hz)
+        summary["expected_rate_hz"] = args.expected_rate_hz
+        summary["rate_tolerance_hz"] = args.rate_tolerance_hz
+        summary["minimum_required_rate_hz"] = rate_floor
+        summary["promotion_rate_expectation_met"] = (
+            args.expected_rate_hz <= 0 or
+            summary["diagnostic_promotion_rate_hz"] >= rate_floor)
         summary["diagnostic_bad_crc_after_content_ready"] = max(
             0, diagnostic.records_bad_crc - diagnostic_bad_crc_at_content_ready)
         summary["diagnostic_unknown_after_content_ready"] = max(
@@ -215,28 +255,25 @@ def main() -> int:
                     bytes((args.value + index) & 0xFF for index in range(512)))
         if args.pattern == "short":
             expected = bytes((args.value + index) & 0xFF for index in range(args.slots)) + bytes(512 - args.slots)
-        if args.pattern == "dynamic":
+        if args.pattern in ("dynamic", "dynamic-short"):
             summary["diagnostic_matching_records"] = sum(
                 record.record_type == 1 and
-                all(value == (record.universe[0] if index == 0 else
-                              (args.value + index - 1) & 0xFF)
-                    for index, value in enumerate(record.universe))
+                not dynamic_mismatches(record.universe, args.value,
+                                       args.slots if args.pattern == "dynamic-short" else 512)
                 for record in records)
         else:
             summary["diagnostic_matching_records"] = sum(
                 record.record_type == 1 and record.universe == expected for record in records)
-        if args.pattern == "dynamic":
+        if args.pattern in ("dynamic", "dynamic-short"):
             invalid_dynamic = []
             invalid_examples = []
             for record in records:
                 if record.record_type != 1:
                     continue
+                mismatches = dynamic_mismatches(
+                    record.universe, args.value,
+                    args.slots if args.pattern == "dynamic-short" else 512)
                 epoch = record.universe[0]
-                mismatches = [(index + 1, value, epoch if index == 0 else
-                               (args.value + index - 1) & 0xFF)
-                              for index, value in enumerate(record.universe)
-                              if value != (epoch if index == 0 else
-                                           (args.value + index - 1) & 0xFF)]
                 if mismatches:
                     invalid_dynamic.append(record.sequence)
                     if len(invalid_examples) < 10:
@@ -256,11 +293,9 @@ def main() -> int:
             summary["diagnostic_normal_records"] = sum(record.record_type == 1 for record in records)
             summary["diagnostic_short_promotions"] = short_promotions
             summary["diagnostic_invalid_records"] = []
-            # A strict image must retain the prior complete universe rather
-            # than promote the short source frame. A partial image must produce
-            # the exact requested prefix and a zero-filled tail.
-            summary["short_expectation_met"] = (
-                short_promotions > 0 if args.accept_partial else short_promotions == 0)
+            # Partial mode must produce the exact requested prefix and a
+            # zero-filled tail.
+            summary["short_expectation_met"] = short_promotions > 0
             summary["baseline_normal_records"] = sum(record.record_type == 1
                                                       for record in baseline_records)
             summary["baseline_complete_matches"] = sum(
@@ -286,6 +321,8 @@ def main() -> int:
                               summary["diagnostic_bad_crc_after_content_ready"] == 0 and
                               summary["diagnostic_unknown_after_content_ready"] == 0 and
                               not summary["diagnostic_invalid_records"] and
+                              summary["diagnostic_sequence_backtracks"] == 0 and
+                              summary["promotion_rate_expectation_met"] and
                               service.snapshot().transmitter_connected and
                               summary["telemetry_progressed"] and
                               not summary["telemetry_bad_samples"] and

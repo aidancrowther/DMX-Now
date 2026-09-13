@@ -17,6 +17,7 @@ from wireless_dmx.transmitter.management import (ACK_HEADER, ACK_RECORD, Managem
 from wireless_dmx.transmitter.management import (TransmitterModeResponse, get_transmitter_mode_request,
                                                  set_transmitter_mode_request)
 from wireless_dmx.receiver_diagnostic import DIAGNOSTIC_MAGIC, ReceiverDiagnosticParser
+from wireless_dmx.retransmitter_patterns import dynamic_mismatches, dynamic_universe
 
 
 def make_part(sequence, index, count, records):
@@ -38,6 +39,19 @@ def make_part(sequence, index, count, records):
 
 
 class ManagementTests(unittest.TestCase):
+    def test_dynamic_partial_pattern_is_coherent_and_zero_filled(self):
+        universe = dynamic_universe(91, 236, 17)
+        self.assertEqual(dynamic_mismatches(universe, 91, 236), [])
+        self.assertEqual(universe[236:], bytes(276))
+
+    def test_dynamic_pattern_rejects_torn_fragment_and_tail_corruption(self):
+        universe = bytearray(dynamic_universe(91, 237, 17))
+        universe[236] ^= 0x01
+        self.assertTrue(dynamic_mismatches(bytes(universe), 91, 237))
+        universe = bytearray(dynamic_universe(91, 237, 17))
+        universe[400] = 1
+        self.assertTrue(dynamic_mismatches(bytes(universe), 91, 237))
+
     def test_receiver_diagnostic_parser_round_trip_and_resynchronizes(self):
         universe = bytes([77]) * 512
         source_mac = bytes.fromhex("18fe34daff38")

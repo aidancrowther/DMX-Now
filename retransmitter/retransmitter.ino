@@ -23,12 +23,6 @@
 #ifndef RETRANSMITTER_TX_OVERHEAD_MS
 #define RETRANSMITTER_TX_OVERHEAD_MS 27UL
 #endif
-/* Strict 512-slot input is the production default. Define this flag to accept
- * shorter valid DMX frames and zero-fill the remaining channels. */
-#ifndef RETRANSMITTER_ACCEPT_PARTIAL_UNIVERSE
-#define RETRANSMITTER_ACCEPT_PARTIAL_UNIVERSE 0
-#endif
-
 #if RETRANSMITTER_WIRELESS_REFRESH_HZ == 0
 #error RETRANSMITTER_WIRELESS_REFRESH_HZ must be positive
 #endif
@@ -54,16 +48,9 @@ static constexpr unsigned long TX_INTERVAL_MS =
 
 ICACHE_RAM_ATTR static void inputFrameReceived(int slots) {
     /* LXESP8266DMX has already copied this completed frame into dmxData() when
-     * it invokes the callback. Take a private snapshot now: the library buffer
-     * is reused by the receive ISR and is not double-buffered. In strict mode,
-     * reject short frames before publishing anything, so they cannot replace a
-     * previously accepted complete universe. */
-#if RETRANSMITTER_ACCEPT_PARTIAL_UNIVERSE
-    const bool accepted = slots > 0 && slots <= DMX_UNIVERSE_SIZE;
-#else
-    const bool accepted = slots == DMX_UNIVERSE_SIZE;
-#endif
-    if (!accepted) return;
+     * it invokes the callback. Partial input is the sole supported mode; take
+     * a private snapshot now and clear the unused tail before publication. */
+    if (slots <= 0 || slots > DMX_UNIVERSE_SIZE) return;
 
     uint8_t* completed = dmxInput.dmxData();
     if (completed == nullptr || completed[0] != 0) return;
