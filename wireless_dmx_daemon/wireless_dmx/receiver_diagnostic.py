@@ -39,10 +39,14 @@ class ReceiverDiagnosticParser:
             if len(self._buffer) < DIAGNOSTIC_RECORD_SIZE:
                 return records
             frame = bytes(self._buffer[:DIAGNOSTIC_RECORD_SIZE])
-            del self._buffer[:DIAGNOSTIC_RECORD_SIZE]
             if crc16_ccitt(frame[:-2]) != int.from_bytes(frame[-2:], "little"):
                 self.records_bad_crc += 1
+                # The apparent magic may have occurred inside a corrupted
+                # record. Discard only that byte and search again, preserving
+                # any later real record boundary in the candidate window.
+                del self._buffer[:1]
                 continue
+            del self._buffer[:DIAGNOSTIC_RECORD_SIZE]
             record_type = frame[4]
             if record_type not in (DIAGNOSTIC_NORMAL, DIAGNOSTIC_PRIORITY):
                 self.records_unknown_type += 1

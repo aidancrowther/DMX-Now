@@ -44,6 +44,7 @@ Options:
   -f                         Flash the compiled image.
   --port PORT                ESP8266 programming port (default: /dev/ttyUSB0).
   --diagnostic               Disable physical DMX output and emit RDX1 records on UART0.
+  --silent-capture           Use UART-queryable in-device validation instead of RDX1 records.
   --diagnostic-baud BAUD     Diagnostic UART baud (default: 115200; 460800 recommended).
   --define DEFINE            Add an extra compiler definition.
   -h, --help                 Show this help.
@@ -90,6 +91,11 @@ EOF
 
         --diagnostic)
             EXTRA_FLAGS+=("-DRECEIVER_DIAGNOSTIC_SERIAL=1")
+            shift
+            ;;
+
+        --silent-capture)
+            EXTRA_FLAGS+=("-DRECEIVER_DIAGNOSTIC_SERIAL=1" "-DRECEIVER_DIAGNOSTIC_SILENT_CAPTURE=1")
             shift
             ;;
 

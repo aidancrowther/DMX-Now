@@ -19,9 +19,11 @@
 #define DMX_SLOTS 512U
 #define COMMAND_BUFFER_SIZE 80U
 #define MONITOR_UART_BAUD 250000UL
-#define DMX_SOURCE_BAUD 250000UL
-#define DMX_SOURCE_BREAK_US 100UL
-#define DMX_SOURCE_MAB_US 12UL
+#define SOURCE_UBRR_250K 3U
+#define SOURCE_UBRR_100K 9U
+#define SOURCE_FRAME_PERIOD_US 22700UL /* approximately 44.05 Hz */
+
+enum SourceTxState { SOURCE_TX_IDLE, SOURCE_TX_BREAK, SOURCE_TX_DATA, SOURCE_TX_DONE };
 
 enum GeneratorPattern { GENERATOR_CONST, GENERATOR_RAMP, GENERATOR_SHORT,
                         GENERATOR_DYNAMIC, GENERATOR_DYNAMIC_SHORT };
@@ -30,10 +32,13 @@ enum RecordState { RECORD_IDLE, RECORD_SETTLE, RECORD_MEASURE };
 static GeneratorPattern generatorPattern = GENERATOR_CONST;
 static uint16_t generatorSlots = DMX_SLOTS;
 static uint8_t generatorBase = 0;
-static unsigned long dynamicIntervalMs = 1000UL;
 static uint8_t dynamicEpoch = 0;
-static unsigned long nextDynamicAt = 0;
-static unsigned long nextSourceFrameAt = 0;
+static volatile SourceTxState sourceTxState = SOURCE_TX_IDLE;
+static volatile uint16_t sourceTxChannel = 0;
+static uint32_t nextSourceFrameAtUs = 0;
+static unsigned long sourceFramesSent = 0;
+static unsigned long firstSourceFrameAtUs = 0;
+static unsigned long lastSourceFrameAtUs = 0;
 static bool sourceEnabled = true;
 static RecordState recordState = RECORD_IDLE;
 static unsigned long settleUntil = 0;
@@ -123,29 +128,67 @@ static void applyGenerator(void) {
     memcpy(sourceFrame, expected, sizeof(sourceFrame));
 }
 
-static void updateDynamicGenerator(unsigned long now) {
-    if ((generatorPattern != GENERATOR_DYNAMIC &&
-         generatorPattern != GENERATOR_DYNAMIC_SHORT) || now < nextDynamicAt) return;
+static void advanceDynamicSourceFrame(void) {
+    if (generatorPattern != GENERATOR_DYNAMIC &&
+        generatorPattern != GENERATOR_DYNAMIC_SHORT) return;
     dynamicEpoch++;
     setExpected();
     memcpy(sourceFrame, expected, sizeof(sourceFrame));
-    nextDynamicAt = now + dynamicIntervalMs;
 }
 
-static void sendSourceDmx(void) {
-    /* Send a complete, explicit 513-byte DMX frame so the source oracle covers
-     * channels 1..512 without relying on DMXSerial's internal slot handling. */
-    Serial1.flush();
-    Serial1.end();
-    Serial1.begin(88000UL, SERIAL_8N1);
-    Serial1.write(0);
-    Serial1.flush();
-    delayMicroseconds(DMX_SOURCE_BREAK_US);
-    Serial1.end();
-    Serial1.begin(DMX_SOURCE_BAUD, SERIAL_8N2);
-    Serial1.write(sourceFrame, generatorSlots + 1U);
-    Serial1.flush();
-    delayMicroseconds(DMX_SOURCE_MAB_US);
+static void stopSourceDmx(void) {
+    UCSR1B = 0;
+    sourceTxState = SOURCE_TX_IDLE;
+}
+
+static void startSourceDmx(void) {
+    /* Raw USART1 ownership avoids the Arduino Serial1 ISR. A 100-kbaud 8N1
+     * zero byte provides the BREAK, then the TX-complete ISR switches to
+     * 250-kbaud 8N2 for the start code and channel data. */
+    advanceDynamicSourceFrame();
+    UBRR1H = (uint8_t)(SOURCE_UBRR_100K >> 8);
+    UBRR1L = (uint8_t)SOURCE_UBRR_100K;
+    UCSR1A = 0;
+    UCSR1C = (1 << UCSZ11) | (1 << UCSZ10); /* 8N1 */
+    UCSR1B = (1 << TXEN1) | (1 << TXCIE1);
+    UCSR1A |= (1 << TXC1);
+    UDR1 = 0;
+    sourceTxState = SOURCE_TX_BREAK;
+}
+
+ISR(USART1_TX_vect) {
+    if (sourceTxState == SOURCE_TX_BREAK) {
+        /* DMX requires at least 12 us of mark-after-break before the start
+         * code. The delay is bounded to this UART interrupt only. */
+        delayMicroseconds(12UL);
+        UBRR1H = (uint8_t)(SOURCE_UBRR_250K >> 8);
+        UBRR1L = (uint8_t)SOURCE_UBRR_250K;
+        UCSR1C = (1 << UCSZ11) | (1 << UCSZ10) | (1 << USBS1); /* 8N2 */
+        UCSR1B = (1 << TXEN1) | (1 << UDRIE1);
+        UDR1 = 0;
+        sourceTxChannel = 0;
+        sourceTxState = SOURCE_TX_DATA;
+    } else if (sourceTxState == SOURCE_TX_DONE) {
+        sourceTxState = SOURCE_TX_IDLE;
+        sourceFramesSent++;
+        lastSourceFrameAtUs = micros();
+        if (!firstSourceFrameAtUs) firstSourceFrameAtUs = lastSourceFrameAtUs;
+    }
+}
+
+ISR(USART1_UDRE_vect) {
+    if (sourceTxState != SOURCE_TX_DATA) {
+        UCSR1B &= ~(1 << UDRIE1);
+        return;
+    }
+    if (sourceTxChannel < generatorSlots) {
+        UDR1 = sourceFrame[++sourceTxChannel];
+        if (sourceTxChannel >= generatorSlots) {
+            UCSR1B &= ~(1 << UDRIE1);
+            UCSR1B |= (1 << TXCIE1);
+            sourceTxState = SOURCE_TX_DONE;
+        }
+    }
 }
 
 static void resetMetrics(void) {
@@ -153,6 +196,9 @@ static void resetMetrics(void) {
     maxGapMs = 0;
     lastCheckedAt = 0;
     haveCheckedFrame = false;
+    sourceFramesSent = 0;
+    firstSourceFrameAtUs = 0;
+    lastSourceFrameAtUs = 0;
 }
 
 static bool matchesExpected(uint16_t slots) {
@@ -190,12 +236,20 @@ static void emitResult(unsigned long now) {
     Serial.print(" partial="); Serial.print(partialFrames);
     Serial.print(" max_gap="); Serial.print(maxGapMs);
     Serial.print(" no_data="); Serial.print(now - lastMonitorDataAt);
-    Serial.println("ms");
+    Serial.print("ms source_frames="); Serial.print(sourceFramesSent);
+    Serial.print(" source_rate_hz=");
+    if (sourceFramesSent > 1 && lastSourceFrameAtUs > firstSourceFrameAtUs) {
+        Serial.print((sourceFramesSent - 1) * 1000000.0 /
+                     (lastSourceFrameAtUs - firstSourceFrameAtUs), 2);
+    } else {
+        Serial.print(0.0, 2);
+    }
+    Serial.println();
     recordState = RECORD_IDLE;
 }
 
 static void processCommand(char* command, unsigned long now) {
-    unsigned long a = 0, b = 0;
+    unsigned long a = 0, b = 0, c = 0;
     if (sscanf(command, "GENERATE CONST %lu", &a) == 1 && a <= 255) {
         generatorPattern = GENERATOR_CONST; generatorSlots = DMX_SLOTS; generatorBase = (uint8_t)a;
         applyGenerator(); Serial.println("ACK GENERATE");
@@ -205,21 +259,22 @@ static void processCommand(char* command, unsigned long now) {
     } else if (sscanf(command, "GENERATE DYNAMIC %lu %lu", &a, &b) == 2 &&
                a <= 255 && b >= 100 && b <= 60000) {
         generatorPattern = GENERATOR_DYNAMIC; generatorSlots = DMX_SLOTS; generatorBase = (uint8_t)a;
-        dynamicIntervalMs = b; dynamicEpoch = 0; applyGenerator();
-        nextDynamicAt = now + dynamicIntervalMs; Serial.println("ACK GENERATE");
-    } else if (sscanf(command, "GENERATE DYNAMIC_SHORT %lu %lu %lu", &a, &b, &dynamicIntervalMs) == 3 &&
-               a >= 1 && a <= DMX_SLOTS && b <= 255 && dynamicIntervalMs >= 100 && dynamicIntervalMs <= 60000) {
+        dynamicEpoch = 0; applyGenerator(); Serial.println("ACK GENERATE");
+    } else if (sscanf(command, "GENERATE DYNAMIC_SHORT %lu %lu %lu", &a, &b, &c) == 3 &&
+               a >= 1 && a <= DMX_SLOTS && b <= 255 && c >= 100 && c <= 60000) {
         generatorPattern = GENERATOR_DYNAMIC_SHORT; generatorSlots = (uint16_t)a;
-        generatorBase = (uint8_t)b; dynamicEpoch = 0; applyGenerator();
-        nextDynamicAt = now + dynamicIntervalMs; Serial.println("ACK GENERATE");
+        generatorBase = (uint8_t)b;
+        dynamicEpoch = 0; applyGenerator(); Serial.println("ACK GENERATE");
     } else if (sscanf(command, "GENERATE SHORT %lu %lu", &a, &b) == 2 &&
                a >= 1 && a <= DMX_SLOTS && b <= 255) {
         generatorPattern = GENERATOR_SHORT; generatorSlots = (uint16_t)a; generatorBase = (uint8_t)b;
         applyGenerator(); Serial.println("ACK GENERATE");
     } else if (!strcmp(command, "STOP")) {
-        recordState = RECORD_IDLE; sourceEnabled = false; Serial1.end(); Serial.println("ACK STOP");
+        recordState = RECORD_IDLE; sourceEnabled = false; stopSourceDmx(); Serial.println("ACK STOP");
     } else if (sscanf(command, "START %lu %lu", &a, &b) == 2 && b > 0) {
-        resetMetrics(); sourceEnabled = true; settleUntil = now + a * 1000UL; measureUntil = settleUntil + b * 1000UL;
+        resetMetrics(); sourceEnabled = true; stopSourceDmx();
+        nextSourceFrameAtUs = micros();
+        settleUntil = now + a * 1000UL; measureUntil = settleUntil + b * 1000UL;
         recordState = a ? RECORD_SETTLE : RECORD_MEASURE;
         if (!a) measureStart = now;
         Serial.println("ACK START");
@@ -228,7 +283,7 @@ static void processCommand(char* command, unsigned long now) {
         Serial.print(" slots="); Serial.print(generatorSlots);
         Serial.print(" pattern="); Serial.println((int)generatorPattern);
     } else if (!strcmp(command, "ABORT")) {
-        recordState = RECORD_IDLE; resetMetrics(); Serial.println("ACK ABORT");
+        recordState = RECORD_IDLE; sourceEnabled = false; stopSourceDmx(); Serial.println("ACK STOP");
     } else {
         Serial.println("ERR COMMAND");
     }
@@ -251,7 +306,6 @@ static void pollCommands(unsigned long now) {
 
 void setup(void) {
     Serial.begin(TELE_BAUD);
-    Serial1.begin(DMX_SOURCE_BAUD, SERIAL_8N2);
     configureMonitorUart();
     applyGenerator();
     Serial.println("READY RETRANSMITTER_E2E_MEGA");
@@ -260,10 +314,11 @@ void setup(void) {
 void loop(void) {
     const unsigned long now = millis();
     pollCommands(now);
-    updateDynamicGenerator(now);
-    if (sourceEnabled && now >= nextSourceFrameAt) {
-        sendSourceDmx();
-        nextSourceFrameAt = now + 40UL;
+    const uint32_t nowUs = micros();
+    if (sourceEnabled && sourceTxState == SOURCE_TX_IDLE &&
+        (int32_t)(nowUs - nextSourceFrameAtUs) >= 0) {
+        startSourceDmx();
+        nextSourceFrameAtUs += SOURCE_FRAME_PERIOD_US;
     }
     if (recordState == RECORD_SETTLE && now >= settleUntil) {
         recordState = RECORD_MEASURE; measureStart = now; resetMetrics();

@@ -98,6 +98,12 @@ static const unsigned long TRANSMITTER_RESET_RECOVERY_MS = 3000UL;
 #ifndef RECEIVER_DIAGNOSTIC_SERIAL
 #define RECEIVER_DIAGNOSTIC_SERIAL 0
 #endif
+#ifndef RECEIVER_DIAGNOSTIC_SILENT_CAPTURE
+#define RECEIVER_DIAGNOSTIC_SILENT_CAPTURE 0
+#endif
+#if RECEIVER_DIAGNOSTIC_SILENT_CAPTURE && !RECEIVER_DIAGNOSTIC_SERIAL
+#error RECEIVER_DIAGNOSTIC_SILENT_CAPTURE requires RECEIVER_DIAGNOSTIC_SERIAL
+#endif
 #ifndef RECEIVER_DIAGNOSTIC_BAUD
 #define RECEIVER_DIAGNOSTIC_BAUD 115200UL
 #endif
@@ -120,7 +126,7 @@ static const unsigned long TRANSMITTER_RESET_RECOVERY_MS = 3000UL;
 /* Priority delivery can arrive as a three-fragment burst while normal traffic
  * is already in the callback handoff. Leave headroom so a timing variation in
  * loop() cannot discard the targeted priority fragments. */
-static const uint8_t RX_RING_SIZE = 8;
+static const uint8_t RX_RING_SIZE = 16;
 static const uint8_t RX_SLOT_MAX  = ESPNOW_MAX_MESSAGE_LENGTH; /* 255 */
 
 /* --------------------------------------------------------------------------
@@ -322,6 +328,48 @@ static void commitDmxUniverse(const uint8_t* universe) {
 }
 
 #if RECEIVER_DIAGNOSTIC_SERIAL
+static const uint8_t DIAGNOSTIC_TX_QUEUE_SIZE = 8;
+static const uint16_t DIAGNOSTIC_RECORD_SIZE = 4 + 1 + 4 + 6 + DMX_UNIVERSE_SIZE + 2;
+struct DiagnosticTxRecord {
+    uint8_t data[DIAGNOSTIC_RECORD_SIZE];
+    uint16_t length;
+};
+static DiagnosticTxRecord diagnosticTxQueue[DIAGNOSTIC_TX_QUEUE_SIZE];
+static uint8_t diagnosticTxHead = 0;
+static uint8_t diagnosticTxTail = 0;
+static uint8_t diagnosticTxCount = 0;
+static unsigned long diagnosticTxQueued = 0;
+static unsigned long diagnosticTxSent = 0;
+static unsigned long diagnosticTxDrops = 0;
+#if RECEIVER_DIAGNOSTIC_SILENT_CAPTURE
+static bool silentCaptureActive = false;
+static uint32_t silentCaptureStartedMs = 0;
+static uint32_t silentCaptureDurationMs = 0;
+static uint8_t silentExpectedMac[6] = {0};
+static uint8_t silentPatternBase = 0;
+static uint16_t silentPatternSlots = 0;
+static uint32_t silentFirstSequence = 0;
+static uint32_t silentLastSequence = 0;
+static uint32_t silentSequenceGaps = 0;
+static uint32_t silentSequenceBacktracks = 0;
+static uint32_t silentPromotions = 0;
+static uint32_t silentMatchingPromotions = 0;
+static uint32_t silentCorruptPromotions = 0;
+static uint32_t silentSourceMismatches = 0;
+static uint32_t silentLastPromotionMs = 0;
+static uint32_t silentMaxPromotionGapMs = 0;
+static uint16_t silentFirstMismatchChannel = 0;
+static uint8_t silentFirstMismatchActual = 0;
+static uint8_t silentFirstMismatchExpected = 0;
+static bool silentHaveMismatch = false;
+static bool silentValidationReady = false;
+static uint32_t silentReceiverRingOverflows = 0;
+static uint32_t silentDiagnosticTxDrops = 0;
+static bool silentHaveSequence = false;
+static char silentCommandBuffer[96];
+static uint8_t silentCommandLength = 0;
+#endif
+
 static uint16_t diagnosticCrc16(const uint8_t* data, uint16_t length) {
     uint16_t crc = 0xFFFFU;
     for (uint16_t i = 0; i < length; i++) {
@@ -336,7 +384,18 @@ static uint16_t diagnosticCrc16(const uint8_t* data, uint16_t length) {
 static void emitDiagnosticUniverse(uint8_t recordType, uint32_t sequence,
                                     const uint8_t* universe,
                                     const uint8_t* sourceMac) {
-    uint8_t record[4 + 1 + 4 + 6 + DMX_UNIVERSE_SIZE + 2];
+#if RECEIVER_DIAGNOSTIC_SILENT_CAPTURE
+    /* Silent images never emit legacy 529-byte RDX1 records. Keeping UART0
+     * quiet while idle is required so text commands on GPIO3 can be parsed
+     * without binary-record contamination. */
+    return;
+#endif
+    if (diagnosticTxCount >= DIAGNOSTIC_TX_QUEUE_SIZE) {
+        diagnosticTxDrops++;
+        return;
+    }
+    DiagnosticTxRecord& queued = diagnosticTxQueue[diagnosticTxHead];
+    uint8_t* record = queued.data;
     uint16_t offset = 0;
     record[offset++] = RECEIVER_DIAGNOSTIC_MAGIC_0;
     record[offset++] = RECEIVER_DIAGNOSTIC_MAGIC_1;
@@ -352,8 +411,150 @@ static void emitDiagnosticUniverse(uint8_t recordType, uint32_t sequence,
     const uint16_t crc = diagnosticCrc16(record, offset);
     record[offset++] = (uint8_t)crc;
     record[offset++] = (uint8_t)(crc >> 8);
-    Serial.write(record, offset);
+    queued.length = offset;
+    diagnosticTxHead = (uint8_t)((diagnosticTxHead + 1) % DIAGNOSTIC_TX_QUEUE_SIZE);
+    diagnosticTxCount++;
+    diagnosticTxQueued++;
 }
+
+static void drainDiagnosticSerial(void) {
+    while (diagnosticTxCount > 0) {
+        DiagnosticTxRecord& queued = diagnosticTxQueue[diagnosticTxTail];
+        const int available = Serial.availableForWrite();
+        if (available <= 0) return;
+        const uint16_t chunk = (uint16_t)min((int)queued.length, available);
+        const size_t written = Serial.write(queued.data, chunk);
+        if (written == 0) return;
+        if (written < queued.length) {
+            memmove(queued.data, queued.data + written, queued.length - written);
+            queued.length = (uint16_t)(queued.length - written);
+            return;
+        }
+        queued.length = 0;
+        diagnosticTxTail = (uint8_t)((diagnosticTxTail + 1) % DIAGNOSTIC_TX_QUEUE_SIZE);
+        diagnosticTxCount--;
+        diagnosticTxSent++;
+    }
+}
+
+#if RECEIVER_DIAGNOSTIC_SILENT_CAPTURE
+static bool silentPatternMatches(const uint8_t* universe) {
+    if (memcmp(stagingSourceMac, silentExpectedMac, 6) != 0) {
+        silentSourceMismatches++;
+        return false;
+    }
+    const uint8_t epoch = universe[0];
+    for (uint16_t channel = 1; channel <= DMX_UNIVERSE_SIZE; channel++) {
+        uint8_t expected = channel == 1
+            ? epoch
+            : (uint8_t)(silentPatternBase + epoch * 29U +
+                        channel * 37U + (channel >> 3) * 11U);
+        if (channel > silentPatternSlots) expected = 0;
+        if (universe[channel - 1] != expected) {
+            if (!silentHaveMismatch) {
+                silentFirstMismatchChannel = channel;
+                silentFirstMismatchActual = universe[channel - 1];
+                silentFirstMismatchExpected = expected;
+                silentHaveMismatch = true;
+            }
+            return false;
+        }
+    }
+    return true;
+}
+
+static void resetSilentCapture(void) {
+    silentFirstSequence = 0;
+    silentLastSequence = 0;
+    silentSequenceGaps = 0;
+    silentSequenceBacktracks = 0;
+    silentPromotions = 0;
+    silentMatchingPromotions = 0;
+    silentCorruptPromotions = 0;
+    silentSourceMismatches = 0;
+    silentLastPromotionMs = 0;
+    silentMaxPromotionGapMs = 0;
+    silentFirstMismatchChannel = 0;
+    silentFirstMismatchActual = 0;
+    silentFirstMismatchExpected = 0;
+    silentHaveMismatch = false;
+    silentValidationReady = false;
+    silentReceiverRingOverflows = 0;
+    silentDiagnosticTxDrops = 0;
+    silentHaveSequence = false;
+}
+
+static void finishSilentCapture(void) {
+    if (!silentCaptureActive) return;
+    silentCaptureActive = false;
+    Serial.print("RDS1 elapsed_ms="); Serial.print(millis() - silentCaptureStartedMs);
+    Serial.print(" expected_slots="); Serial.print(silentPatternSlots);
+    Serial.print(" first_sequence="); Serial.print(silentFirstSequence);
+    Serial.print(" last_sequence="); Serial.print(silentLastSequence);
+    Serial.print(" sequence_gaps="); Serial.print(silentSequenceGaps);
+    Serial.print(" sequence_backtracks="); Serial.print(silentSequenceBacktracks);
+    Serial.print(" promotions="); Serial.print(silentPromotions);
+    Serial.print(" matching="); Serial.print(silentMatchingPromotions);
+    Serial.print(" corrupt="); Serial.print(silentCorruptPromotions);
+    Serial.print(" source_mismatches="); Serial.print(silentSourceMismatches);
+    Serial.print(" max_gap_ms="); Serial.print(silentMaxPromotionGapMs);
+    Serial.print(" ring_overflows="); Serial.print(rxRingOverflow);
+    Serial.print(" diagnostic_tx_drops="); Serial.print(diagnosticTxDrops);
+    Serial.print(" malformed="); Serial.print(malformedFragments);
+    Serial.print(" complete_total="); Serial.print(completeUniverses);
+    Serial.print(" first_mismatch_channel="); Serial.print(silentFirstMismatchChannel);
+    Serial.print(" first_mismatch_actual="); Serial.print(silentFirstMismatchActual);
+    Serial.print(" first_mismatch_expected="); Serial.print(silentFirstMismatchExpected);
+    Serial.println();
+}
+
+static void processSilentCommand(char* command) {
+    unsigned long base = 0, slots = 0, seconds = 0;
+    char mac[18] = {0};
+    if (sscanf(command, "CAPTURE START %17s %lu %lu %lu", mac, &base, &slots, &seconds) == 4 &&
+        base <= 255 && slots >= 1 && slots <= DMX_UNIVERSE_SIZE && seconds >= 1 && seconds <= 3600) {
+        unsigned int octets[6];
+        if (sscanf(mac, "%2x:%2x:%2x:%2x:%2x:%2x", &octets[0], &octets[1],
+                   &octets[2], &octets[3], &octets[4], &octets[5]) == 6) {
+            for (uint8_t i = 0; i < 6; i++) silentExpectedMac[i] = (uint8_t)octets[i];
+            silentPatternBase = (uint8_t)base;
+            silentPatternSlots = (uint16_t)slots;
+            silentCaptureDurationMs = (uint32_t)seconds * 1000UL;
+            silentCaptureStartedMs = millis();
+            resetSilentCapture();
+            silentCaptureActive = true;
+            Serial.println("ACK CAPTURE START");
+            return;
+        }
+    }
+    if (!strcmp(command, "CAPTURE STOP")) {
+        finishSilentCapture();
+        return;
+    }
+    if (!strcmp(command, "CAPTURE STATUS")) {
+        Serial.print("STATUS capture="); Serial.println(silentCaptureActive ? "active" : "idle");
+        return;
+    }
+    Serial.println("ERR CAPTURE COMMAND");
+}
+
+static void pollSilentCommands(void) {
+    while (Serial.available()) {
+        const char value = (char)Serial.read();
+        if (value == '\n' || value == '\r') {
+            if (silentCommandLength) {
+                silentCommandBuffer[silentCommandLength] = 0;
+                processSilentCommand(silentCommandBuffer);
+                silentCommandLength = 0;
+            }
+        } else if (silentCommandLength < sizeof(silentCommandBuffer) - 1) {
+            silentCommandBuffer[silentCommandLength++] = value;
+        } else {
+            silentCommandLength = 0;
+        }
+    }
+}
+#endif
 #endif
 
 static uint32_t saturatingU32(unsigned long value) {
@@ -915,6 +1116,32 @@ static void promoteActive(uint32_t seq) {
     lastActiveSequence     = seq;
     lastCompletionTimeMs   = millis();
     incrementCounter(completeUniverses);
+#if RECEIVER_DIAGNOSTIC_SILENT_CAPTURE
+    if (silentCaptureActive) {
+        const uint32_t now = millis();
+        silentPromotions++;
+        if (!silentHaveSequence) {
+            silentFirstSequence = seq;
+            silentHaveSequence = true;
+        } else if (seq > silentLastSequence) {
+            silentSequenceGaps += seq - silentLastSequence - 1U;
+        } else {
+            silentSequenceBacktracks++;
+        }
+        silentLastSequence = seq;
+        if (silentLastPromotionMs != 0 && now - silentLastPromotionMs > silentMaxPromotionGapMs)
+            silentMaxPromotionGapMs = now - silentLastPromotionMs;
+        silentLastPromotionMs = now;
+        if (memcmp(stagingSourceMac, silentExpectedMac, 6) != 0) {
+            silentSourceMismatches++;
+        } else if (silentPatternMatches(activeUniverse)) {
+            silentValidationReady = true;
+            silentMatchingPromotions++;
+        } else if (silentValidationReady) {
+            silentCorruptPromotions++;
+        }
+    }
+#endif
 
     /* Load the newly active universe into the physical DMX output. */
         commitDmxUniverse(activeUniverse);
@@ -1269,6 +1496,14 @@ void loop(void) {
     int8_t  rssi;
     uint8_t sourceMac[6];
 
+#if RECEIVER_DIAGNOSTIC_SILENT_CAPTURE
+    pollSilentCommands();
+    if (silentCaptureActive &&
+        millis() - silentCaptureStartedMs >= silentCaptureDurationMs) {
+        finishSilentCapture();
+    }
+#endif
+
     /* 1. Debounce the active-HIGH battery comparator input. */
     updateBatteryLow();
 
@@ -1315,4 +1550,8 @@ void loop(void) {
     }
     /* Service ACKs again after processing the packet batch. */
     transmitPriorityAck();
+#if RECEIVER_DIAGNOSTIC_SERIAL
+    /* Never block reconstruction on the 529-byte diagnostic UART record. */
+    drainDiagnosticSerial();
+#endif
 }

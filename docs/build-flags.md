@@ -35,6 +35,7 @@ Always restore and flash a production image after a test-only build.
 | `RECEIVER_FAILSAFE_DEFAULT_TIMEOUT_SECONDS` | `60` | Receiver boot fail-safe timeout. Runtime daemon configuration can override it. |
 | `RECEIVER_DIAGNOSTIC_SERIAL` | `0` | Disables physical DMX output and emits complete reconstructed universes as binary `RDX1` records over UART0 at 115200 8N1, including the promoted fragment source MAC. |
 | `RECEIVER_DIAGNOSTIC_BAUD` | `115200` | Diagnostic UART baud rate. Use the same rate with the host reader; `460800` is recommended for high-rate diagnostics. |
+| `RECEIVER_DIAGNOSTIC_SILENT_CAPTURE` | `0` | Diagnostic-only mode that validates promoted universes in-device and emits compact capture summaries instead of per-universe `RDX1` records. Requires `RECEIVER_DIAGNOSTIC_SERIAL=1`. |
 
 Example receiver test-pattern build:
 

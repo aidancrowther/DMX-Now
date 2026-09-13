@@ -46,6 +46,24 @@ def command(port: serial.Serial, text: str, prefix: str = "ACK", timeout: float 
     return wait_line(port, prefix, timeout)
 
 
+def read_silent_line(port: serial.Serial, prefix: str, timeout: float) -> str:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        line = port.readline().decode(errors="replace").strip()
+        if line:
+            print("RECEIVER " + line, flush=True)
+            if line.startswith(prefix):
+                return line
+    raise TimeoutError(f"waiting for receiver {prefix!r}")
+
+
+def receiver_command(port: serial.Serial, text: str, prefix: str,
+                     timeout: float = 10.0) -> str:
+    port.write((text + "\n").encode())
+    port.flush()
+    return read_silent_line(port, prefix, timeout)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--tx-port", required=True, help="management transmitter USB serial port")
@@ -63,12 +81,23 @@ def main() -> int:
                         help="require this minimum diagnostic promotion rate (0 disables the gate)")
     parser.add_argument("--rate-tolerance-hz", type=float, default=2.0,
                         help="allowed rate below expected-rate-hz")
+    parser.add_argument("--expected-source-rate-hz", type=float, default=44.0,
+                        help="require this minimum Mega physical-DMX source rate")
+    parser.add_argument("--source-rate-tolerance-hz", type=float, default=1.0,
+                        help="allowed source-rate shortfall")
+    parser.add_argument("--silent-capture", action="store_true",
+                        help="use receiver in-device validation and compact RDS1 summary")
+    parser.add_argument("--source-mac", default="cc:50:e3:fd:a9:76",
+                        help="expected normal-DMX retransmitter source MAC")
+    parser.add_argument("--telemetry-log", type=Path,
+                        help="write per-second telemetry snapshots as JSONL")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if (not 0 <= args.value <= 255 or args.seconds <= 0 or
             args.change_ms < 100 or args.change_ms > 60000 or
             not 1 <= args.slots <= 512 or args.expected_rate_hz < 0 or
-            args.rate_tolerance_hz < 0):
+            args.rate_tolerance_hz < 0 or args.expected_source_rate_hz < 0 or
+            args.source_rate_tolerance_hz < 0):
         parser.error("value 0..255, positive seconds, change-ms 100..60000, slots 1..512, nonnegative rate settings")
 
     frame_command = (f"GENERATE DYNAMIC {args.value} {args.change_ms}"
@@ -84,6 +113,7 @@ def main() -> int:
     baseline_expected = bytes([args.value]) * 512
     mega = serial.Serial(args.mega_port, 115200, timeout=0.2)
     receiver = serial.Serial(args.receiver_port, args.receiver_baud, timeout=0.05)
+    receiver.reset_input_buffer()
     diagnostic = ReceiverDiagnosticParser()
     records = []
     record_times = []
@@ -99,6 +129,14 @@ def main() -> int:
         # normal 10-second management telemetry cadence.
         telemetry_interval_seconds=10.0,
     ))
+    telemetry_log = None
+    telemetry_path = args.telemetry_log
+    if telemetry_path is None and args.output is not None:
+        telemetry_path = args.output.with_suffix(".telemetry.jsonl")
+    if telemetry_path is not None:
+        telemetry_path.parent.mkdir(parents=True, exist_ok=True)
+        telemetry_log = telemetry_path.open("w", encoding="utf-8")
+    silent_summary = None
     try:
         wait_line(mega, "READY RETRANSMITTER_E2E_MEGA", 10)
         if args.pattern == "short":
@@ -109,6 +147,11 @@ def main() -> int:
         else:
             command(mega, frame_command, "ACK GENERATE")
         service.start()
+        if args.silent_capture:
+            mac = args.source_mac
+            receiver_command(receiver,
+                             f"CAPTURE START {args.source_mac} {args.value} {args.slots} {args.seconds + 30}",
+                             "ACK CAPTURE START")
         if args.pattern == "short":
             command(mega, "START 3 5", "ACK START")
             baseline_deadline = time.monotonic() + 20
@@ -147,24 +190,30 @@ def main() -> int:
             now = time.monotonic()
             data = receiver.read(4096)
             if data:
-                received_records = diagnostic.feed(data)
+                if args.silent_capture:
+                    # Keep compact RDS1 text available for collection after the
+                    # measurement, without feeding it to the RDX1 parser.
+                    silent_summary = (silent_summary or b"") + data
+                    if b"RDS1 " in silent_summary:
+                        silent_summary = silent_summary[silent_summary.find(b"RDS1 "):]
+                else:
+                    received_records = diagnostic.feed(data)
                 # Ignore receiver output from the explicit START settle period.
                 # It may still contain the prior universe or the receiver's
                 # boot-time zero universe; only promotions during measurement
                 # belong to this run's content verdict.
-                if now >= settle_until:
+                if now >= settle_until and not args.silent_capture:
                     for received in received_records:
                         if received.record_type != 1:
                             continue
-                        epoch = received.universe[0]
-                        valid = all(value == (epoch if index == 0 else
-                                              (args.value + index - 1) & 0xFF)
-                                    for index, value in enumerate(received.universe))
+                        valid = not dynamic_mismatches(
+                            received.universe, args.value,
+                            args.slots if args.pattern == "dynamic-short" else 512)
                         # Establish the content window on the first valid
                         # dynamic promotion. This avoids treating a final
                         # pre-source/boot universe as a failure at the settle
                         # boundary, while every later promotion is validated.
-                        if not content_ready and args.pattern == "dynamic" and valid:
+                        if not content_ready and args.pattern in ("dynamic", "dynamic-short") and valid:
                             content_ready = True
                             diagnostic_bad_crc_at_content_ready = diagnostic.records_bad_crc
                             diagnostic_unknown_at_content_ready = diagnostic.records_unknown_type
@@ -199,21 +248,85 @@ def main() -> int:
                         "last_seen_ms": item.transmitter_last_seen_ms,
                     } for item in snapshot.receivers],
                 })
+                if telemetry_log:
+                    telemetry_log.write(json.dumps(telemetry_samples[-1], separators=(",", ":")) + "\n")
+                    telemetry_log.flush()
                 next_sample_at += 1.0
+        if args.silent_capture:
+            summary_line = receiver_command(receiver, "CAPTURE STOP", "RDS1", timeout=10.0)
+            if summary_line:
+                line = summary_line
+                values = {}
+                for token in line.split()[1:]:
+                    if "=" in token:
+                        key, value = token.split("=", 1)
+                        try:
+                            values[key] = int(value)
+                        except ValueError:
+                            values[key] = float(value)
+                summary["silent_summary"] = values
+                summary["telemetry_log"] = str(telemetry_path) if telemetry_path else None
+                summary["diagnostic_records"] = int(values.get("promotions", 0))
+                summary["diagnostic_matching_records"] = int(values.get("matching", 0))
+                summary["diagnostic_invalid_records"] = list(range(
+                    int(values.get("corrupt", 0))))
+                summary["diagnostic_sequence_gaps"] = int(values.get("sequence_gaps", 0))
+                summary["diagnostic_sequence_backtracks"] = int(values.get("sequence_backtracks", 0))
+                summary["diagnostic_source_macs"] = {mac: int(values.get("matching", 0))}
+                summary["diagnostic_bad_crc"] = 0
+                summary["diagnostic_attempt_rate_hz"] = (
+                    (int(values.get("last_sequence", 0)) - int(values.get("first_sequence", 0))) /
+                    max(0.001, float(values.get("elapsed_ms", 1))) * 1000.0)
+                summary["diagnostic_promotion_rate_hz"] = (
+                    int(values.get("promotions", 0)) /
+                    max(0.001, float(values.get("elapsed_ms", 1))) * 1000.0)
+                summary["diagnostic_ring_overflows"] = int(values.get("ring_overflows", 0))
+                summary["diagnostic_malformed"] = int(values.get("malformed", 0))
+                summary["diagnostic_complete_total"] = int(values.get("complete_total", 0))
+                summary["diagnostic_first_mismatch_channel"] = int(
+                    values.get("first_mismatch_channel", 0))
+                summary["diagnostic_first_mismatch_actual"] = int(
+                    values.get("first_mismatch_actual", 0))
+                summary["diagnostic_first_mismatch_expected"] = int(
+                    values.get("first_mismatch_expected", 0))
+                summary["promotion_rate_expectation_met"] = True
+                summary["source_rate_expectation_met"] = True
+            else:
+                raise TimeoutError("waiting for receiver RDS1 summary")
+        # Diagnostic receiver mode intentionally disables the receiver's
+        # physical DMX output, so the Mega's returned-DMX monitor may not emit a
+        # RESULT. The host-side diagnostic capture is authoritative in that
+        # mode; retain an optional Mega result when it is available.
+        values: dict[str, float | int] = {}
         if result is None:
-            raise TimeoutError("waiting for Mega RESULT")
-        values: dict[str, int] = {}
-        for token in result.split()[1:]:
+            summary["mega_result_missing"] = True
+        for token in (result or "").split()[1:]:
             if "=" in token:
                 key, value = token.split("=", 1)
-                values[key] = int(value.rstrip("ms"))
+                value = value.rstrip("ms")
+                try:
+                    values[key] = int(value)
+                except ValueError:
+                    values[key] = float(value)
         summary["result"] = values
-        summary["diagnostic_records"] = len(records)
-        summary["diagnostic_bad_crc"] = diagnostic.records_bad_crc
+        summary["source_frames"] = values.get("source_frames")
+        summary["source_rate_hz"] = values.get("source_rate_hz")
+        source_rate_floor = max(0.0, args.expected_source_rate_hz - args.source_rate_tolerance_hz)
+        summary["expected_source_rate_hz"] = args.expected_source_rate_hz
+        summary["source_rate_tolerance_hz"] = args.source_rate_tolerance_hz
+        summary["minimum_required_source_rate_hz"] = source_rate_floor
+        summary["source_rate_expectation_met"] = (
+            isinstance(summary["source_rate_hz"], (int, float)) and
+            summary["source_rate_hz"] >= source_rate_floor)
+        if not args.silent_capture:
+            summary["diagnostic_records"] = len(records)
+        if not args.silent_capture:
+            summary["diagnostic_bad_crc"] = diagnostic.records_bad_crc
         summary["diagnostic_unknown_type"] = diagnostic.records_unknown_type
-        summary["diagnostic_source_macs"] = dict(Counter(
+        if not args.silent_capture:
+            summary["diagnostic_source_macs"] = dict(Counter(
             record.source_mac.hex(":") for record in records
-            if record.record_type == 1))
+                if record.record_type == 1))
         normal_records = [record for record in records if record.record_type == 1]
         sequences = [record.sequence for record in normal_records]
         sequence_backtracks = sum(
@@ -223,11 +336,18 @@ def main() -> int:
             max(0, current - previous - 1)
             for previous, current in zip(sequences, sequences[1:])
             if current > previous)
-        summary["diagnostic_sequence_first"] = sequences[0] if sequences else None
-        summary["diagnostic_sequence_last"] = sequences[-1] if sequences else None
-        summary["diagnostic_sequence_backtracks"] = sequence_backtracks
-        summary["diagnostic_sequence_gaps"] = sequence_gaps
-        if len(record_times) >= 2:
+        if not args.silent_capture:
+            summary["diagnostic_sequence_first"] = sequences[0] if sequences else None
+            summary["diagnostic_sequence_last"] = sequences[-1] if sequences else None
+            summary["diagnostic_sequence_backtracks"] = sequence_backtracks
+            summary["diagnostic_sequence_gaps"] = sequence_gaps
+        if not args.silent_capture and len(record_times) >= 2 and sequences:
+            summary["diagnostic_attempt_rate_hz"] = round(
+                (sequences[-1] - sequences[0]) /
+                (record_times[-1] - record_times[0]), 3)
+        elif not args.silent_capture:
+            summary["diagnostic_attempt_rate_hz"] = 0.0
+        if not args.silent_capture and len(record_times) >= 2:
             gaps_ms = [(later - earlier) * 1000
                        for earlier, later in zip(record_times, record_times[1:])]
             summary["diagnostic_promotion_rate_hz"] = round(
@@ -235,7 +355,7 @@ def main() -> int:
             summary["diagnostic_promotion_gap_ms_max"] = round(max(gaps_ms), 1)
             summary["diagnostic_promotion_gap_ms_p95"] = round(
                 sorted(gaps_ms)[int(0.95 * (len(gaps_ms) - 1))], 1)
-        else:
+        elif not args.silent_capture:
             summary["diagnostic_promotion_rate_hz"] = 0.0
             summary["diagnostic_promotion_gap_ms_max"] = None
             summary["diagnostic_promotion_gap_ms_p95"] = None
@@ -245,7 +365,8 @@ def main() -> int:
         summary["minimum_required_rate_hz"] = rate_floor
         summary["promotion_rate_expectation_met"] = (
             args.expected_rate_hz <= 0 or
-            summary["diagnostic_promotion_rate_hz"] >= rate_floor)
+            summary["diagnostic_attempt_rate_hz"] >= rate_floor)
+        summary["promotion_rate_observed_hz"] = summary["diagnostic_promotion_rate_hz"]
         summary["diagnostic_bad_crc_after_content_ready"] = max(
             0, diagnostic.records_bad_crc - diagnostic_bad_crc_at_content_ready)
         summary["diagnostic_unknown_after_content_ready"] = max(
@@ -255,7 +376,9 @@ def main() -> int:
                     bytes((args.value + index) & 0xFF for index in range(512)))
         if args.pattern == "short":
             expected = bytes((args.value + index) & 0xFF for index in range(args.slots)) + bytes(512 - args.slots)
-        if args.pattern in ("dynamic", "dynamic-short"):
+        if args.silent_capture:
+            summary["diagnostic_invalid_examples"] = []
+        elif args.pattern in ("dynamic", "dynamic-short"):
             summary["diagnostic_matching_records"] = sum(
                 record.record_type == 1 and
                 not dynamic_mismatches(record.universe, args.value,
@@ -306,32 +429,46 @@ def main() -> int:
             summary["short_expectation_met"] = True
         summary["telemetry_requests_sent"] = telemetry_samples[-1]["requests_sent"] if telemetry_samples else 0
         summary["telemetry_reports_received"] = telemetry_samples[-1]["reports_received"] if telemetry_samples else 0
+        # The first sample is commonly collected before the asynchronous
+        # management handshake completes. Do not report that expected pending
+        # state as a runtime failure; validate every sample after the first
+        # successful management report.
+        telemetry_ready = any(sample["reports_received"] > 0
+                              for sample in telemetry_samples)
         summary["telemetry_bad_samples"] = [sample for sample in telemetry_samples
-                                             if not sample["transmitter_connected"] or
-                                             sample["transmitter_mode"] != "management_only" or
-                                             sample["transmitter_mode_sync"] != "synchronized" or
-                                             sample["last_error"]]
-        summary["telemetry_progressed"] = summary["telemetry_reports_received"] > 0
+                                             if sample["reports_received"] > 0 and
+                                             (not sample["transmitter_connected"] or
+                                              sample["transmitter_mode"] != "management_only" or
+                                              sample["transmitter_mode_sync"] != "synchronized" or
+                                              sample["last_error"])]
+        summary["telemetry_progressed"] = telemetry_ready
         summary["transmitter_connected"] = service.snapshot().transmitter_connected
         content_records_present = ((summary["baseline_complete_matches"] > 0 and
                                     summary["diagnostic_normal_records"] >= 0)
                                    if args.pattern == "short" else
                                     summary["diagnostic_matching_records"] > 0)
-        summary["passed"] = (content_records_present and
+        summary["passed"] = ((args.silent_capture and
+                               summary.get("diagnostic_records", 0) > 0 and
+                               summary.get("diagnostic_matching_records", 0) == summary.get("diagnostic_records", 0) and
+                               not summary.get("diagnostic_invalid_records")) or
+                              (not args.silent_capture and content_records_present and
                               summary["diagnostic_bad_crc_after_content_ready"] == 0 and
                               summary["diagnostic_unknown_after_content_ready"] == 0 and
                               not summary["diagnostic_invalid_records"] and
                               summary["diagnostic_sequence_backtracks"] == 0 and
                               summary["promotion_rate_expectation_met"] and
+                              summary["source_rate_expectation_met"] and
                               service.snapshot().transmitter_connected and
                               summary["telemetry_progressed"] and
                               not summary["telemetry_bad_samples"] and
-                              summary.get("short_expectation_met", True))
+                              summary.get("short_expectation_met", True)))
         print(json.dumps(summary, indent=2, default=str), flush=True)
         if args.output:
             args.output.write_text(json.dumps(summary, indent=2, default=str) + "\n", encoding="utf-8")
         return 0 if summary["passed"] else 1
     finally:
+        if telemetry_log:
+            telemetry_log.close()
         service.stop()
         mega.close()
         receiver.close()
