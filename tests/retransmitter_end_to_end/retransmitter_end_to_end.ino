@@ -21,7 +21,9 @@
 #define MONITOR_UART_BAUD 250000UL
 #define SOURCE_UBRR_250K 3U
 #define SOURCE_UBRR_100K 9U
-#define SOURCE_FRAME_PERIOD_US 22700UL /* approximately 44.05 Hz */
+#ifndef E2E_SOURCE_FRAME_PERIOD_US
+#define E2E_SOURCE_FRAME_PERIOD_US 22700UL /* approximately 44.05 Hz */
+#endif
 
 enum SourceTxState { SOURCE_TX_IDLE, SOURCE_TX_BREAK, SOURCE_TX_DATA, SOURCE_TX_DONE };
 
@@ -35,8 +37,11 @@ static uint8_t generatorBase = 0;
 static uint8_t dynamicEpoch = 0;
 static volatile SourceTxState sourceTxState = SOURCE_TX_IDLE;
 static volatile uint16_t sourceTxChannel = 0;
+static volatile uint16_t sourceLastQueuedChannel = 0;
+static volatile uint16_t sourceBytesQueued = 0;
 static uint32_t nextSourceFrameAtUs = 0;
 static unsigned long sourceFramesSent = 0;
+static unsigned long sourceFullFramesCompleted = 0;
 static unsigned long firstSourceFrameAtUs = 0;
 static unsigned long lastSourceFrameAtUs = 0;
 static bool sourceEnabled = true;
@@ -128,6 +133,16 @@ static void applyGenerator(void) {
     memcpy(sourceFrame, expected, sizeof(sourceFrame));
 }
 
+static void applyGeneratorAtBoundary(void) {
+    /* Never rewrite sourceFrame while USART1's TX ISR may be reading it. */
+    const unsigned long deadline = millis() + 100UL;
+    while (sourceTxState != SOURCE_TX_IDLE && (long)(millis() - deadline) < 0) {
+        delay(1);
+    }
+    stopSourceDmx();
+    applyGenerator();
+}
+
 static void advanceDynamicSourceFrame(void) {
     if (generatorPattern != GENERATOR_DYNAMIC &&
         generatorPattern != GENERATOR_DYNAMIC_SHORT) return;
@@ -167,10 +182,13 @@ ISR(USART1_TX_vect) {
         UCSR1B = (1 << TXEN1) | (1 << UDRIE1);
         UDR1 = 0;
         sourceTxChannel = 0;
+        sourceLastQueuedChannel = 0;
+        sourceBytesQueued = 1; /* start code */
         sourceTxState = SOURCE_TX_DATA;
     } else if (sourceTxState == SOURCE_TX_DONE) {
         sourceTxState = SOURCE_TX_IDLE;
         sourceFramesSent++;
+        sourceFullFramesCompleted++;
         lastSourceFrameAtUs = micros();
         if (!firstSourceFrameAtUs) firstSourceFrameAtUs = lastSourceFrameAtUs;
     }
@@ -183,6 +201,8 @@ ISR(USART1_UDRE_vect) {
     }
     if (sourceTxChannel < generatorSlots) {
         UDR1 = sourceFrame[++sourceTxChannel];
+        sourceLastQueuedChannel = sourceTxChannel;
+        sourceBytesQueued++;
         if (sourceTxChannel >= generatorSlots) {
             UCSR1B &= ~(1 << UDRIE1);
             UCSR1B |= (1 << TXCIE1);
@@ -237,6 +257,9 @@ static void emitResult(unsigned long now) {
     Serial.print(" max_gap="); Serial.print(maxGapMs);
     Serial.print(" no_data="); Serial.print(now - lastMonitorDataAt);
     Serial.print("ms source_frames="); Serial.print(sourceFramesSent);
+    Serial.print(" source_full_frames="); Serial.print(sourceFullFramesCompleted);
+    Serial.print(" source_last_queued_channel="); Serial.print(sourceLastQueuedChannel);
+    Serial.print(" source_bytes_queued="); Serial.print(sourceBytesQueued);
     Serial.print(" source_rate_hz=");
     if (sourceFramesSent > 1 && lastSourceFrameAtUs > firstSourceFrameAtUs) {
         Serial.print((sourceFramesSent - 1) * 1000000.0 /
@@ -252,27 +275,36 @@ static void processCommand(char* command, unsigned long now) {
     unsigned long a = 0, b = 0, c = 0;
     if (sscanf(command, "GENERATE CONST %lu", &a) == 1 && a <= 255) {
         generatorPattern = GENERATOR_CONST; generatorSlots = DMX_SLOTS; generatorBase = (uint8_t)a;
-        applyGenerator(); Serial.println("ACK GENERATE");
+        applyGeneratorAtBoundary(); Serial.println("ACK GENERATE");
     } else if (sscanf(command, "GENERATE RAMP %lu", &a) == 1 && a <= 255) {
         generatorPattern = GENERATOR_RAMP; generatorSlots = DMX_SLOTS; generatorBase = (uint8_t)a;
-        applyGenerator(); Serial.println("ACK GENERATE");
+        applyGeneratorAtBoundary(); Serial.println("ACK GENERATE");
     } else if (sscanf(command, "GENERATE DYNAMIC %lu %lu", &a, &b) == 2 &&
                a <= 255 && b >= 100 && b <= 60000) {
         generatorPattern = GENERATOR_DYNAMIC; generatorSlots = DMX_SLOTS; generatorBase = (uint8_t)a;
-        dynamicEpoch = 0; applyGenerator(); Serial.println("ACK GENERATE");
+        dynamicEpoch = 0; applyGeneratorAtBoundary(); Serial.println("ACK GENERATE");
     } else if (sscanf(command, "GENERATE DYNAMIC_SHORT %lu %lu %lu", &a, &b, &c) == 3 &&
                a >= 1 && a <= DMX_SLOTS && b <= 255 && c >= 100 && c <= 60000) {
         generatorPattern = GENERATOR_DYNAMIC_SHORT; generatorSlots = (uint16_t)a;
         generatorBase = (uint8_t)b;
-        dynamicEpoch = 0; applyGenerator(); Serial.println("ACK GENERATE");
+        dynamicEpoch = 0; applyGeneratorAtBoundary(); Serial.println("ACK GENERATE");
     } else if (sscanf(command, "GENERATE SHORT %lu %lu", &a, &b) == 2 &&
                a >= 1 && a <= DMX_SLOTS && b <= 255) {
         generatorPattern = GENERATOR_SHORT; generatorSlots = (uint16_t)a; generatorBase = (uint8_t)b;
-        applyGenerator(); Serial.println("ACK GENERATE");
+        applyGeneratorAtBoundary(); Serial.println("ACK GENERATE");
     } else if (!strcmp(command, "STOP")) {
         recordState = RECORD_IDLE; sourceEnabled = false; stopSourceDmx(); Serial.println("ACK STOP");
     } else if (sscanf(command, "START %lu %lu", &a, &b) == 2 && b > 0) {
-        resetMetrics(); sourceEnabled = true; stopSourceDmx();
+        resetMetrics();
+        noInterrupts();
+        monitorReady = false;
+        monitorReceiving = false;
+        monitorIndex = 0;
+        interrupts();
+        sourceEnabled = true; stopSourceDmx();
+        /* START may follow STOP after an arbitrary delay. Rebase the source
+         * deadline so a full 512-slot frame is not forced into a catch-up
+         * burst of back-to-back frames. */
         nextSourceFrameAtUs = micros();
         settleUntil = now + a * 1000UL; measureUntil = settleUntil + b * 1000UL;
         recordState = a ? RECORD_SETTLE : RECORD_MEASURE;
@@ -318,7 +350,7 @@ void loop(void) {
     if (sourceEnabled && sourceTxState == SOURCE_TX_IDLE &&
         (int32_t)(nowUs - nextSourceFrameAtUs) >= 0) {
         startSourceDmx();
-        nextSourceFrameAtUs += SOURCE_FRAME_PERIOD_US;
+        nextSourceFrameAtUs += E2E_SOURCE_FRAME_PERIOD_US;
     }
     if (recordState == RECORD_SETTLE && now >= settleUntil) {
         recordState = RECORD_MEASURE; measureStart = now; resetMetrics();

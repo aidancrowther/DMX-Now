@@ -366,6 +366,23 @@ static bool silentValidationReady = false;
 static uint32_t silentReceiverRingOverflows = 0;
 static uint32_t silentDiagnosticTxDrops = 0;
 static bool silentHaveSequence = false;
+static uint32_t silentFragmentRx[DMX_FRAGMENTS_PER_UNIVERSE] = {0};
+static uint32_t silentFragmentDuplicates[DMX_FRAGMENTS_PER_UNIVERSE] = {0};
+static uint32_t silentMaskCounts[8] = {0};
+static uint32_t silentSuperseded = 0;
+static uint32_t silentTimedOut = 0;
+static uint32_t silentObservedSequences = 0;
+static uint32_t silentUnseenSequences = 0;
+static uint32_t silentLastPacketSequence = 0;
+static bool silentHavePacketSequence = false;
+static uint32_t silentRetransmitterDiagnostics = 0;
+static uint32_t silentTxFrameSequence = 0;
+static uint32_t silentTxInputFrames = 0;
+static uint32_t silentTxEnqueueAttempts[DMX_FRAGMENTS_PER_UNIVERSE] = {0};
+static uint32_t silentTxEnqueueSuccess[DMX_FRAGMENTS_PER_UNIVERSE] = {0};
+static uint32_t silentTxEnqueueFailures[DMX_FRAGMENTS_PER_UNIVERSE] = {0};
+static uint32_t silentTxCallbackSuccess = 0;
+static uint32_t silentTxCallbackFailure = 0;
 static char silentCommandBuffer[96];
 static uint8_t silentCommandLength = 0;
 #endif
@@ -464,6 +481,21 @@ static bool silentPatternMatches(const uint8_t* universe) {
 }
 
 static void resetSilentCapture(void) {
+    /* Reset only the diagnostic reconstruction transaction. Keep the radio and
+     * last promoted universe alive so repeated captures do not reboot the
+     * receiver, but never let an old partial frame leak into a new case. */
+    stagingActive = false;
+    stagingReceivedMask = 0;
+    stagingUniqueCount = 0;
+    stagingFragmentCount = 0;
+    coverageClear();
+    hasActiveWirelessFrame = false;
+    lastActiveSequence = 0;
+    lastCompletionTimeMs = 0;
+    lastAcceptedFragmentTimeMs = 0;
+    const uint32_t savedPS = xt_rsil(15);
+    ringTail = ringHead;
+    xt_wsr_ps(savedPS);
     silentFirstSequence = 0;
     silentLastSequence = 0;
     silentSequenceGaps = 0;
@@ -482,10 +514,40 @@ static void resetSilentCapture(void) {
     silentReceiverRingOverflows = 0;
     silentDiagnosticTxDrops = 0;
     silentHaveSequence = false;
+    for (uint8_t i = 0; i < DMX_FRAGMENTS_PER_UNIVERSE; i++) {
+        silentFragmentRx[i] = 0;
+        silentFragmentDuplicates[i] = 0;
+    }
+    for (uint8_t i = 0; i < 8; i++) silentMaskCounts[i] = 0;
+    silentSuperseded = 0;
+    silentTimedOut = 0;
+    silentObservedSequences = 0;
+    silentUnseenSequences = 0;
+    silentLastPacketSequence = 0;
+    silentHavePacketSequence = false;
+    silentRetransmitterDiagnostics = 0;
+    silentTxFrameSequence = 0;
+    silentTxInputFrames = 0;
+    for (uint8_t i = 0; i < DMX_FRAGMENTS_PER_UNIVERSE; i++) {
+        silentTxEnqueueAttempts[i] = 0;
+        silentTxEnqueueSuccess[i] = 0;
+        silentTxEnqueueFailures[i] = 0;
+    }
+    silentTxCallbackSuccess = 0;
+    silentTxCallbackFailure = 0;
+    quickEspNow.resetRxDiagnostics();
+}
+
+static void finalizeSilentMask(uint32_t mask, bool superseded, bool timedOut) {
+    if (!silentCaptureActive || mask == 0 || mask > 7) return;
+    silentMaskCounts[mask]++;
+    if (superseded) silentSuperseded++;
+    if (timedOut) silentTimedOut++;
 }
 
 static void finishSilentCapture(void) {
     if (!silentCaptureActive) return;
+    if (stagingActive) finalizeSilentMask(stagingReceivedMask, false, false);
     silentCaptureActive = false;
     Serial.print("RDS1 elapsed_ms="); Serial.print(millis() - silentCaptureStartedMs);
     Serial.print(" expected_slots="); Serial.print(silentPatternSlots);
@@ -505,6 +567,41 @@ static void finishSilentCapture(void) {
     Serial.print(" first_mismatch_channel="); Serial.print(silentFirstMismatchChannel);
     Serial.print(" first_mismatch_actual="); Serial.print(silentFirstMismatchActual);
     Serial.print(" first_mismatch_expected="); Serial.print(silentFirstMismatchExpected);
+    Serial.print(" rx0="); Serial.print(silentFragmentRx[0]);
+    Serial.print(" rx1="); Serial.print(silentFragmentRx[1]);
+    Serial.print(" rx2="); Serial.print(silentFragmentRx[2]);
+    Serial.print(" dup0="); Serial.print(silentFragmentDuplicates[0]);
+    Serial.print(" dup1="); Serial.print(silentFragmentDuplicates[1]);
+    Serial.print(" dup2="); Serial.print(silentFragmentDuplicates[2]);
+    Serial.print(" m001="); Serial.print(silentMaskCounts[1]);
+    Serial.print(" m010="); Serial.print(silentMaskCounts[2]);
+    Serial.print(" m011="); Serial.print(silentMaskCounts[3]);
+    Serial.print(" m100="); Serial.print(silentMaskCounts[4]);
+    Serial.print(" m101="); Serial.print(silentMaskCounts[5]);
+    Serial.print(" m110="); Serial.print(silentMaskCounts[6]);
+    Serial.print(" m111="); Serial.print(silentMaskCounts[7]);
+    Serial.print(" superseded="); Serial.print(silentSuperseded);
+    Serial.print(" timed_out="); Serial.print(silentTimedOut);
+    Serial.print(" observed_sequences="); Serial.print(silentObservedSequences);
+    Serial.print(" unseen_sequences="); Serial.print(silentUnseenSequences);
+    Serial.print(" qrx_raw="); Serial.print(quickEspNow.rxCallbackCount());
+    Serial.print(" qrx_evictions="); Serial.print(quickEspNow.rxQueueEvictions());
+    Serial.print(" qrx_push_failures="); Serial.print(quickEspNow.rxQueuePushFailures());
+    Serial.print(" qrx_high_water="); Serial.print(quickEspNow.rxQueueHighWater());
+    Serial.print(" txdiag="); Serial.print(silentRetransmitterDiagnostics);
+    Serial.print(" txseq="); Serial.print(silentTxFrameSequence);
+    Serial.print(" txinput="); Serial.print(silentTxInputFrames);
+    Serial.print(" txa0="); Serial.print(silentTxEnqueueAttempts[0]);
+    Serial.print(" txa1="); Serial.print(silentTxEnqueueAttempts[1]);
+    Serial.print(" txa2="); Serial.print(silentTxEnqueueAttempts[2]);
+    Serial.print(" txe0="); Serial.print(silentTxEnqueueSuccess[0]);
+    Serial.print(" txe1="); Serial.print(silentTxEnqueueSuccess[1]);
+    Serial.print(" txe2="); Serial.print(silentTxEnqueueSuccess[2]);
+    Serial.print(" txf0="); Serial.print(silentTxEnqueueFailures[0]);
+    Serial.print(" txf1="); Serial.print(silentTxEnqueueFailures[1]);
+    Serial.print(" txf2="); Serial.print(silentTxEnqueueFailures[2]);
+    Serial.print(" txcbok="); Serial.print(silentTxCallbackSuccess);
+    Serial.print(" txcbfail="); Serial.print(silentTxCallbackFailure);
     Serial.println();
 }
 
@@ -1070,6 +1167,9 @@ static void stagingBegin(uint32_t seq, uint8_t fragCount,
 static void stagingAbandonIncomplete(void) {
     if (stagingActive) {
         if (abandonedIncomplete < 0xFFFFFFFFUL) abandonedIncomplete++;
+#if RECEIVER_DIAGNOSTIC_SILENT_CAPTURE
+        finalizeSilentMask(stagingReceivedMask, true, false);
+#endif
     }
     stagingActive = false;
     stagingReceivedMask = 0;
@@ -1205,6 +1305,9 @@ static void acceptFragment(const uint8_t* pkt, uint32_t seq,
 
     /* Completion: every one of the 512 bytes is covered by received tiles. */
     if (coverageFull() && (stagingUniqueCount == stagingFragmentCount)) {
+#if RECEIVER_DIAGNOSTIC_SILENT_CAPTURE
+        finalizeSilentMask(stagingReceivedMask, false, false);
+#endif
 #if RX_VALIDATE_TEST_PATTERN
         const uint16_t badIndex = fullIntegrityCheck(seq);
         if (badIndex >= DMX_UNIVERSE_SIZE) {
@@ -1232,6 +1335,27 @@ static void acceptFragment(const uint8_t* pkt, uint32_t seq,
  * -------------------------------------------------------------------------- */
 static void processPacket(const uint8_t* pkt, uint8_t len, int8_t rssi,
                           const uint8_t* sourceMac) {
+#if RECEIVER_DIAGNOSTIC_SILENT_CAPTURE
+    if (len == sizeof(RetransmitterDiagnosticsPacket) &&
+        pkt[3] == RETRANSMITTER_DIAGNOSTICS_PACKET_TYPE) {
+        RetransmitterDiagnosticsPacket diagnostics;
+        memcpy(&diagnostics, pkt, sizeof(diagnostics));
+        if (diagnostics.magic == DMX_PACKET_MAGIC &&
+            diagnostics.protocolVersion == DMX_PROTO_VERSION &&
+            diagnostics.universeId == DMX_UNIVERSE_ID &&
+            silentCaptureActive && memcmp(sourceMac, silentExpectedMac, 6) == 0) {
+            silentRetransmitterDiagnostics++;
+            silentTxFrameSequence = diagnostics.frameSequence;
+            silentTxInputFrames = diagnostics.inputFramesReceived;
+            memcpy(silentTxEnqueueAttempts, diagnostics.enqueueAttempts, sizeof(silentTxEnqueueAttempts));
+            memcpy(silentTxEnqueueSuccess, diagnostics.enqueueSuccess, sizeof(silentTxEnqueueSuccess));
+            memcpy(silentTxEnqueueFailures, diagnostics.enqueueFailures, sizeof(silentTxEnqueueFailures));
+            silentTxCallbackSuccess = diagnostics.callbackSuccess;
+            silentTxCallbackFailure = diagnostics.callbackFailure;
+        }
+        return;
+    }
+#endif
     /* Telemetry is intended for the transmitter; do not classify it as a
      * malformed DMX fragment when receivers hear one another. */
     if (len >= 4 && (pkt[3] == TELEMETRY_PACKET_TYPE ||
@@ -1339,6 +1463,30 @@ static void processPacket(const uint8_t* pkt, uint8_t len, int8_t rssi,
 
     const uint32_t seq = hdr.frameSequence;
 
+#if RECEIVER_DIAGNOSTIC_SILENT_CAPTURE
+    /* Count every structurally valid packet arrival, including duplicates.
+     * The duplicate counters below provide the subset classification. */
+    if (silentCaptureActive && memcmp(sourceMac, silentExpectedMac, 6) == 0 &&
+        hdr.fragmentIndex < DMX_FRAGMENTS_PER_UNIVERSE) {
+        silentFragmentRx[hdr.fragmentIndex]++;
+    }
+#endif
+
+#if RECEIVER_DIAGNOSTIC_SILENT_CAPTURE
+    if (silentCaptureActive && memcmp(sourceMac, silentExpectedMac, 6) == 0) {
+        if (!silentHavePacketSequence) {
+            silentLastPacketSequence = seq;
+            silentHavePacketSequence = true;
+            silentObservedSequences++;
+        } else if (seqIsNewer(seq, silentLastPacketSequence)) {
+            const uint32_t delta = seq - silentLastPacketSequence;
+            if (delta > 1U) silentUnseenSequences += delta - 1U;
+            silentLastPacketSequence = seq;
+            silentObservedSequences++;
+        }
+    }
+#endif
+
     /* ---- No frame in progress: may this fragment start one? ---- */
     if (!stagingActive) {
         if (!hasActiveWirelessFrame) {
@@ -1372,6 +1520,11 @@ static void processPacket(const uint8_t* pkt, uint8_t len, int8_t rssi,
         if (stagingReceivedMask & (1UL << hdr.fragmentIndex)) {
             /* Duplicate fragment for the current frame: do not double-count. */
             duplicateFragments++;
+#if RECEIVER_DIAGNOSTIC_SILENT_CAPTURE
+            if (silentCaptureActive && hdr.fragmentIndex < DMX_FRAGMENTS_PER_UNIVERSE) {
+                silentFragmentDuplicates[hdr.fragmentIndex]++;
+            }
+#endif
             stagingLastActivityMs      = millis();
             lastAcceptedFragmentTimeMs = millis();
             lastRssi                   = rssi;
@@ -1521,6 +1674,9 @@ void loop(void) {
     if (stagingActive &&
         (millis() - stagingLastActivityMs) >= STAGING_TIMEOUT_MS) {
         if (abandonedTimeout < 0xFFFFFFFFUL) abandonedTimeout++;
+#if RECEIVER_DIAGNOSTIC_SILENT_CAPTURE
+        finalizeSilentMask(stagingReceivedMask, false, true);
+#endif
         stagingActive       = false;
         stagingReceivedMask = 0;
         stagingUniqueCount  = 0;

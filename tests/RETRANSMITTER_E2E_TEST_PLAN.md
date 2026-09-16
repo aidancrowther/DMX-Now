@@ -274,6 +274,43 @@ promotions. A diagnostic CRC count before content synchronization may be
 nonzero due to startup stream alignment; CRC errors after the first valid
 dynamic promotion fail the run.
 
+## Extended retransmitter validation runner
+
+The staged extended validator uses the Mega and diagnostic receiver directly,
+resets the receiver before every case, requires exactly one capture
+acknowledgement, and stops immediately on a setup/no-data failure. It does not
+open `/dev/ttyUSB0`, so it cannot introduce a second normal-DMX authority.
+
+From the repository root, the default command runs only the safe preflight:
+
+```bash
+python3 wireless_dmx_daemon/tests/run_retransmitter_extended_validation.py
+```
+
+Run the phases separately as follows:
+
+```bash
+# Thirty-second 236-slot preflight, then thirty-second 512-slot preflight.
+python3 wireless_dmx_daemon/tests/run_retransmitter_extended_validation.py --preflight-only
+
+# 24, 25, 100, 235, 236, 237, 255, 256, 257, 471, 472, 473, 511, 512.
+python3 wireless_dmx_daemon/tests/run_retransmitter_extended_validation.py --matrix-only
+
+# Real source-length transitions, including 512->24 and 24->512.
+python3 wireless_dmx_daemon/tests/run_retransmitter_extended_validation.py --transitions-only
+
+# 15-minute 512-slot, 10-minute 24-slot, and 10-minute 237-slot soaks.
+python3 wireless_dmx_daemon/tests/run_retransmitter_extended_validation.py --soaks
+
+# Run the complete staged validation (approximately one hour).
+python3 wireless_dmx_daemon/tests/run_retransmitter_extended_validation.py --all
+```
+
+Use `--mega-port`, `--receiver-port`, and `--receiver-baud` to override the
+documented `/dev/ttyUSB1`, `/dev/ttyUSB2`, and 460800 defaults. Each invocation
+writes per-case JSON plus `summary.json` and `summary.md` under
+`wireless_dmx_daemon/runs/retransmitter-extended/<timestamp>/`.
+
 ### 6. Priority and gates
 
 Use the management-only daemon to send a priority universe and gate metadata.

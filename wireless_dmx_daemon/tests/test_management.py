@@ -16,7 +16,8 @@ from wireless_dmx.transmitter.management import (ACK_HEADER, ACK_RECORD, Managem
                                                     set_receiver_output_request, locate_receiver_request)
 from wireless_dmx.transmitter.management import (TransmitterModeResponse, get_transmitter_mode_request,
                                                  set_transmitter_mode_request)
-from wireless_dmx.receiver_diagnostic import DIAGNOSTIC_MAGIC, ReceiverDiagnosticParser
+from wireless_dmx.receiver_diagnostic import (DIAGNOSTIC_MAGIC, ReceiverDiagnosticParser,
+                                               mask_accounting, parse_summary_line)
 from wireless_dmx.retransmitter_patterns import dynamic_mismatches, dynamic_universe
 
 
@@ -39,6 +40,31 @@ def make_part(sequence, index, count, records):
 
 
 class ManagementTests(unittest.TestCase):
+    def test_rds1_summary_parser_and_mask_accounting(self):
+        values = parse_summary_line("RDS1 m001=2 m111=5 qrx_evictions=0")
+        self.assertEqual(values["m001"], 2)
+        self.assertEqual(values["qrx_evictions"], 0)
+        self.assertEqual(mask_accounting({1: 2, 3: 1, 7: 5}), {
+            "observed_frames": 8, "fragment_0": 8, "fragment_1": 6, "fragment_2": 5})
+
+    def test_acceptance_summary_maps_fragment_diagnostics(self):
+        values = parse_summary_line("RDS1 rx0=10 rx1=9 rx2=8 m101=3 unseen_sequences=4")
+        self.assertEqual(values["rx0"], 10)
+        self.assertEqual(values["m101"], 3)
+        self.assertEqual(values["unseen_sequences"], 4)
+
+    def test_rds1_summary_parser_maps_transmitter_diagnostics(self):
+        values = parse_summary_line("RDS1 txdiag=8 txa0=100 txe1=99 txf2=1 txcbfail=2")
+        self.assertEqual(values["txdiag"], 8)
+        self.assertEqual(values["txa0"], 100)
+        self.assertEqual(values["txe1"], 99)
+        self.assertEqual(values["txf2"], 1)
+        self.assertEqual(values["txcbfail"], 2)
+
+    def test_rds1_summary_parser_rejects_wrong_prefix(self):
+        with self.assertRaises(ValueError):
+            parse_summary_line("STATUS capture=idle")
+
     def test_dynamic_partial_pattern_is_coherent_and_zero_filled(self):
         universe = dynamic_universe(91, 236, 17)
         self.assertEqual(dynamic_mismatches(universe, 91, 236), [])

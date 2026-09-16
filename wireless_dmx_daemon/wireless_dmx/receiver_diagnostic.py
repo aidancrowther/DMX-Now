@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Mapping
 
 from .protocols import crc16_ccitt
 
@@ -18,6 +19,41 @@ class DiagnosticUniverse:
     sequence: int
     source_mac: bytes
     universe: bytes
+
+
+def parse_summary_line(line: str, prefix: str = "RDS1") -> dict[str, int | float | str]:
+    """Parse a compact receiver summary without imposing field ordering."""
+    tokens = line.strip().split()
+    if not tokens or tokens[0] != prefix:
+        raise ValueError(f"expected {prefix} summary")
+    values: dict[str, int | float | str] = {}
+    for token in tokens[1:]:
+        if "=" not in token:
+            continue
+        key, raw = token.split("=", 1)
+        if not key or not raw:
+            raise ValueError(f"invalid summary token: {token}")
+        try:
+            values[key] = int(raw, 10)
+        except ValueError:
+            try:
+                values[key] = float(raw)
+            except ValueError:
+                values[key] = raw
+    return values
+
+
+def mask_accounting(mask_counts: Mapping[int, int]) -> dict[str, int]:
+    """Return unique fragment totals implied by final frame masks."""
+    result = {"observed_frames": 0, "fragment_0": 0, "fragment_1": 0, "fragment_2": 0}
+    for mask, count in mask_counts.items():
+        if mask < 1 or mask > 7 or count < 0:
+            raise ValueError("masks must be 1..7 and counts nonnegative")
+        result["observed_frames"] += count
+        for index in range(3):
+            if mask & (1 << index):
+                result[f"fragment_{index}"] += count
+    return result
 
 
 class ReceiverDiagnosticParser:

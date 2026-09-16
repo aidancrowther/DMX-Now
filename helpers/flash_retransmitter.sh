@@ -56,9 +56,14 @@ fi
 
 QESPNOW_LIB="${PROJECT_ROOT}/libraries/QuickESPNow"
 PROTOCOL_LIB="${PROJECT_ROOT}/libraries/WirelessDMX"
-INPUT_LIB="${PROJECT_ROOT}/libraries/LXESP8266DMX"
+INPUT_LIB="${PROJECT_ROOT}/libraries/DMXUART"
 SKETCH_DIR="${PROJECT_ROOT}/retransmitter"
 BUILD_MODE="partial"
+for define in "${EXTRA_FLAGS[@]}"; do
+    case "$define" in
+        -DRETRANSMITTER_DIAGNOSTICS=1) BUILD_MODE="partial-diagnostic" ;;
+    esac
+done
 BUILD_DIR="${SKETCH_DIR}/build/${BUILD_MODE}"
 BINARY="${BUILD_DIR}/retransmitter.ino.bin"
 # Rebuild from a clean sketch cache every time so the sole partial-mode image is

@@ -23,7 +23,7 @@ sys.path.insert(0, str(ROOT))
 
 from wireless_dmx.app import WirelessDmxService
 from wireless_dmx.models import DaemonConfig, DaemonMode
-from wireless_dmx.receiver_diagnostic import ReceiverDiagnosticParser
+from wireless_dmx.receiver_diagnostic import ReceiverDiagnosticParser, parse_summary_line
 from wireless_dmx.retransmitter_patterns import dynamic_mismatches, dynamic_universe
 
 
@@ -59,7 +59,10 @@ def read_silent_line(port: serial.Serial, prefix: str, timeout: float) -> str:
 
 def receiver_command(port: serial.Serial, text: str, prefix: str,
                      timeout: float = 10.0) -> str:
-    port.write((text + "\n").encode())
+    # The diagnostic receiver treats both CR and LF as command terminators.
+    # Send exactly one CR: CRLF would be interpreted as two terminators by the
+    # firmware parser and can replay the previous command on this USB-UART.
+    port.write((text + "\r").encode())
     port.flush()
     return read_silent_line(port, prefix, timeout)
 
@@ -126,8 +129,8 @@ def main() -> int:
         artnet_enabled=False,
         virtual_port_path="",
         # Snapshot sampling below never sends a request; the service retains the
-        # normal 10-second management telemetry cadence.
-        telemetry_interval_seconds=10.0,
+        # normal 15-second management telemetry cadence.
+        telemetry_interval_seconds=15.0,
     ))
     telemetry_log = None
     telemetry_path = args.telemetry_log
@@ -146,12 +149,16 @@ def main() -> int:
             command(mega, f"GENERATE CONST {args.value}", "ACK GENERATE")
         else:
             command(mega, frame_command, "ACK GENERATE")
-        service.start()
         if args.silent_capture:
             mac = args.source_mac
             receiver_command(receiver,
                              f"CAPTURE START {args.source_mac} {args.value} {args.slots} {args.seconds + 30}",
                              "ACK CAPTURE START")
+        # Start capture before the optional management-only service. The
+        # service performs transmitter-role discovery synchronously enough to
+        # delay a hardware run when the management UART is in a stale/reset
+        # state; capture itself does not depend on that control plane.
+        service.start()
         if args.pattern == "short":
             command(mega, "START 3 5", "ACK START")
             baseline_deadline = time.monotonic() + 20
@@ -256,14 +263,7 @@ def main() -> int:
             summary_line = receiver_command(receiver, "CAPTURE STOP", "RDS1", timeout=10.0)
             if summary_line:
                 line = summary_line
-                values = {}
-                for token in line.split()[1:]:
-                    if "=" in token:
-                        key, value = token.split("=", 1)
-                        try:
-                            values[key] = int(value)
-                        except ValueError:
-                            values[key] = float(value)
+                values = parse_summary_line(line)
                 summary["silent_summary"] = values
                 summary["telemetry_log"] = str(telemetry_path) if telemetry_path else None
                 summary["diagnostic_records"] = int(values.get("promotions", 0))
@@ -283,6 +283,16 @@ def main() -> int:
                 summary["diagnostic_ring_overflows"] = int(values.get("ring_overflows", 0))
                 summary["diagnostic_malformed"] = int(values.get("malformed", 0))
                 summary["diagnostic_complete_total"] = int(values.get("complete_total", 0))
+                for key in (
+                        "rx0", "rx1", "rx2", "dup0", "dup1", "dup2",
+                        "m001", "m010", "m011", "m100", "m101", "m110", "m111",
+                        "superseded", "timed_out", "observed_sequences", "unseen_sequences"):
+                    summary[f"diagnostic_{key}"] = int(values.get(key, 0))
+                for key in (
+                        "txdiag", "txseq", "txinput", "txa0", "txa1", "txa2",
+                        "txe0", "txe1", "txe2", "txf0", "txf1", "txf2",
+                        "txcbok", "txcbfail"):
+                    summary[f"diagnostic_{key}"] = int(values.get(key, 0))
                 summary["diagnostic_first_mismatch_channel"] = int(
                     values.get("first_mismatch_channel", 0))
                 summary["diagnostic_first_mismatch_actual"] = int(

@@ -69,9 +69,13 @@ the optional management role with:
 ## Standalone re-transmitter
 
 The re-transmitter owns UART0/GPIO3 for physical DMX input and must not call
-`Serial.begin()` or write diagnostics to that UART. It uses the pinned
-`LXESP8266DMX` receive implementation, sends only normal three-fragment DMX
+`Serial.begin()` or write diagnostics to that UART. The DMXUART experiment uses
+foreground-polled `DMXUART::read()`, sends only normal three-fragment DMX
 packets, and waits for its first complete physical universe before transmitting.
+The retransmitter pauses DMX UART RX while it queues and drains one complete
+three-fragment wireless universe, then resumes RX before waiting the configured
+wireless interval. This intentionally permits physical-DMX frames to be lost
+while protecting wireless transmission.
 
 ```bash
 ./helpers/flash_retransmitter.sh
@@ -86,7 +90,10 @@ retransmitter mode. Command-line flags remain preferred for repeatable builds.
 Relevant definitions are
 `RETRANSMITTER_ESPNOW_CHANNEL`, `RETRANSMITTER_UNIVERSE_ID`,
 `RETRANSMITTER_WIRELESS_REFRESH_HZ`, `RETRANSMITTER_TX_DRAIN_TIMEOUT_MS`,
-and `RETRANSMITTER_TX_OVERHEAD_MS`.
+`RETRANSMITTER_TX_OVERHEAD_MS`, `RETRANSMITTER_DIAGNOSTICS`, and
+`RETRANSMITTER_DIAGNOSTIC_BROADCAST`. The normal queued retransmitter pacing
+uses the requested interval minus `RETRANSMITTER_TX_OVERHEAD_MS`, measured from
+the previous wireless drain completion.
 It also invokes Arduino CLI with `--clean` so each flashed image is rebuilt from
 the requested compile options rather than relying on a shared sketch cache.
 The partial build is exported to `retransmitter/build/partial`. The helper
@@ -106,8 +113,8 @@ received slot count through channel 512. The helper is:
 Malformed frames and nonzero start codes remain rejected by the input library.
 
 The processing cost is negligible because the retransmitter already maintains
-and clears a 512-channel destination buffer. Partial operation depends on the
-pinned `LXESP8266DMX` callback threshold (`DMX_MIN_SLOTS`, currently 24); frames
+and clears a 512-channel destination buffer. Partial operation depends on
+DMXUART's minimum channel threshold (`UART_MINCHANS_DMX`, currently 24); frames
 below that threshold do not produce a usable callback.
 
 ## Fault-injection flags
