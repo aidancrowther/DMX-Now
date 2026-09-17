@@ -32,6 +32,7 @@ recovers by searching for the next sync sequence after malformed input.
 | `0x07` | Locate receiver | target ID, duration, generation | Receiver disables DMX and pulses GPIO1/GPIO2 for the requested interval; the default is 15 seconds and the valid range is 1–15 seconds. |
 | `0x08` | Set transmitter mode | one byte: `0` bridge or `1` management-only | Changes the runtime transmitter role unless the firmware was statically locked. Response `0x88` reports accepted/rejected status and active mode. |
 | `0x09` | Get transmitter mode | empty | Queries the current runtime role without changing it. Response `0x88` reports the active mode. |
+| `0x0A` | Get observed universe | empty | Returns three CRC-protected `0x8A` parts containing the latest complete normal-DMX observation or the transmitter's local fallback. |
 
 The Python codec is in:
 
@@ -96,6 +97,27 @@ complete only when every expected receiver reports
 
 Repeated physical ACK records are tracked as duplicate records without turning a
 successful logical event into a failure.
+
+## Management-only universe observation
+
+The management transmitter passively listens for ordinary normal-DMX fragments
+from the standalone retransmitter; it does not use Wi-Fi promiscuous mode and does
+not emit a competing normal-DMX stream. A bounded callback handoff and loop-side
+reconstruction accept only complete, structurally valid three-fragment universes.
+
+The daemon polls `0x0A` at approximately 4 Hz in management-only mode. The three
+`0x8A` response parts carry a shared sequence, age, source MAC, offset, and
+channel bytes. The host publishes the observation only after all parts agree and
+are contiguous. UART/control failures affect only the optional display; they do
+not stop receiver output, telemetry, or priority control.
+
+The dashboard keeps observed data separate from the editable management universe.
+Because the transmitter cannot receive its own ESP-NOW broadcast, its latest local
+priority transmission is used as a fallback. A complete retransmitter observation
+overrides non-locked channels. When a management-only channel is changed to
+`LOCKED`, the current observed value is captured into the local management state;
+subsequent retransmitter observations cannot replace it. Explicit management edits
+remain permitted on locked channels.
 
 ## Fail-safe configuration flow
 

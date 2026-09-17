@@ -11,8 +11,9 @@ from wireless_dmx.app import WirelessDmxService
 from wireless_dmx.enttec.protocol import encode_dmx
 from wireless_dmx.raw_dmx import RAW_DMX_UNIVERSE_SIZE
 from wireless_dmx.models import ChannelGate, DaemonConfig, DaemonMode, ReceiverLinkState, ReceiverTelemetry
-from wireless_dmx.protocols import (MANAGEMENT_CACHE_CLEARED, MANAGEMENT_PRIORITY_ACKS,
-                                    MANAGEMENT_RECEIVER_TELEMETRY, MANAGEMENT_SYNC, crc16_ccitt)
+from wireless_dmx.protocols import (MANAGEMENT_CACHE_CLEARED, MANAGEMENT_OBSERVED_UNIVERSE,
+                                    MANAGEMENT_PRIORITY_ACKS, MANAGEMENT_RECEIVER_TELEMETRY,
+                                    MANAGEMENT_SYNC, crc16_ccitt)
 from wireless_dmx.transmitter.management import ACK_HEADER, ACK_RECORD, PART_HEADER, RECORD
 from wireless_dmx.virtual_serial.linux_pty import LinuxPtyBackend
 
@@ -43,6 +44,59 @@ def telemetry_part():
 
 
 class ServiceTests(unittest.TestCase):
+    def test_observed_universe_preserves_hard_gates_and_does_not_pace(self):
+        service = WirelessDmxService(
+            DaemonConfig(mode=DaemonMode.MANAGEMENT_ONLY, virtual_serial_enabled=False,
+                         raw_virtual_serial_enabled=False, artnet_enabled=False, virtual_port_path=""),
+            serial_factory=lambda: FakeSerial())
+        service.set_manual_channel(2, 99)
+        service.set_channel_gate(2, ChannelGate.LOCKED)
+        header = struct.Struct("<BBBBIIH6s")
+        universe = bytes([10, 20, 30]) + bytes(509)
+        for index, offset in enumerate((0, 180, 360)):
+            data = universe[offset:offset + (180 if index < 2 else 152)]
+            payload = header.pack(1, index, 3, 0, 12, 1, offset, bytes.fromhex("18fe34000001")) + data
+            body = bytes((1, MANAGEMENT_OBSERVED_UNIVERSE)) + struct.pack("<H", len(payload)) + payload
+            frame = MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body))
+            service._on_transmitter_data(frame)
+        observed = service.observed_universe_snapshot()
+        self.assertEqual(observed[0], 10)
+        self.assertEqual(observed[1], 0)
+        self.assertEqual(observed[2], 30)
+        self.assertEqual(service.pacer.priority_status().queue_depth, 0)
+
+    def test_management_editor_can_override_hard_locked_channel(self):
+        service = WirelessDmxService(
+            DaemonConfig(mode=DaemonMode.MANAGEMENT_ONLY, virtual_serial_enabled=False,
+                         raw_virtual_serial_enabled=False, artnet_enabled=False, virtual_port_path=""),
+            serial_factory=lambda: FakeSerial())
+        service.set_channel_gate(2, ChannelGate.LOCKED)
+        service.set_manual_channel(2, 123)
+        self.assertEqual(service.manual_universe_snapshot()[1], 123)
+        service.set_manual_universe(bytes([45]) * 512)
+        self.assertEqual(service.manual_universe_snapshot()[1], 45)
+
+    def test_external_source_still_cannot_override_hard_locked_channel(self):
+        service = WirelessDmxService(
+            DaemonConfig(virtual_serial_enabled=False, raw_virtual_serial_enabled=False,
+                         artnet_enabled=True, virtual_port_path=""),
+            serial_factory=lambda: FakeSerial())
+        service.set_channel_gate(2, ChannelGate.LOCKED)
+        service.set_manual_channel(2, 123)
+        service._accept_source_frame(bytes([45]) * 512, "serial")
+        self.assertEqual(service.manual_universe_snapshot()[1], 123)
+
+    def test_management_lock_captures_current_observed_value(self):
+        service = WirelessDmxService(
+            DaemonConfig(mode=DaemonMode.MANAGEMENT_ONLY, virtual_serial_enabled=False,
+                         raw_virtual_serial_enabled=False, artnet_enabled=False, virtual_port_path=""),
+            serial_factory=lambda: FakeSerial())
+        service._update_observed_universe(bytes([7, 88]) + bytes(510), 12, "retransmitter")
+        self.assertEqual(service.manual_universe_snapshot()[1], 0)
+        service.set_channel_gate(2, ChannelGate.LOCKED)
+        self.assertEqual(service.manual_universe_snapshot()[1], 88)
+        service._update_observed_universe(bytes([9, 33]) + bytes(510), 13, "retransmitter")
+        self.assertEqual(service.observed_universe_snapshot()[1], 88)
     def test_management_only_rejects_normal_source_and_manual_send(self):
         service = WirelessDmxService(
             DaemonConfig(mode=DaemonMode.MANAGEMENT_ONLY, virtual_serial_enabled=False,
@@ -278,7 +332,7 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(priority_id, 0)
         self.assertEqual(service.pacer.priority_status().queue_depth, 1)
 
-    def test_manual_universe_reset_clears_editable_channels_without_sending(self):
+    def test_manual_universe_reset_clears_all_channels_without_sending(self):
         service = WirelessDmxService(
             DaemonConfig(virtual_port_path="/tmp/wireless-dmx-reset-test"),
             serial_factory=lambda: FakeSerial(),
@@ -288,7 +342,7 @@ class ServiceTests(unittest.TestCase):
         service.set_channel_gate(1, ChannelGate.LOCKED)
         service.set_manual_channel(2, 77)
         service.clear_manual_universe()
-        self.assertEqual(service.manual_universe_snapshot()[0], 99)
+        self.assertEqual(service.manual_universe_snapshot()[0], 0)
         self.assertEqual(service.manual_universe_snapshot()[1], 0)
         self.assertEqual(service.pacer.priority_status().queue_depth, 0)
 
@@ -303,21 +357,20 @@ class ServiceTests(unittest.TestCase):
         service._accept_source_frame(bytes([100, 200, 30]) + bytes(509), "serial")
         self.assertEqual(service.manual_universe_snapshot()[:3], bytes([10, 20, 30]))
         service.set_manual_channel(1, 101)
-        with self.assertRaises(PermissionError):
-            service.set_manual_channel(2, 201)
+        service.set_manual_channel(2, 201)
+        self.assertEqual(service.manual_universe_snapshot()[1], 201)
         self.assertEqual(service.stats.serial_channels_blocked, 2)
 
-    def test_locked_management_edit_is_rejected_without_mutating_value(self):
+    def test_locked_management_edit_is_allowed(self):
         service = WirelessDmxService(
             DaemonConfig(virtual_port_path="/tmp/wireless-dmx-locked-edit"),
             serial_factory=lambda: FakeSerial(), virtual_backend=LinuxPtyBackend(),
         )
         service.set_manual_channel(1, 17)
         service.set_channel_gate(1, ChannelGate.LOCKED)
-        with self.assertRaises(PermissionError):
-            service.set_manual_channel(1, 99)
-        self.assertEqual(service.manual_universe_snapshot()[0], 17)
-        self.assertEqual(service.stats.management_channels_rejected, 1)
+        service.set_manual_channel(1, 99)
+        self.assertEqual(service.manual_universe_snapshot()[0], 99)
+        self.assertEqual(service.stats.management_channels_rejected, 0)
 
     def test_open_source_fast_path_copies_complete_universe(self):
         service = WirelessDmxService(
@@ -329,15 +382,15 @@ class ServiceTests(unittest.TestCase):
         self.assertFalse(service._has_source_blocked_channels)
         self.assertEqual(service.manual_universe_snapshot(), universe)
 
-    def test_clear_and_full_management_updates_preserve_locked_channels(self):
+    def test_clear_and_full_management_updates_include_locked_channels(self):
         service = WirelessDmxService(DaemonConfig(virtual_port_path="/tmp/wireless-dmx-gates-2"),
                                      serial_factory=lambda: FakeSerial(), virtual_backend=LinuxPtyBackend())
         service.set_manual_channel(4, 44)
         service.set_channel_gate(4, ChannelGate.LOCKED)
         service.set_manual_universe(bytes([9]) * 512)
-        self.assertEqual(service.manual_universe_snapshot()[3], 44)
+        self.assertEqual(service.manual_universe_snapshot()[3], 9)
         service.clear_manual_universe()
-        self.assertEqual(service.manual_universe_snapshot()[3], 44)
+        self.assertEqual(service.manual_universe_snapshot()[3], 0)
 
     def test_priority_id_seed_is_used_before_submission(self):
         service = WirelessDmxService(

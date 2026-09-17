@@ -30,6 +30,24 @@ class DaemonMode(str, Enum):
     MANAGEMENT_ONLY = "management_only"
 
 
+@dataclass(frozen=True)
+class ObservedUniverse:
+    """Best-effort, read-only wireless universe view for operator feedback."""
+
+    universe: bytes = bytes(512)
+    sequence: int = 0
+    source: str = "none"
+    received_monotonic: Optional[float] = None
+    updates: int = 0
+
+    @property
+    def age_ms(self) -> Optional[int]:
+        if self.received_monotonic is None:
+            return None
+        import time
+        return max(0, int((time.monotonic() - self.received_monotonic) * 1000))
+
+
 class ChannelGate(str, Enum):
     OPEN = "open"
     MANAGEMENT_ONLY = "management_only"
@@ -355,4 +373,5 @@ class DaemonSnapshot:
     priority: PriorityStatus = field(default_factory=PriorityStatus)
     transmitter_mode: Optional[str] = None
     transmitter_mode_sync: str = "pending"
+    observed_universe: ObservedUniverse = field(default_factory=ObservedUniverse)
     last_error: Optional[str] = None

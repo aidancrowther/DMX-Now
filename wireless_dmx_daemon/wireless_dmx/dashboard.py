@@ -656,13 +656,20 @@ def render_manual(stdscr, controller: DashboardController, channel: int, priorit
     height, width = stdscr.getmaxyx()
     _safe_add(stdscr, 0, 2, "WIRELESS DMX MANUAL TRANSMISSION", color_attr("accent", True) | curses.A_REVERSE)
     service = controller.service
-    universe = service.manual_universe_snapshot() if service else bytes(512)
+    universe = (service.observed_universe_snapshot() if service and
+                controller.config.mode == DaemonMode.MANAGEMENT_ONLY else
+                service.manual_universe_snapshot() if service else bytes(512))
     management_only = manual_priority_locked(controller.config)
     priority = priority or management_only
     mode = "HIGH PRIORITY" if priority else "NORMAL"
     mode_color = "warning" if priority else "healthy"
     _safe_add(stdscr, 1, 2, f"Mode: {mode}   Repeat: {repeat_count}   TTL: {ttl_seconds:.1f}s   "
               f"Priority queue: {service.snapshot().priority.queue_depth if service else 0}", color_attr(mode_color, True))
+    if management_only and service:
+        observed = service.snapshot().observed_universe
+        age = observed.age_ms
+        state = "UNAVAILABLE" if observed.received_monotonic is None else "LIVE" if age is not None and age < 1000 else "STALE"
+        _safe_add(stdscr, 3, 2, f"Observed wireless universe: {state} source={observed.source} age={age if age is not None else '-'}ms seq={observed.sequence}", color_attr("warning" if state != "LIVE" else "healthy", True))
     if management_only:
         _safe_add(stdscr, 2, 2, MANAGEMENT_MANUAL_NOTICE, color_attr("critical", True))
     elif priority:

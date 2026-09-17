@@ -6,14 +6,14 @@
 #   ./flash_transmitter.sh
 #   ./flash_transmitter.sh -f
 #   ./flash_transmitter.sh -f --port /dev/ttyUSB1
-#   ./flash_transmitter.sh --port "/dev/ttyUSB1" -f
+#   ./flash_transmitter.sh --d1 -f
 #
 # Compile-only by default; add -f to flash.
 # Pins the three required local libraries so the compiler never resolves
 # them from ~/Arduino/libraries:
 #   - QuickESPNow  (wireless transport)
 #   - WirelessDMX  (shared protocol header: wireless_protocol.h)
-# 
+#
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
 ARDUINO_CLI="arduino-cli"
@@ -23,12 +23,13 @@ PORT="/dev/ttyUSB0"
 FLASH=false
 EXTRA_FLAGS=()   # extra -D defines (e.g. future test hooks)
 ROLE="bridge"
+BOARD="esp8266:esp8266:generic"
+BOARD_BUILD="esp8266.esp8266.generic"
 
 # Paths
 QESPNOW_LIB="${PROJECT_ROOT}/libraries/QuickESPNow"
 PROTOCOL_LIB="${PROJECT_ROOT}/libraries/WirelessDMX"
 SKETCH_DIR="${PROJECT_ROOT}/transmitter"
-BINARY="${SKETCH_DIR}/build/esp8266.esp8266.generic/transmitter.ino.bin"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -43,6 +44,7 @@ use -f to flash after compiling.
 Options:
   -f                         Flash the compiled image.
   --port PORT                ESP8266 programming port (default: /dev/ttyUSB0).
+  --d1                       Target a Wemos D1 Mini/Pro instead of ESP-01.
   --bridge                   Runtime-switchable bridge-capable image (default).
   --management-only          Lock image to management-only behavior.
   --lock-bridge              Lock runtime role to bridge.
@@ -57,6 +59,12 @@ EOF
             ;;
         -f)
             FLASH=true
+            shift
+            ;;
+
+        --d1)
+            BOARD="esp8266:esp8266:d1_mini"
+            BOARD_BUILD="esp8266.esp8266.d1_mini"
             shift
             ;;
 
@@ -120,15 +128,17 @@ EOF
 
         *)
             echo "Unknown argument: $1" >&2
-            echo "Usage: $0 [-f] [--bridge|--management-only|--lock-bridge|--lock-management-only] [--port /dev/ttyUSB0] [--define -DEXTRA]" >&2
+            echo "Usage: $0 [-f] [--d1] [--bridge|--management-only|--lock-bridge|--lock-management-only] [--port /dev/ttyUSB0] [--define -DEXTRA]" >&2
             exit 1
             ;;
     esac
 done
 
+BINARY="${SKETCH_DIR}/build/${BOARD_BUILD}/transmitter.ino.bin"
+
 echo "=============================================="
 echo "Integrated Wireless DMX Transmitter"
-echo "Target board: esp8266:esp8266:generic"
+echo "Target board: ${BOARD}"
 echo "Libraries:"
 echo "  QuickESPNow: ${QESPNOW_LIB}"
 echo "  WirelessDMX: ${PROTOCOL_LIB}"
@@ -146,7 +156,7 @@ echo "=============================================="
 COMPILE_CMD=(
     "$ARDUINO_CLI"
     compile
-    -b "esp8266:esp8266:generic"
+    -b "$BOARD"
     --library "$QESPNOW_LIB"
     --library "$PROTOCOL_LIB"
 )

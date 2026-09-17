@@ -59,6 +59,14 @@ static uint8_t g_universe[DMX_UNIVERSE_SIZE];
  * while this frame's fragments are still being queued; keeping a snapshot
  * prevents a wireless frame from containing bytes from two universes. */
 static uint8_t g_txUniverse[DMX_UNIVERSE_SIZE];
+/* Best-effort display source. A received retransmitter universe takes
+ * precedence over this local fallback. */
+static uint8_t g_localObservedUniverse[DMX_UNIVERSE_SIZE];
+static uint8_t g_observedUniverse[DMX_UNIVERSE_SIZE];
+static bool g_haveObservedUniverse = false;
+static uint32_t g_observedSequence = 0;
+static unsigned long g_observedAtMs = 0;
+static uint8_t g_observedSourceMac[6] = {0};
 /* Immutable payload for all physical repeats of one logical priority event. */
 static uint8_t g_priorityUniverse[DMX_UNIVERSE_SIZE];
 
@@ -112,6 +120,43 @@ static unsigned long lastPriorityTransmitFinishedMs = 0;
 #define MANAGEMENT_MIN_REPORT_INTERVAL_MS 1000UL
 #endif
 #define TELEMETRY_REPORT_RECORDS_PER_PART 3U
+#define OBSERVED_REPORT_PARTS 3U
+#define OBSERVED_REPORT_DATA_PER_PART 180U
+static bool observedReportPending = false;
+static uint8_t observedReportPart = 0;
+static uint32_t observedReportSequence = 0;
+static uint8_t observedReportUniverse[DMX_UNIVERSE_SIZE];
+static uint8_t observedReportSourceMac[6] = {0};
+static unsigned long observedReportAtMs = 0;
+static unsigned long observedReportLastStartMs = 0;
+
+struct ObservedFragmentSlot {
+    uint8_t payload[DMX_TOTAL_PACKET_SIZE];
+    uint8_t len;
+    int8_t rssi;
+    uint8_t sourceMac[6];
+};
+#define OBSERVED_FRAGMENT_RING_SIZE 6U
+static ObservedFragmentSlot observedFragmentRing[OBSERVED_FRAGMENT_RING_SIZE];
+static volatile uint8_t observedFragmentHead = 0;
+static volatile uint8_t observedFragmentTail = 0;
+static uint8_t observedStaging[DMX_UNIVERSE_SIZE];
+static uint32_t observedStagingSequence = 0;
+static uint32_t observedStagingMask = 0;
+static uint8_t observedStagingSourceMac[6] = {0};
+static unsigned long observedStagingAtMs = 0;
+static bool observedStagingActive = false;
+
+struct __attribute__((packed)) ObservedUniverseReportHeader {
+    uint8_t version;
+    uint8_t partIndex;
+    uint8_t partCount;
+    uint8_t reserved;
+    uint32_t sequence;
+    uint32_t ageMs;
+    uint16_t offset;
+    uint8_t sourceMac[6];
+};
 
 struct ReceiverTelemetryEntry {
     bool valid;
@@ -298,6 +343,114 @@ static void cacheTelemetry(const ReceiverTelemetryPacket& packet, int8_t rssi) {
     receiverTable[index].telemetry = packet;
     receiverTable[index].transmitterRssi = rssi;
     receiverTable[index].lastSeenMs = millis();
+}
+
+static bool observedSequenceIsNewer(uint32_t a, uint32_t b) {
+    return (int32_t)(a - b) > 0;
+}
+
+static void queueObservedFragment(const uint8_t* data, uint8_t len,
+                                  int8_t rssi, const uint8_t* sourceMac) {
+    const uint8_t next = (uint8_t)((observedFragmentHead + 1U) % OBSERVED_FRAGMENT_RING_SIZE);
+    const uint32_t savedPS = xt_rsil(15);
+    if (next != observedFragmentTail) {
+        memcpy(observedFragmentRing[observedFragmentHead].payload, data, len);
+        observedFragmentRing[observedFragmentHead].len = len;
+        observedFragmentRing[observedFragmentHead].rssi = rssi;
+        memcpy(observedFragmentRing[observedFragmentHead].sourceMac, sourceMac, 6);
+        observedFragmentHead = next;
+    }
+    xt_wsr_ps(savedPS);
+}
+
+static bool popObservedFragment(ObservedFragmentSlot& slot) {
+    const uint32_t savedPS = xt_rsil(15);
+    if (observedFragmentHead == observedFragmentTail) {
+        xt_wsr_ps(savedPS);
+        return false;
+    }
+    memcpy(&slot, &observedFragmentRing[observedFragmentTail], sizeof(slot));
+    observedFragmentTail = (uint8_t)((observedFragmentTail + 1U) % OBSERVED_FRAGMENT_RING_SIZE);
+    xt_wsr_ps(savedPS);
+    return true;
+}
+
+static void serviceObservedFragments(void) {
+    ObservedFragmentSlot slot;
+    while (popObservedFragment(slot)) {
+        if (slot.len < DMX_HEADER_SIZE) continue;
+        DmxFragmentPacket packet;
+        memcpy(&packet, slot.payload, sizeof(packet));
+        if (packet.magic != DMX_PACKET_MAGIC || packet.protocolVersion != DMX_PROTO_VERSION ||
+            packet.packetType != DMX_PACKET_TYPE || packet.universeId != DMX_UNIVERSE_ID ||
+            packet.fragmentCount != DMX_FRAGMENTS_PER_UNIVERSE ||
+            packet.fragmentIndex >= DMX_FRAGMENTS_PER_UNIVERSE) continue;
+        const uint16_t offset = packet.dataOffset;
+        if (offset != (uint16_t)packet.fragmentIndex * DMX_PAYLOAD_SIZE ||
+            packet.payloadLength != dmx_fragment_payload_length(offset, DMX_UNIVERSE_SIZE) ||
+            slot.len != DMX_HEADER_SIZE + packet.payloadLength) continue;
+        if (!observedStagingActive || observedSequenceIsNewer(packet.frameSequence, observedStagingSequence) ||
+            (packet.frameSequence == observedStagingSequence &&
+             memcmp(slot.sourceMac, observedStagingSourceMac, 6) != 0) ||
+            (!observedSequenceIsNewer(packet.frameSequence, observedStagingSequence) &&
+             g_haveObservedUniverse && millis() - g_observedAtMs > 3000UL)) {
+            observedStagingActive = true;
+            observedStagingSequence = packet.frameSequence;
+            observedStagingMask = 0;
+            memcpy(observedStagingSourceMac, slot.sourceMac, 6);
+        }
+        if (packet.frameSequence != observedStagingSequence ||
+            memcmp(slot.sourceMac, observedStagingSourceMac, 6) != 0) continue;
+        memcpy(observedStaging + offset, slot.payload + DMX_HEADER_SIZE, packet.payloadLength);
+        observedStagingMask |= 1UL << packet.fragmentIndex;
+        observedStagingAtMs = millis();
+        if (observedStagingMask == ((1UL << DMX_FRAGMENTS_PER_UNIVERSE) - 1UL)) {
+            if (!g_haveObservedUniverse || observedSequenceIsNewer(observedStagingSequence, g_observedSequence) ||
+                millis() - g_observedAtMs > 3000UL ||
+                memcmp(observedStagingSourceMac, g_observedSourceMac, 6) != 0) {
+                memcpy(g_observedUniverse, observedStaging, sizeof(g_observedUniverse));
+                g_observedSequence = observedStagingSequence;
+                g_observedAtMs = millis();
+                memcpy(g_observedSourceMac, observedStagingSourceMac, 6);
+                g_haveObservedUniverse = true;
+            }
+            observedStagingActive = false;
+            observedStagingMask = 0;
+        }
+    }
+    if (observedStagingActive && millis() - observedStagingAtMs > 2000UL) {
+        observedStagingActive = false;
+        observedStagingMask = 0;
+    }
+}
+
+static void serviceObservedUniverseReport(void) {
+    if (!observedReportPending) return;
+    const uint16_t offset = (uint16_t)observedReportPart * OBSERVED_REPORT_DATA_PER_PART;
+    const uint16_t remaining = DMX_UNIVERSE_SIZE - offset;
+    const uint8_t dataLength = (uint8_t)min((uint16_t)OBSERVED_REPORT_DATA_PER_PART, remaining);
+    uint8_t packet[6 + sizeof(ObservedUniverseReportHeader) + OBSERVED_REPORT_DATA_PER_PART + 2];
+    uint16_t cursor = 0;
+    packet[cursor++] = MANAGEMENT_SYNC_1;
+    packet[cursor++] = MANAGEMENT_SYNC_2;
+    packet[cursor++] = MANAGEMENT_PROTO_VERSION;
+    packet[cursor++] = MANAGEMENT_OBSERVED_UNIVERSE;
+    const uint16_t payloadLength = sizeof(ObservedUniverseReportHeader) + dataLength;
+    packet[cursor++] = (uint8_t)payloadLength;
+    packet[cursor++] = (uint8_t)(payloadLength >> 8);
+    ObservedUniverseReportHeader header = {1U, observedReportPart, OBSERVED_REPORT_PARTS, 0U,
+        observedReportSequence, g_haveObservedUniverse ? millis() - observedReportAtMs : 0xFFFFFFFFUL,
+        offset, {0, 0, 0, 0, 0, 0}};
+    if (g_haveObservedUniverse) memcpy(header.sourceMac, observedReportSourceMac, 6);
+    memcpy(packet + cursor, &header, sizeof(header));
+    cursor += sizeof(header);
+    memcpy(packet + cursor, observedReportUniverse + offset, dataLength);
+    cursor += dataLength;
+    const uint16_t crc = managementCrc16(packet + 2, (uint16_t)(4 + payloadLength));
+    packet[cursor++] = (uint8_t)crc;
+    packet[cursor++] = (uint8_t)(crc >> 8);
+    Serial.write(packet, cursor);
+    if (++observedReportPart >= OBSERVED_REPORT_PARTS) observedReportPending = false;
 }
 
 /* --------------------------------------------------------------------------
@@ -496,6 +649,23 @@ static void serviceEnttecInput(void) {
                 }
                 if (managementVersion == MANAGEMENT_PROTO_VERSION &&
                     managementCrc16(crcInput, (uint16_t)(4 + managementLength)) == managementReceivedCrc &&
+                    managementOpcode == MANAGEMENT_GET_OBSERVED_UNIVERSE && managementLength == 0U) {
+                    const unsigned long now = millis();
+                    if (!observedReportPending &&
+                        now - observedReportLastStartMs >= 150UL) {
+                        memcpy(observedReportUniverse, g_haveObservedUniverse ? g_observedUniverse : g_localObservedUniverse,
+                               sizeof(observedReportUniverse));
+                        observedReportSequence = g_haveObservedUniverse ? g_observedSequence : g_frameSequence;
+                        if (g_haveObservedUniverse) memcpy(observedReportSourceMac, g_observedSourceMac, 6);
+                        else memset(observedReportSourceMac, 0, sizeof(observedReportSourceMac));
+                        observedReportAtMs = g_haveObservedUniverse ? g_observedAtMs : now;
+                        observedReportPart = 0;
+                        observedReportPending = true;
+                        observedReportLastStartMs = now;
+                    }
+                }
+                if (managementVersion == MANAGEMENT_PROTO_VERSION &&
+                    managementCrc16(crcInput, (uint16_t)(4 + managementLength)) == managementReceivedCrc &&
                     managementOpcode == MANAGEMENT_SET_RECEIVER_FAILSAFE &&
                     managementLength == 8U) {
                     uint8_t mode = managementPayload[0];
@@ -625,6 +795,15 @@ static void onTelemetryReceived(uint8_t* address, uint8_t* data, uint8_t len,
                                 signed int rssi, bool broadcast) {
     (void)address;
     (void)broadcast;
+    if (len >= sizeof(DmxFragmentPacket) && len <= DMX_TOTAL_PACKET_SIZE) {
+        DmxFragmentPacket packet;
+        memcpy(&packet, data, sizeof(packet));
+        if (packet.magic == DMX_PACKET_MAGIC && packet.protocolVersion == DMX_PROTO_VERSION &&
+            packet.packetType == DMX_PACKET_TYPE && packet.universeId == DMX_UNIVERSE_ID) {
+            queueObservedFragment(data, len, (int8_t)rssi, address);
+            return;
+        }
+    }
     if (len == sizeof(PriorityCompletionPacket)) {
         PriorityCompletionPacket completion;
         memcpy(&completion, data, sizeof(completion));
@@ -1145,8 +1324,10 @@ void loop(void) {
         ? PRIORITY_TX_INTERVAL_MS : TX_INTERVAL_MS;
 
     serviceEnttecInput();
+    serviceObservedFragments();
     reportTelemetry();
     serviceTelemetryReport();
+    serviceObservedUniverseReport();
     servicePriorityAckReport();
     if (pendingFailsafeConfigRepeats > 0 && quickEspNow.readyToSendData()) {
         if (quickEspNow.sendBcast(reinterpret_cast<const uint8_t*>(&pendingFailsafeConfig),
@@ -1184,6 +1365,7 @@ void loop(void) {
             }
             memcpy(g_txUniverse, g_universe, sizeof(g_txUniverse));
             }
+            memcpy(g_localObservedUniverse, g_txUniverse, sizeof(g_localObservedUniverse));
             currentFragment = 0;
             g_sendConfirmations = 0;   /* reset before the sends so all are counted */
             currentFrameIsPriority = priorityRepeatsRemaining > 0;

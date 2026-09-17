@@ -11,7 +11,7 @@ from threading import Event, Thread, Lock
 from .enttec.parser import EnttecParser
 from .artnet import ArtNetListener, ArtNetParser
 from .models import (DaemonConfig, DaemonHealth, DaemonMode, DaemonSnapshot, DmxStatistics,
-    ChannelGate, PriorityAck, PriorityAckSummary, PriorityStatus, TelemetryStatus)
+    ChannelGate, ObservedUniverse, PriorityAck, PriorityAckSummary, PriorityStatus, TelemetryStatus)
 from .pacer import DmxPacer
 from .telemetry import TelemetryStore
 from .transmitter.connection import TransmitterConnection
@@ -19,6 +19,7 @@ from .transmitter.management import (CacheClearedResponse, ManagementParser, Pri
                                      TransmitterModeResponse,
                                       clear_receiver_cache_request, get_priority_acks_request, get_telemetry_request,
                                       get_transmitter_mode_request,
+                                       get_observed_universe_request, ObservedUniversePart,
                                       mark_next_priority, set_receiver_failsafe_request, set_receiver_output_request,
                                       locate_receiver_request)
 from .protocols import DMX_GATE_MASK_SIZE
@@ -75,6 +76,10 @@ class WirelessDmxService:
             priority_max_consecutive_events=config.priority_max_consecutive_events,
         )
         self.manual_universe = bytearray(512)
+        self.observed_universe = ObservedUniverse()
+        self._observed_parts: dict[tuple[int, int], dict[int, ObservedUniversePart]] = {}
+        self._observed_part_times: dict[tuple[int, int], float] = {}
+        self._last_observed_request = 0.0
         self._channel_gates = [ChannelGate.OPEN] * 512
         self._has_source_blocked_channels = False
         self._hard_gate_metadata_pending = bool(config.locked_channels)
@@ -133,17 +138,18 @@ class WirelessDmxService:
             raise ValueError("channel must be 1..512")
         if not 0 <= value <= 255:
             raise ValueError("value must be 0..255")
-        if self._channel_gates[channel - 1] == ChannelGate.LOCKED:
-            self.stats.management_channels_rejected += 1
-            raise PermissionError(f"channel {channel} is locked")
+        # This is a management-originated edit. LOCKED means that ordinary
+        # source/retransmitter data cannot overwrite the channel; it does not
+        # prevent the management interface from deliberately overriding it.
         self.manual_universe[channel - 1] = value
 
     def set_manual_universe(self, universe: bytes) -> None:
         if len(universe) != 512:
             raise ValueError("manual universe must contain 512 channels")
-        for index, value in enumerate(universe):
-            if self._channel_gates[index] != ChannelGate.LOCKED:
-                self.manual_universe[index] = value
+        # Full-universe edits are also management-originated and may update
+        # hard-locked channels. The gate is enforced when external source data
+        # is merged, not when the operator sends an explicit management value.
+        self.manual_universe[:] = universe
 
     def channel_gate(self, channel: int) -> ChannelGate:
         if not 1 <= channel <= 512:
@@ -153,8 +159,17 @@ class WirelessDmxService:
     def set_channel_gate(self, channel: int, gate: ChannelGate) -> None:
         if not 1 <= channel <= 512:
             raise ValueError("channel must be 1..512")
+        gate = ChannelGate(gate)
         previous = self._channel_gates[channel - 1]
-        self._channel_gates[channel - 1] = ChannelGate(gate)
+        # In management-only mode the retransmitter is the live source. When
+        # an operator establishes a hard lock, capture the value currently
+        # shown by that source before future observations are intentionally
+        # prevented from changing the channel. Otherwise the local management
+        # buffer (often still zero) would become the receiver's locked value.
+        if (gate == ChannelGate.LOCKED and previous != ChannelGate.LOCKED and
+                self.config.mode == DaemonMode.MANAGEMENT_ONLY):
+            self.manual_universe[channel - 1] = self.observed_universe.universe[channel - 1]
+        self._channel_gates[channel - 1] = gate
         if previous != self._channel_gates[channel - 1] or gate == ChannelGate.LOCKED:
             self._hard_gate_metadata_pending = True
         self._refresh_gate_fast_path()
@@ -177,12 +192,25 @@ class WirelessDmxService:
                       if gate == ChannelGate.LOCKED))
 
     def clear_manual_universe(self) -> None:
-        for index in range(512):
-            if self._channel_gates[index] != ChannelGate.LOCKED:
-                self.manual_universe[index] = 0
+        # Clearing from the management interface is an explicit override too.
+        self.manual_universe[:] = bytes(512)
 
     def manual_universe_snapshot(self) -> bytes:
         return bytes(self.manual_universe)
+
+    def observed_universe_snapshot(self) -> bytes:
+        return self.observed_universe.universe
+
+    def _update_observed_universe(self, universe: bytes, sequence: int, source: str) -> None:
+        merged = bytearray(universe)
+        for index, gate in enumerate(self._channel_gates):
+            if gate == ChannelGate.LOCKED:
+                merged[index] = self.manual_universe[index]
+        self.observed_universe = ObservedUniverse(bytes(merged), sequence, source,
+                                                  time.monotonic(), self.observed_universe.updates + 1)
+
+    def _update_local_observed_universe(self, universe: bytes) -> None:
+        self._update_observed_universe(universe, 0, "local transmitter")
 
     def send_manual(self, priority: bool = False, repeat_count: int | None = None,
                     ttl_seconds: float | None = None, reason: str = "manual dashboard") -> int | None:
@@ -190,6 +218,7 @@ class WirelessDmxService:
             self.stats.frames_dropped_by_pacer += 1
             raise RuntimeError("normal DMX transmission is disabled in management-only mode")
         universe = bytes(self.manual_universe)
+        self._update_local_observed_universe(universe)
         if priority:
             hard_gate_mask = None
             if self._hard_gate_metadata_pending:
@@ -343,6 +372,7 @@ class WirelessDmxService:
                               virtual_client_connected=self.virtual.client_connected,
                               dmx=stats, receivers=self.telemetry.snapshot(),
                                priority=priority,
+                              observed_universe=self.observed_universe,
                               transmitter_mode=mode_name,
                               transmitter_mode_sync=self._transmitter_mode_sync,
                               telemetry=TelemetryStatus(
@@ -394,10 +424,12 @@ class WirelessDmxService:
             self.stats.frames_dropped_by_pacer += 1
             return
         from .enttec.protocol import encode_dmx
+        self._update_local_observed_universe(universe)
         self.transmitter.send_latest(encode_dmx(universe))
 
     def _send_priority_universe(self, universe: bytes) -> None:
         from .enttec.protocol import encode_dmx
+        self._update_local_observed_universe(universe)
         self.transmitter.send_latest(encode_dmx(universe))
 
     def _start_priority_receiver(self, event: dict, priority_id: int, now: float) -> None:
@@ -484,6 +516,26 @@ class WirelessDmxService:
 
     def _on_transmitter_data(self, data: bytes) -> None:
         for part in self.management.feed(data):
+            if isinstance(part, ObservedUniversePart):
+                key = (part.sequence, part.part_count)
+                observed = self._observed_parts.setdefault(key, {})
+                observed[part.part_index] = part
+                self._observed_part_times.setdefault(key, time.monotonic())
+                if len(observed) == part.part_count:
+                    ordered = [observed[index] for index in range(part.part_count)]
+                    if (ordered[0].offset == 0 and
+                            ordered[-1].offset + len(ordered[-1].data) == 512 and
+                            all(left.offset + len(left.data) == right.offset
+                                for left, right in zip(ordered, ordered[1:])) and
+                            len(b"".join(item.data for item in ordered)) == 512 and
+                            all(item.source_mac == ordered[0].source_mac and
+                                item.sequence == ordered[0].sequence for item in ordered)):
+                        self._update_observed_universe(
+                            b"".join(item.data for item in ordered),
+                            ordered[0].sequence, "retransmitter")
+                    self._observed_parts.pop(key, None)
+                    self._observed_part_times.pop(key, None)
+                continue
             if isinstance(part, CacheClearedResponse):
                 self._cache_clear_acknowledged = True
                 self.telemetry.clear()
@@ -648,6 +700,10 @@ class WirelessDmxService:
                     if now - started > self.config.telemetry_max_report_age_seconds:
                         self._report_parts.pop(sequence, None)
                         self._report_part_times.pop(sequence, None)
+                for key, started in list(self._observed_part_times.items()):
+                    if now - started > 2.0:
+                        self._observed_parts.pop(key, None)
+                        self._observed_part_times.pop(key, None)
                 if self.config.telemetry_enabled and now - self._last_telemetry_request >= self.config.telemetry_interval_seconds:
                     if (self._telemetry_request_started and
                             now - self._telemetry_request_started >= self.config.telemetry_response_timeout_seconds):
@@ -660,6 +716,10 @@ class WirelessDmxService:
                 if now - self._last_ack_request >= 0.1:
                     self.transmitter.send_immediate(get_priority_acks_request())
                     self._last_ack_request = now
+                if (self.config.mode == DaemonMode.MANAGEMENT_ONLY and
+                        now - self._last_observed_request >= 0.25):
+                    self.transmitter.send_immediate(get_observed_universe_request())
+                    self._last_observed_request = now
             except Exception as exc:
                 self._last_error = str(exc)
                 self._health = DaemonHealth.TELEMETRY_DEGRADED

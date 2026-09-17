@@ -73,6 +73,31 @@ This procedure validates both raw input framing and end-to-end physical DMX
 output. The timeout itself is validated by the absence of a partial promotion
 and successful recovery on the next complete universe.
 
+## Optional management-only observed-universe validation
+
+The management-only transmitter can display the normal universe broadcast by a
+standalone retransmitter. This is an optional operator aid and is not required
+for receiver output. Flash the management-only image with:
+
+```bash
+./helpers/flash_transmitter.sh --management-only
+```
+
+For a live check, connect the management transmitter to the host and run the
+daemon/dashboard in management-only mode while a standalone retransmitter and
+production receiver operate on the same ESP-NOW channel. Open the manual
+universe view with `u`; it should show the observed universe with source, age,
+sequence, and `LIVE` status. Confirm that missing radio traffic eventually shows
+`STALE` without changing receiver operation, and that a complete retransmitter
+update replaces non-locked displayed channels.
+
+To validate hard-lock behavior, observe a nonzero channel, press `l` until it is
+`LOCKED`, and confirm its current value is retained while subsequent
+retransmitter updates change other channels. An explicit management edit to the
+locked channel must still be accepted and sent as priority traffic. This display
+check does not replace a physical DMX monitor; it observes one radio path and is
+best-effort.
+
 ## Physical-DMX re-transmitter end-to-end setup
 
 The re-transmitter hardware setup uses an Arduino Mega as both the physical DMX

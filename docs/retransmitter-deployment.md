@@ -32,7 +32,9 @@ Optional management-only transmitter  -- telemetry/control --> receiver(s)
 
 The management-only transmitter is optional. It never replaces the physical
 retransmitter as the normal-DMX source. It is used for telemetry, fail-safe
-configuration, output control, locate, and explicit priority/gate operations.
+configuration, output control, locate, explicit priority/gate operations, and an
+optional read-only observed-universe display. The display is best-effort and does
+not affect normal retransmission if the management transmitter or host is offline.
 
 ## Hardware wiring
 
@@ -202,6 +204,16 @@ remote output control is required.
 
 6. Verify telemetry receiver identities and link state.
 7. Verify normal DMX still comes exclusively from the physical retransmitter.
+
+In monitored mode, the dashboard's manual-universe view should report the latest
+complete retransmitter observation as `LIVE`. It is normal for it to be briefly
+`STALE` or `UNAVAILABLE` during startup, radio loss, or management-transmitter
+reconnect. This display is not a substitute for receiver-side DMX validation.
+
+When using channel gates, entering `LOCKED` captures the value currently shown by
+the observer. Later physical-DMX observations cannot alter that channel, while
+explicit management priority edits can. This permits a locked channel to retain
+the live value at the moment the operator establishes the lock.
 
 The management transmitter may send telemetry/control and explicit priority
 traffic, but it must not be configured as a competing ordinary-DMX source.

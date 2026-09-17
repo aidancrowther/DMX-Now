@@ -63,6 +63,15 @@ wireless-dmx run --management-only --config configs/config.example.toml
 The integrated transmitter can also be built as a locked management-only image
 with `./helpers/flash_transmitter.sh --lock-management-only`.
 
+In management-only mode, the transmitter passively listens for the standalone
+retransmitter's ordinary ESP-NOW fragments and periodically reports the latest
+complete universe to the daemon. The dashboard displays this read-only,
+best-effort observed universe for operator feedback; it is not required for
+retransmission or receiver operation. The transmitter keeps a local fallback for
+its own priority transmissions because it cannot receive its own broadcast. When
+a channel is changed to `LOCKED`, its current observed value is captured and
+later retransmitter updates cannot replace it.
+
 ### 3. Standalone physical-DMX retransmitter
 
 The standalone ESP8266 retransmitter receives physical DMX through a
@@ -165,6 +174,9 @@ transmitter use the same shared packet protocol.
 - Provides a Linux PTY input path and terminal dashboard with manual universe
   editing, normal/priority transmission, channel gates, receiver selection,
   output control, locate, telemetry, and validation actions.
+- In management-only mode, optionally displays a best-effort observed universe
+  reconstructed by the management transmitter from the standalone retransmitter;
+  this is read-only QoL telemetry and is not required for operation.
 - Converts physical DMX to the normal wireless protocol in standalone
   retransmitter mode, including partial-frame zero-fill through channel 512.
 - Provides two simple Mega bench controllers that set individual channels over
@@ -209,6 +221,11 @@ The daemon defaults to bridge mode; use `[daemon] mode = "management_only"` or
 `wireless-dmx run --management-only` for management-only operation. The
 management role never emits ordinary DMX, but priority/gate transactions remain
 available.
+
+The manual editor remains available in management-only mode and sends priority
+traffic. Management edits may explicitly change locked channels. A lock only
+blocks ordinary source/retransmitter updates; entering a lock captures the value
+currently shown by the observer. Use the manual editor's `l` key to cycle gates.
 
 Add `-f --port <device>` to flash a selected board. The helpers support
 `--define` for compile-time test settings. Never leave a test-only transmitter

@@ -57,6 +57,13 @@ Example receiver test-pattern build:
 | `TRANSMITTER_LOCK_BRIDGE` | unset | Locks the runtime role to bridge; daemon mode requests for management-only are rejected. |
 | `TRANSMITTER_LOCK_MANAGEMENT_ONLY` | unset | Locks the runtime role to management-only; daemon mode requests for bridge are rejected. |
 
+Management-only images include the optional passive universe observer. No extra
+define is required. The observer listens for ordinary retransmitter fragments,
+reconstructs complete universes, and serves them through the management protocol;
+it does not make the image a normal-DMX source. The host polls at approximately
+4 Hz, so the feature is intended for operator feedback rather than precise
+monitoring.
+
 The integrated transmitter helper defaults to the normal bridge role. Select
 the optional management role with:
 

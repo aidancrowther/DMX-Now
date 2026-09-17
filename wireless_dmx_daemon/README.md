@@ -41,8 +41,10 @@ The daemon has two host-side roles:
 * **Management-only mode** does not start ordinary DMX inputs and rejects
   normal DMX transmission. It retains receiver telemetry, discovery, fail-safe
   configuration, output control, locate, channel gates, and explicit priority
-  traffic. Use this role when a standalone physical-DMX retransmitter owns the
-  normal DMX source.
+  traffic. It also polls an optional best-effort observed universe reconstructed
+  by the management transmitter from the standalone physical-DMX retransmitter.
+  Use this role when a standalone physical-DMX retransmitter owns the normal DMX
+  source.
 
 The role can be selected in the configuration:
 
@@ -72,6 +74,12 @@ wireless-dmx-dashboard --management-only --config configs/default.conf
 Do not start a separate `wireless-dmx run` process at the same time as the
 dashboard using the same transmitter and PTY paths. The dashboard starts and
 stops its own service.
+
+In management-only mode, the manual-universe view displays the latest complete
+observed retransmitter universe when available. It is read-only/best-effort and
+becomes stale when observation reports stop. Locally sent priority values provide
+the fallback until a retransmitter observation arrives. Observed values are never
+submitted to the pacer.
 
 ### Linux foreground launch
 

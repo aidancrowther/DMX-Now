@@ -29,7 +29,11 @@ with matching content and no improper receiver promotion.
 The physical retransmitter may be deployed without a management transmitter.
 When telemetry/control is required, use a separate transmitter locked to
 management-only mode. The management device is optional and must not become a
-competing normal-DMX authority.
+competing normal-DMX authority. The management-only image also provides an
+optional best-effort observed-universe display by listening to retransmitter
+fragments and exporting complete snapshots over its host UART. This display is
+not yet a substitute for dedicated receiver/DMX measurement and should be
+validated separately for radio and UART loss behavior.
 
 For wiring, image roles, flash procedures, port safety, deployment, and both
 standalone and monitored deployment procedures, see

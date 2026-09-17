@@ -21,6 +21,14 @@ complete universe before fragmentation. Receivers promote only complete,
 structurally valid frames and retain the last active universe when fragments or
 wireless updates are lost.
 
+In management-only/retransmitter deployments, the management transmitter also
+passively receives ordinary DMX fragments on the shared ESP-NOW channel. It
+reconstructs complete observations in loop context and exports them as bounded
+multipart management responses at a low polling rate. This observer is optional,
+read-only, and non-authoritative; it cannot receive its own broadcasts, so locally
+sent priority universes provide the display fallback. The daemon preserves local
+values on hard-locked channels when applying retransmitter observations.
+
 Priority traffic has separate pacing, targeting, bounded retries, completion
 ACKs, and optional atomic channel-gate metadata. Management traffic uses
 CRC-protected binary frames on the transmitter UART and bounded multipart

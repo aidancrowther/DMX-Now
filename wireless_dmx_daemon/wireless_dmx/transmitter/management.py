@@ -15,6 +15,7 @@ from ..protocols import (
     MANAGEMENT_SET_RECEIVER_OUTPUT, MANAGEMENT_LOCATE_RECEIVER,
     MANAGEMENT_SET_TRANSMITTER_MODE, MANAGEMENT_TRANSMITTER_MODE,
     MANAGEMENT_GET_TRANSMITTER_MODE,
+    MANAGEMENT_GET_OBSERVED_UNIVERSE, MANAGEMENT_OBSERVED_UNIVERSE,
     MANAGEMENT_RECEIVER_TELEMETRY, MANAGEMENT_SYNC, ProtocolError, crc16_ccitt,
 )
 from ..protocols import DMX_GATE_MASK_SIZE
@@ -59,6 +60,17 @@ class TransmitterModeResponse:
         return self.status == 0
 
 
+@dataclass(frozen=True)
+class ObservedUniversePart:
+    part_index: int
+    part_count: int
+    sequence: int
+    age_ms: int
+    offset: int
+    source_mac: bytes
+    data: bytes
+
+
 def get_telemetry_request() -> bytes:
     body = bytes((MANAGEMENT_PROTO_VERSION, MANAGEMENT_GET_RECEIVER_TELEMETRY, 0, 0))
     return MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body))
@@ -84,6 +96,11 @@ def set_transmitter_mode_request(mode: int) -> bytes:
 
 def get_transmitter_mode_request() -> bytes:
     body = bytes((MANAGEMENT_PROTO_VERSION, MANAGEMENT_GET_TRANSMITTER_MODE, 0, 0))
+    return MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body))
+
+
+def get_observed_universe_request() -> bytes:
+    body = bytes((MANAGEMENT_PROTO_VERSION, MANAGEMENT_GET_OBSERVED_UNIVERSE, 0, 0))
     return MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body))
 
 
@@ -135,7 +152,7 @@ def _frame(payload: bytes, opcode: int = MANAGEMENT_RECEIVER_TELEMETRY) -> bytes
     return MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body))
 
 
-def parse_management_frame(frame: bytes) -> TelemetryReportPart:
+def parse_management_frame(frame: bytes):
     if len(frame) < 8 or frame[:2] != MANAGEMENT_SYNC:
         raise ProtocolError("invalid management frame")
     version, opcode = frame[2:4]
@@ -165,6 +182,15 @@ def parse_management_frame(frame: bytes) -> TelemetryReportPart:
         if length != 2:
             raise ProtocolError("invalid transmitter mode response")
         return TransmitterModeResponse(frame[6], frame[7])
+    if opcode == MANAGEMENT_OBSERVED_UNIVERSE:
+        header = struct.Struct("<BBBBIIH6s")
+        if length < header.size:
+            raise ProtocolError("missing observed universe part header")
+        version, index, count, _, sequence, age_ms, offset, source_mac = header.unpack_from(frame, 6)
+        data = frame[6 + header.size:6 + length]
+        if version != 1 or count == 0 or index >= count or offset + len(data) > 512:
+            raise ProtocolError("invalid observed universe part")
+        return ObservedUniversePart(index, count, sequence, age_ms, offset, source_mac, data)
     if opcode != MANAGEMENT_RECEIVER_TELEMETRY:
         raise ProtocolError("unexpected management response")
     if length < PART_HEADER.size:

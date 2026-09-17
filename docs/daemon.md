@@ -82,6 +82,13 @@ mode and timeout. The dashboard also displays the active daemon role; ordinary
 manual transmission is disabled in management-only mode while priority
 transmission remains available for locked-value and gate operations.
 
+In management-only mode, the manual universe view is populated from the latest
+complete universe observed by the management transmitter on the ESP-NOW channel.
+The view is labeled best-effort and reports `LIVE`, `STALE`, or `UNAVAILABLE`
+with source, age, and sequence information. Observation is read-only and never
+feeds the DMX pacer. Before a retransmitter observation is available, the view
+uses the latest local priority universe as a fallback.
+
 ## Dashboard hotkeys
 
 ### Main view
@@ -143,7 +150,7 @@ selector opens with the read-only default baseline selected.
 | `r` | Cycle priority repeat count. |
 | `t` | Cycle priority TTL. |
 | Enter | Send the complete current universe. |
-| `c` | Clear editable channels. |
+| `c` | Clear the manual universe, including locked channels. |
 | `z` | Reset editable channels to zero without transmitting. |
 | `u` | Toggle full-universe view. |
 | `g` | Toggle grid view. |
@@ -158,6 +165,14 @@ existing behavior of sending the complete manual universe.
 
 Priority sends report the priority ID, expected receivers, acknowledged
 receivers, retry count, and gate-applied receivers when applicable.
+
+Channel gates apply by data origin. Ordinary serial, Art-Net, and retransmitter
+observations cannot overwrite `LOCKED` channels. Explicit management edits can
+change them and priority transmission is the mechanism used to apply those
+changes in management-only mode. When `l` changes a channel into `LOCKED` in
+management-only mode, the current observed value is captured first; later
+observations retain that value. This matches receiver hard-gate behavior while
+allowing the operator to deliberately override a lock.
 
 The main dashboard's `o` and `i` actions open centered receiver-selection menus.
 Use Up/Down or `j`/`k` to move, Space to toggle multiple online receivers, and

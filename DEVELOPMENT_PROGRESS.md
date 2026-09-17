@@ -1254,15 +1254,18 @@ Status: COMPLETE for the validated two-receiver Linux/20 Hz deployment.
 
 The daemon now supports three per-channel states: `OPEN`, `MANAGEMENT_ONLY`,
 and `LOCKED`. Serial and Art-Net frames update only open channels; management
-editing may update open and management-only channels, while locked channels
-reject management writes as well. Mixed frames preserve protected channel
-values while applying permitted changes to the remaining channels.
+editing may update open, management-only, and locked channels. Locked channels
+cannot be changed by ordinary source or retransmitter data. In management-only
+mode, entering `LOCKED` captures the currently observed value before later
+observations are blocked. Mixed frames preserve protected channel values while
+applying permitted changes to the remaining channels.
 
 Gate assignments are persisted in TOML under `[channel_gates]` using
 `management_only` and `locked` channel lists. The universe editor uses `l` to
 cycle the selected channel's gate; `g` retains its existing grid command.
 Automated coverage includes source blocking, management permissions, locked
-value preservation, configuration round trips, validation, and dashboard help.
+value preservation, management-only observed-value capture, configuration round
+trips, validation, and dashboard help.
 
 The receiver-side fail-safe is implemented with a runtime 512-byte normal-write
 permission table and a no-gates fast path. Priority gate metadata is staged
@@ -1284,6 +1287,33 @@ The two-receiver hard-gate path was hardware-validated on 2026-09-10:
 Runtime-only locks reset to open on receiver reboot by design. Native
 Windows/macOS serial support and longer optional soak runs remain non-blocking
 follow-up work.
+
+### Feature 17: Management-only observed universe display
+
+Status: IMPLEMENTED (compile- and host-test verified; hardware observation
+validation pending)
+
+Management-only transmitters passively receive ordinary three-fragment DMX
+universes from the standalone physical-DMX retransmitter using the existing
+QuickESPNow receive path. They reconstruct complete universes in a bounded
+loop-side state machine and expose the latest snapshot through management opcode
+`0x0A` / response opcode `0x8A` as three CRC-protected parts. This does not use
+Wi-Fi promiscuous mode and does not make the management transmitter a competing
+normal-DMX source.
+
+The daemon polls the snapshot at approximately 4 Hz only in management-only
+mode. Observed state is separate from the editable manual universe and never
+enters the DMX pacer. Since a transmitter cannot receive its own ESP-NOW
+broadcast, locally sent priority data supplies the initial display fallback.
+Complete retransmitter observations supersede non-locked channels. Entering a
+hard lock captures the current observed value; later retransmitter updates cannot
+replace it, while explicit management edits remain allowed.
+
+The dashboard labels the display `LIVE`, `STALE`, or `UNAVAILABLE` and shows its
+source, age, and sequence. The feature is optional QoL telemetry: observation
+loss must not affect normal receiver output, retransmission, telemetry, or
+priority control. Host tests and ESP8266 compilation pass; live RF/UART
+validation remains follow-up work.
 
 ### Feature 11: Host Status and Management Interface
 

@@ -8,10 +8,11 @@ sys.path.insert(0, str(Path(__file__).parents[1]))
 from wireless_dmx.models import ReceiverLinkState, ReceiverTelemetry
 from wireless_dmx.models import PriorityAck
 from wireless_dmx.protocols import (MANAGEMENT_PRIORITY_ACKS, MANAGEMENT_RECEIVER_TELEMETRY,
-                                    MANAGEMENT_SYNC, crc16_ccitt)
+                                    MANAGEMENT_OBSERVED_UNIVERSE, MANAGEMENT_SYNC, crc16_ccitt)
 from wireless_dmx.transmitter.management import (ACK_HEADER, ACK_RECORD, ManagementParser,
                                                  PART_HEADER, RECORD, get_priority_acks_request,
                                                   clear_receiver_cache_request, get_telemetry_request,
+                                                   get_observed_universe_request,
                                                     mark_next_priority, set_receiver_failsafe_request,
                                                     set_receiver_output_request, locate_receiver_request)
 from wireless_dmx.transmitter.management import (TransmitterModeResponse, get_transmitter_mode_request,
@@ -40,6 +41,25 @@ def make_part(sequence, index, count, records):
 
 
 class ManagementTests(unittest.TestCase):
+    def test_observed_universe_request_has_management_crc(self):
+        request = get_observed_universe_request()
+        self.assertEqual(request[:2], MANAGEMENT_SYNC)
+        self.assertEqual(request[3], 0x0A)
+        self.assertEqual(crc16_ccitt(request[2:-2]), struct.unpack("<H", request[-2:])[0])
+
+    def test_observed_universe_multipart_parts_round_trip(self):
+        header = struct.Struct("<BBBBIIH6s")
+        universe = bytes(range(256)) * 2
+        parser = ManagementParser()
+        parts = []
+        for index, offset in enumerate((0, 180, 360)):
+            data = universe[offset:offset + (180 if index < 2 else 152)]
+            payload = header.pack(1, index, 3, 0, 77, 12, offset, bytes.fromhex("18fe34000001")) + data
+            body = bytes((1, MANAGEMENT_OBSERVED_UNIVERSE)) + struct.pack("<H", len(payload)) + payload
+            frame = MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body))
+            parts.extend(parser.feed(frame))
+        self.assertEqual([part.offset for part in parts], [0, 180, 360])
+        self.assertEqual(b"".join(part.data for part in parts), universe)
     def test_rds1_summary_parser_and_mask_accounting(self):
         values = parse_summary_line("RDS1 m001=2 m111=5 qrx_evictions=0")
         self.assertEqual(values["m001"], 2)
