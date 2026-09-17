@@ -23,7 +23,7 @@ from .transmitter.management import (CacheClearedResponse, ManagementParser, Pri
                                       locate_receiver_request)
 from .protocols import DMX_GATE_MASK_SIZE
 from .protocols import PRIORITY_COMPLETE_GATE_APPLIED
-from .virtual_serial.linux_pty import LinuxPtyBackend
+from .virtual_serial.factory import create_pty_backend
 from .raw_dmx import RawDmxParser
 
 
@@ -52,9 +52,9 @@ class WirelessDmxService:
         self.enttec = EnttecParser(stats=self.stats)
         self.telemetry = TelemetryStore(config.telemetry_stale_seconds, config.telemetry_offline_seconds)
         self.management = ManagementParser()
-        self.virtual = virtual_backend or (LinuxPtyBackend(config.virtual_port_path)
+        self.virtual = virtual_backend or (create_pty_backend(config.virtual_port_path)
                                            if config.virtual_serial_enabled else NullVirtualBackend())
-        self.raw_virtual = (LinuxPtyBackend(config.raw_virtual_port_path)
+        self.raw_virtual = (create_pty_backend(config.raw_virtual_port_path)
                             if config.raw_virtual_serial_enabled else NullVirtualBackend())
         self.raw_dmx = RawDmxParser(config.raw_virtual_timeout_seconds)
         self.artnet_parser = ArtNetParser(config.artnet_universe, self.stats)

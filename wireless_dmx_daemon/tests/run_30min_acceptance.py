@@ -24,7 +24,7 @@ sys.path.insert(0, str(ROOT))
 from wireless_dmx.app import WirelessDmxService
 from wireless_dmx.enttec.protocol import encode_dmx
 from wireless_dmx.models import DaemonConfig
-from wireless_dmx.virtual_serial.linux_pty import LinuxPtyBackend
+from wireless_dmx.virtual_serial.factory import create_pty_backend
 
 
 def wait_line(port: serial.Serial, prefix: str, timeout: float) -> str:
@@ -127,7 +127,7 @@ def main() -> int:
             priority_retry_cooldown_min_seconds=1.0,
             priority_retry_cooldown_max_seconds=2.5,
         )
-        service = WirelessDmxService(config)
+        service = WirelessDmxService(config, virtual_backend=create_pty_backend(requested_path))
         service.start()
         service.seed_priority_ids(priority_id_seed)
 

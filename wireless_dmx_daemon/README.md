@@ -13,9 +13,10 @@ DMX hardware was designed by me.
 
 ## Initial assumptions
 
-* Initial host platform: Linux.
-* Initial virtual serial implementation: Linux PTYs for ENTTEC-compatible and
-  optional raw-DMX input, isolated behind replaceable backend adapters.
+* Supported host platforms: Linux and macOS.
+* Virtual serial uses a host-selected POSIX PTY backend for ENTTEC-compatible
+  and optional raw-DMX input. Linux uses `LinuxPtyBackend`; macOS uses
+  `MacOSPtyBackend`. Art-Net is available as an equivalent network input.
 * Transmitter connection: configurable serial device, default `/dev/ttyUSB0`.
 * Transmitter serial format: 115200 baud, 8 data bits, no parity, 2 stop bits.
 * Default wireless pacing rate: 20 Hz.
@@ -26,6 +27,10 @@ DMX hardware was designed by me.
 * Telemetry is binary management traffic. The transmitter's text
   telemetry logging is not enabled during normal operation because it would
   corrupt the shared ENTTEC/management UART.
+
+For macOS LaunchAgent installation, see `macos/README.md` and
+`macos/install_launch_agent.py`. macOS serial devices are normally exposed as
+`/dev/cu.*` paths.
 
 ## Architecture
 

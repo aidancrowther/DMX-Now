@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT))
 
 from wireless_dmx.app import WirelessDmxService
 from wireless_dmx.models import DaemonConfig
-from wireless_dmx.virtual_serial.linux_pty import LinuxPtyBackend
+from wireless_dmx.virtual_serial.factory import create_pty_backend
 
 
 def main() -> int:
@@ -42,7 +42,7 @@ def main() -> int:
         priority_retry_cooldown_max_seconds=1.0,
         priority_max_attempts=5,
     )
-    service = WirelessDmxService(config, virtual_backend=LinuxPtyBackend(path))
+    service = WirelessDmxService(config, virtual_backend=create_pty_backend(path))
     seed = (int(time.time()) ^ (os.getpid() << 16)) & 0xFFFFFFFF
     results = []
     service.start()
