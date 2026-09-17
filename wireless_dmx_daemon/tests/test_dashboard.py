@@ -6,15 +6,50 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
+import wireless_dmx.dashboard as dashboard_module
 from wireless_dmx.dashboard import (ADVANCED_COMMANDS, MAIN_COMMANDS, MANUAL_COMMANDS, SETUP_COMMANDS,
                                     DashboardController, bar, build_parser, channel_gate_color,
                                     channel_gate_selected_color,
-                                      manual_priority_locked, priority_feedback, receiver_display_segments, rssi_quality)
+                                      manual_priority_locked, priority_feedback, receiver_display_segments,
+                                      rssi_quality, _read_line_blocking)
 from wireless_dmx.models import ChannelGate, DaemonConfig, DaemonMode, ReceiverLinkState, ReceiverTelemetry
 from wireless_dmx.config import apply_args
 
 
 class DashboardTests(unittest.TestCase):
+    def test_settings_input_uses_blocking_read_mode(self):
+        class FakeWindow:
+            def __init__(self):
+                self.calls = []
+
+            def nodelay(self, value):
+                self.calls.append(("nodelay", value))
+
+            def timeout(self, value):
+                self.calls.append(("timeout", value))
+
+            def getstr(self, y, x, width):
+                self.calls.append(("getstr", y, x, width))
+                return b"value"
+
+        window = FakeWindow()
+        original_echo = dashboard_module.curses.echo
+        original_noecho = dashboard_module.curses.noecho
+        original_curs_set = dashboard_module.curses.curs_set
+        try:
+            dashboard_module.curses.echo = lambda: window.calls.append(("echo",))
+            dashboard_module.curses.noecho = lambda: window.calls.append(("noecho",))
+            dashboard_module.curses.curs_set = lambda value: window.calls.append(("curs_set", value))
+            self.assertEqual(_read_line_blocking(window, 5, 10, 80), "value")
+        finally:
+            dashboard_module.curses.echo = original_echo
+            dashboard_module.curses.noecho = original_noecho
+            dashboard_module.curses.curs_set = original_curs_set
+        self.assertIn(("nodelay", False), window.calls)
+        self.assertIn(("timeout", -1), window.calls)
+        self.assertIn(("nodelay", True), window.calls)
+        self.assertIn(("timeout", 250), window.calls)
+
     def test_dashboard_parser_defaults(self):
         args = build_parser().parse_args([])
         self.assertEqual(args.mega_port, "/dev/ttyUSB1")
@@ -137,6 +172,8 @@ class DashboardTests(unittest.TestCase):
         self.assertNotIn("[i] locate", MANUAL_COMMANDS)
         self.assertIn("[q] quit", MANUAL_COMMANDS)
         self.assertIn("[w]", SETUP_COMMANDS)
+        self.assertIn("[e] edit", SETUP_COMMANDS)
+        self.assertIn("[a] Save As", SETUP_COMMANDS)
         self.assertIn("[q] quit", SETUP_COMMANDS)
         self.assertIn("[x]", ADVANCED_COMMANDS)
         self.assertIn("[l]", MANUAL_COMMANDS)

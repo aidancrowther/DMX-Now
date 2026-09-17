@@ -642,6 +642,7 @@ def render_setup(stdscr, controller: DashboardController, selected: int, message
         _safe_add(stdscr, row, 3, f"{label:<28} {field_value(controller.config, index)}", attr)
     if message:
         _safe_add(stdscr, height - 3, 2, message, color_attr("warning", True))
+    _safe_add(stdscr, height - 2, 2, SETUP_COMMANDS, color_attr("accent", True))
     if Path(controller.config_path).name in ("default.conf", "config.example.toml"):
         _safe_add(stdscr, height - 1, 2, f"{Path(controller.config_path).name} is read-only; use [a] Save As", color_attr("warning", True))
     stdscr.refresh()
@@ -1057,19 +1058,20 @@ def run_dashboard(stdscr, controller: DashboardController) -> None:
                 setup_selected = min(len(EDITABLE_FIELDS) - 1, setup_selected + 1)
             elif key in (ord("e"), ord("E")):
                 label, _, _ = EDITABLE_FIELDS[setup_selected]
-                curses.echo()
-                curses.curs_set(1)
-                _safe_add(stdscr, height - 1, 2, f"Enter {label}: ")
+                prompt = f"Enter {label}: "
+                stdscr.move(height - 1, 0)
+                stdscr.clrtoeol()
+                _safe_add(stdscr, height - 1, 2, prompt, color_attr("accent", True), width - 4)
                 stdscr.refresh()
                 try:
-                    text = stdscr.getstr(height - 1, min(width - 2, 2 + len(label) + 8), 80).decode()
+                    # The dashboard normally uses nodelay()/a short timeout.
+                    # Use the blocking input helper here or getstr() returns
+                    # immediately with an empty value when `e` is pressed.
+                    text = _read_line_blocking(stdscr, height - 1, 2 + len(prompt), 80)
                     controller.config = update_field(controller.config, setup_selected, text)
                     setup_message = f"updated {label}"
                 except (ValueError, curses.error) as exc:
                     setup_message = f"invalid value: {exc}"
-                finally:
-                    curses.noecho()
-                    curses.curs_set(0)
             elif key in (ord("w"), ord("W")):
                 try:
                     controller.save_configuration()
