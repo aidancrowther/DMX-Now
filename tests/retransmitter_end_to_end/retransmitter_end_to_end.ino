@@ -28,13 +28,18 @@
 enum SourceTxState { SOURCE_TX_IDLE, SOURCE_TX_BREAK, SOURCE_TX_DATA, SOURCE_TX_DONE };
 
 enum GeneratorPattern { GENERATOR_CONST, GENERATOR_RAMP, GENERATOR_SHORT,
-                        GENERATOR_DYNAMIC, GENERATOR_DYNAMIC_SHORT };
+                        GENERATOR_DYNAMIC, GENERATOR_DYNAMIC_SHORT,
+                        GENERATOR_GROWING };
 enum RecordState { RECORD_IDLE, RECORD_SETTLE, RECORD_MEASURE };
 
 static GeneratorPattern generatorPattern = GENERATOR_CONST;
 static uint16_t generatorSlots = DMX_SLOTS;
 static uint8_t generatorBase = 0;
 static uint8_t dynamicEpoch = 0;
+static uint16_t growthEndSlots = DMX_SLOTS;
+static uint16_t growthSlots = 24;
+static unsigned long growthStepMs = 1000UL;
+static unsigned long nextGrowthStepAt = 0;
 static volatile SourceTxState sourceTxState = SOURCE_TX_IDLE;
 static volatile uint16_t sourceTxChannel = 0;
 static volatile uint16_t sourceLastQueuedChannel = 0;
@@ -116,12 +121,20 @@ static void setExpected(void) {
          * the fixed body keeps this harness from manufacturing invalid input
          * while still exercising dynamic retransmission data. */
         else if (generatorPattern == GENERATOR_DYNAMIC ||
-                 generatorPattern == GENERATOR_DYNAMIC_SHORT) {
-            expected[channel] = channel == 1
-                ? dynamicEpoch
-                : (uint8_t)(generatorBase + dynamicEpoch * 29U +
-                            channel * 37U + (channel >> 3) * 11U);
-            if (generatorPattern == GENERATOR_DYNAMIC_SHORT && channel > generatorSlots)
+                 generatorPattern == GENERATOR_DYNAMIC_SHORT ||
+                 generatorPattern == GENERATOR_GROWING) {
+            if (generatorPattern == GENERATOR_GROWING && channel == 2) {
+                expected[channel] = (uint8_t)(growthSlots & 0xFFU);
+            } else if (generatorPattern == GENERATOR_GROWING && channel == 3) {
+                expected[channel] = (uint8_t)(growthSlots >> 8);
+            } else {
+                expected[channel] = channel == 1
+                    ? dynamicEpoch
+                    : (uint8_t)(generatorBase + dynamicEpoch * 29U +
+                                channel * 37U + (channel >> 3) * 11U);
+            }
+            if ((generatorPattern == GENERATOR_DYNAMIC_SHORT ||
+                 generatorPattern == GENERATOR_GROWING) && channel > generatorSlots)
                 expected[channel] = 0;
         } else if (generatorPattern == GENERATOR_SHORT && channel > generatorSlots) expected[channel] = 0;
         else expected[channel] = (uint8_t)(generatorBase + channel - 1);
@@ -145,8 +158,15 @@ static void applyGeneratorAtBoundary(void) {
 
 static void advanceDynamicSourceFrame(void) {
     if (generatorPattern != GENERATOR_DYNAMIC &&
-        generatorPattern != GENERATOR_DYNAMIC_SHORT) return;
+        generatorPattern != GENERATOR_DYNAMIC_SHORT &&
+        generatorPattern != GENERATOR_GROWING) return;
     dynamicEpoch++;
+    if (generatorPattern == GENERATOR_GROWING &&
+        millis() >= nextGrowthStepAt && growthSlots < growthEndSlots) {
+        growthSlots++;
+        generatorSlots = growthSlots;
+        nextGrowthStepAt += growthStepMs;
+    }
     setExpected();
     memcpy(sourceFrame, expected, sizeof(sourceFrame));
 }
@@ -272,7 +292,7 @@ static void emitResult(unsigned long now) {
 }
 
 static void processCommand(char* command, unsigned long now) {
-    unsigned long a = 0, b = 0, c = 0;
+    unsigned long a = 0, b = 0, c = 0, d = 0;
     if (sscanf(command, "GENERATE CONST %lu", &a) == 1 && a <= 255) {
         generatorPattern = GENERATOR_CONST; generatorSlots = DMX_SLOTS; generatorBase = (uint8_t)a;
         applyGeneratorAtBoundary(); Serial.println("ACK GENERATE");
@@ -288,6 +308,18 @@ static void processCommand(char* command, unsigned long now) {
         generatorPattern = GENERATOR_DYNAMIC_SHORT; generatorSlots = (uint16_t)a;
         generatorBase = (uint8_t)b;
         dynamicEpoch = 0; applyGeneratorAtBoundary(); Serial.println("ACK GENERATE");
+    } else if (sscanf(command, "GENERATE GROWING %lu %lu %lu %lu", &a, &b, &c, &d) == 4 &&
+               a >= 24 && a <= DMX_SLOTS && b >= a && b <= DMX_SLOTS &&
+               c >= 100 && c <= 60000 && d <= 255) {
+        generatorPattern = GENERATOR_GROWING;
+        growthSlots = (uint16_t)a;
+        growthEndSlots = (uint16_t)b;
+        growthStepMs = c;
+        generatorSlots = growthSlots;
+        generatorBase = (uint8_t)d;
+        dynamicEpoch = 0;
+        nextGrowthStepAt = millis() + growthStepMs;
+        applyGeneratorAtBoundary(); Serial.println("ACK GENERATE");
     } else if (sscanf(command, "GENERATE SHORT %lu %lu", &a, &b) == 2 &&
                a >= 1 && a <= DMX_SLOTS && b <= 255) {
         generatorPattern = GENERATOR_SHORT; generatorSlots = (uint16_t)a; generatorBase = (uint8_t)b;

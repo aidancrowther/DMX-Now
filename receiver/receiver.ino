@@ -355,6 +355,8 @@ static uint32_t silentSequenceBacktracks = 0;
 static uint32_t silentPromotions = 0;
 static uint32_t silentMatchingPromotions = 0;
 static uint32_t silentCorruptPromotions = 0;
+static uint32_t silentCompleteCandidates = 0;
+static uint32_t silentRejectedComplete = 0;
 static uint32_t silentSourceMismatches = 0;
 static uint32_t silentLastPromotionMs = 0;
 static uint32_t silentMaxPromotionGapMs = 0;
@@ -375,6 +377,7 @@ static uint32_t silentObservedSequences = 0;
 static uint32_t silentUnseenSequences = 0;
 static uint32_t silentLastPacketSequence = 0;
 static bool silentHavePacketSequence = false;
+static bool silentGrowingPattern = false;
 static uint32_t silentRetransmitterDiagnostics = 0;
 static uint32_t silentTxFrameSequence = 0;
 static uint32_t silentTxInputFrames = 0;
@@ -461,12 +464,24 @@ static bool silentPatternMatches(const uint8_t* universe) {
         return false;
     }
     const uint8_t epoch = universe[0];
+    uint16_t expectedSlots = silentPatternSlots;
+    if (silentGrowingPattern) {
+        expectedSlots = (uint16_t)universe[1] | ((uint16_t)universe[2] << 8);
+        if (expectedSlots < 1 || expectedSlots > DMX_UNIVERSE_SIZE) return false;
+    }
     for (uint16_t channel = 1; channel <= DMX_UNIVERSE_SIZE; channel++) {
-        uint8_t expected = channel == 1
-            ? epoch
-            : (uint8_t)(silentPatternBase + epoch * 29U +
-                        channel * 37U + (channel >> 3) * 11U);
-        if (channel > silentPatternSlots) expected = 0;
+        uint8_t expected;
+        if (silentGrowingPattern && channel == 2) {
+            expected = (uint8_t)(expectedSlots & 0xFFU);
+        } else if (silentGrowingPattern && channel == 3) {
+            expected = (uint8_t)(expectedSlots >> 8);
+        } else {
+            expected = channel == 1
+                ? epoch
+                : (uint8_t)(silentPatternBase + epoch * 29U +
+                            channel * 37U + (channel >> 3) * 11U);
+        }
+        if (channel > expectedSlots) expected = 0;
         if (universe[channel - 1] != expected) {
             if (!silentHaveMismatch) {
                 silentFirstMismatchChannel = channel;
@@ -503,6 +518,8 @@ static void resetSilentCapture(void) {
     silentPromotions = 0;
     silentMatchingPromotions = 0;
     silentCorruptPromotions = 0;
+    silentCompleteCandidates = 0;
+    silentRejectedComplete = 0;
     silentSourceMismatches = 0;
     silentLastPromotionMs = 0;
     silentMaxPromotionGapMs = 0;
@@ -551,6 +568,7 @@ static void finishSilentCapture(void) {
     silentCaptureActive = false;
     Serial.print("RDS1 elapsed_ms="); Serial.print(millis() - silentCaptureStartedMs);
     Serial.print(" expected_slots="); Serial.print(silentPatternSlots);
+    Serial.print(" growing="); Serial.print(silentGrowingPattern ? 1 : 0);
     Serial.print(" first_sequence="); Serial.print(silentFirstSequence);
     Serial.print(" last_sequence="); Serial.print(silentLastSequence);
     Serial.print(" sequence_gaps="); Serial.print(silentSequenceGaps);
@@ -558,6 +576,8 @@ static void finishSilentCapture(void) {
     Serial.print(" promotions="); Serial.print(silentPromotions);
     Serial.print(" matching="); Serial.print(silentMatchingPromotions);
     Serial.print(" corrupt="); Serial.print(silentCorruptPromotions);
+    Serial.print(" complete_candidates="); Serial.print(silentCompleteCandidates);
+    Serial.print(" rejected_complete="); Serial.print(silentRejectedComplete);
     Serial.print(" source_mismatches="); Serial.print(silentSourceMismatches);
     Serial.print(" max_gap_ms="); Serial.print(silentMaxPromotionGapMs);
     Serial.print(" ring_overflows="); Serial.print(rxRingOverflow);
@@ -608,6 +628,23 @@ static void finishSilentCapture(void) {
 static void processSilentCommand(char* command) {
     unsigned long base = 0, slots = 0, seconds = 0;
     char mac[18] = {0};
+    if (sscanf(command, "CAPTURE START GROWING %17s %lu %lu %lu", mac, &base, &slots, &seconds) == 4 &&
+        base <= 255 && slots == 0 && seconds >= 1 && seconds <= 3600) {
+        unsigned int octets[6];
+        if (sscanf(mac, "%2x:%2x:%2x:%2x:%2x:%2x", &octets[0], &octets[1],
+                   &octets[2], &octets[3], &octets[4], &octets[5]) == 6) {
+            for (uint8_t i = 0; i < 6; i++) silentExpectedMac[i] = (uint8_t)octets[i];
+            silentPatternBase = (uint8_t)base;
+            silentPatternSlots = DMX_UNIVERSE_SIZE;
+            silentGrowingPattern = true;
+            silentCaptureDurationMs = (uint32_t)seconds * 1000UL;
+            silentCaptureStartedMs = millis();
+            resetSilentCapture();
+            silentCaptureActive = true;
+            Serial.println("ACK CAPTURE START");
+            return;
+        }
+    }
     if (sscanf(command, "CAPTURE START %17s %lu %lu %lu", mac, &base, &slots, &seconds) == 4 &&
         base <= 255 && slots >= 1 && slots <= DMX_UNIVERSE_SIZE && seconds >= 1 && seconds <= 3600) {
         unsigned int octets[6];
@@ -616,6 +653,7 @@ static void processSilentCommand(char* command) {
             for (uint8_t i = 0; i < 6; i++) silentExpectedMac[i] = (uint8_t)octets[i];
             silentPatternBase = (uint8_t)base;
             silentPatternSlots = (uint16_t)slots;
+            silentGrowingPattern = false;
             silentCaptureDurationMs = (uint32_t)seconds * 1000UL;
             silentCaptureStartedMs = millis();
             resetSilentCapture();
@@ -1232,14 +1270,8 @@ static void promoteActive(uint32_t seq) {
         if (silentLastPromotionMs != 0 && now - silentLastPromotionMs > silentMaxPromotionGapMs)
             silentMaxPromotionGapMs = now - silentLastPromotionMs;
         silentLastPromotionMs = now;
-        if (memcmp(stagingSourceMac, silentExpectedMac, 6) != 0) {
-            silentSourceMismatches++;
-        } else if (silentPatternMatches(activeUniverse)) {
-            silentValidationReady = true;
-            silentMatchingPromotions++;
-        } else if (silentValidationReady) {
-            silentCorruptPromotions++;
-        }
+        silentValidationReady = true;
+        silentMatchingPromotions++;
     }
 #endif
 
@@ -1307,6 +1339,20 @@ static void acceptFragment(const uint8_t* pkt, uint32_t seq,
     if (coverageFull() && (stagingUniqueCount == stagingFragmentCount)) {
 #if RECEIVER_DIAGNOSTIC_SILENT_CAPTURE
         finalizeSilentMask(stagingReceivedMask, false, false);
+        silentCompleteCandidates++;
+        /* Content/source validation must happen before promoteActive(). A
+         * complete packet set is not automatically a proper universe: the
+         * staging buffer must pass the diagnostic contract while active data
+         * remains untouched. */
+        if (!silentPatternMatches(stagingUniverse)) {
+            silentCorruptPromotions++;
+            silentRejectedComplete++;
+            stagingActive       = false;
+            stagingReceivedMask = 0;
+            stagingUniqueCount  = 0;
+            coverageClear();
+            return;
+        }
 #endif
 #if RX_VALIDATE_TEST_PATTERN
         const uint16_t badIndex = fullIntegrityCheck(seq);

@@ -16,6 +16,8 @@ sys.path.insert(0, str(ROOT))
 from wireless_dmx.receiver_diagnostic import parse_summary_line
 
 DEFAULT_SLOTS = (24, 25, 100, 235, 236, 237, 255, 256, 257, 471, 472, 473, 511, 512)
+LONG_SLOTS = (24, 25, 100, 200, 235, 236, 237, 255, 256, 257,
+              300, 400, 471, 472, 473, 500, 511, 512)
 TRANSITIONS = ((512, 24), (24, 512), (512, 236), (236, 512),
                (473, 471), (471, 473), (257, 255), (255, 257))
 
@@ -131,9 +133,23 @@ def run_case(mega: serial.Serial, receiver: serial.Serial, slots: int,
         "has_rds1": rds_line is not None,
         "has_data": promotions > 0,
         "source_rate_ok": float(result.get("source_rate_hz", 0)) >= (39.5 if slots == 512 else 43.0),
-        "promotion_rate_ok": rate >= (18.0 if seconds >= 20 else 15.0),
+        # 20 Hz is the target; 10 Hz is the minimum acceptance floor.
+        "promotion_rate_ok": rate >= 10.0,
+        "target_rate_ok": rate >= (18.0 if seconds >= 20 else 15.0),
         "matching_ok": matching >= int(promotions * 0.98),
-        "corrupt_zero": int(rds.get("corrupt", 0)) == 0,
+        "promotion_integrity_ok": (
+            int(rds.get("promotions", 0)) == int(rds.get("matching", 0)) and
+            int(rds.get("complete_candidates", 0)) ==
+            int(rds.get("promotions", 0)) + int(rds.get("rejected_complete", 0))
+        ),
+        # `corrupt` now counts complete candidates rejected before promotion;
+        # it is expected to equal rejected_complete, not to remain zero.
+        "rejection_accounting_ok": (
+            int(rds.get("corrupt", 0)) == int(rds.get("rejected_complete", 0))
+        ),
+        "improper_promotions_zero": (
+            int(rds.get("promotions", 0)) == int(rds.get("matching", 0))
+        ),
         "source_mismatches_zero": int(rds.get("source_mismatches", 0)) == 0,
         "backtracks_zero": int(rds.get("sequence_backtracks", 0)) == 0,
         "queues_healthy": all(int(rds.get(k, 0)) == 0 for k in
@@ -145,6 +161,54 @@ def run_case(mega: serial.Serial, receiver: serial.Serial, slots: int,
             "rds1_line": rds_line, "result": result, "rds1": rds,
             "promotion_rate_hz": rate, "fragment_counts": fragments,
             "checks": checks, "passed": all(checks.values())}
+
+
+def run_growing_case(mega: serial.Serial, receiver: serial.Serial, seconds: int,
+                     base: int, source_mac: str, start: int = 24,
+                     end: int = 512, step_ms: int = 1000) -> dict[str, object]:
+    mega.reset_input_buffer()
+    command(mega, "STOP", b"ACK STOP")
+    time.sleep(0.25)
+    command(mega, f"GENERATE GROWING {start} {end} {step_ms} {base}", b"ACK GENERATE")
+    receiver.reset_input_buffer()
+    receiver.write(f"CAPTURE START GROWING {source_mac} {base} 0 {seconds + 3}\r".encode())
+    receiver.flush()
+    read_until(receiver, b"ACK CAPTURE START", 8)
+    mega.write(f"START 3 {seconds}\n".encode())
+    mega.flush()
+    read_until(mega, b"ACK START", 8)
+    time.sleep(3 + seconds + 1)
+    mega_data = bytearray()
+    while mega.in_waiting: mega_data.extend(mega.read(256))
+    receiver_data = bytearray()
+    while receiver.in_waiting: receiver_data.extend(receiver.read(256))
+    if b"RESULT " not in mega_data:
+        try: mega_data.extend(read_until(mega, b"RESULT ", 5))
+        except TimeoutError: pass
+    if b"RDS1 " not in receiver_data:
+        try: receiver_data.extend(read_summary(receiver, b"RDS1 ", 5))
+        except TimeoutError: pass
+    result_line = last_line(bytes(mega_data), b"RESULT ")
+    rds_line = last_line(bytes(receiver_data), b"RDS1 ")
+    result, rds = parse_values(result_line), parse_values(rds_line)
+    elapsed = int(rds.get("elapsed_ms", 0)); promotions = int(rds.get("promotions", 0))
+    matching = int(rds.get("matching", 0))
+    rate = promotions / max(0.001, elapsed / 1000.0)
+    checks = {
+        "has_result": result_line is not None, "has_rds1": rds_line is not None,
+        "has_data": promotions > 0, "promotion_rate_ok": rate >= 10.0,
+        "target_rate_ok": rate >= 18.0, "matching_ok": matching >= int(promotions * .98),
+        "promotion_integrity_ok": int(rds.get("complete_candidates", 0)) == promotions + int(rds.get("rejected_complete", 0)) and promotions == matching,
+        "rejection_accounting_ok": int(rds.get("corrupt", 0)) == int(rds.get("rejected_complete", 0)),
+        "improper_promotions_zero": promotions == matching,
+        "source_mismatches_zero": int(rds.get("source_mismatches", 0)) == 0,
+        "backtracks_zero": int(rds.get("sequence_backtracks", 0)) == 0,
+        "queues_healthy": all(int(rds.get(k, 0)) == 0 for k in ("qrx_evictions", "qrx_push_failures", "ring_overflows")),
+    }
+    return {"mode": "growing", "seconds": seconds, "result_line": result_line,
+            "rds1_line": rds_line, "result": result, "rds1": rds,
+            "promotion_rate_hz": rate, "checks": checks,
+            "passed": all(checks.values())}
 
 
 def main() -> int:
@@ -161,8 +225,10 @@ def main() -> int:
     parser.add_argument("--transitions-only", action="store_true")
     parser.add_argument("--soaks", action="store_true")
     parser.add_argument("--all", action="store_true")
+    parser.add_argument("--long-matrix", action="store_true")
+    parser.add_argument("--growing", action="store_true")
     args = parser.parse_args()
-    selected = [args.preflight_only, args.matrix_only, args.transitions_only, args.soaks, args.all]
+    selected = [args.preflight_only, args.matrix_only, args.transitions_only, args.soaks, args.all, args.long_matrix, args.growing]
     if sum(selected) > 1:
         parser.error("phase selectors are mutually exclusive")
     if not any(selected):
@@ -172,6 +238,10 @@ def main() -> int:
     output.mkdir(parents=True, exist_ok=True)
     if args.preflight_only:
         cases = [(236, 30), (512, 30)]
+    elif args.long_matrix:
+        cases = [(s, 300) for s in LONG_SLOTS]
+    elif args.growing:
+        cases = [("growing", 60)]
     elif args.matrix_only:
         cases = [(s, 30) for s in DEFAULT_SLOTS]
     elif args.transitions_only:
@@ -181,7 +251,7 @@ def main() -> int:
     else:
         cases = ([(236, 30), (512, 30)] + [(s, 30) for s in DEFAULT_SLOTS] +
                  [(new, 30) for _, new in TRANSITIONS] + [(512, 900), (24, 600), (237, 600)])
-    phase = "preflight" if args.preflight_only else "matrix" if args.matrix_only else "transitions" if args.transitions_only else "soaks" if args.soaks else "all"
+    phase = "preflight" if args.preflight_only else "long-matrix" if args.long_matrix else "growing" if args.growing else "matrix" if args.matrix_only else "transitions" if args.transitions_only else "soaks" if args.soaks else "all"
     report: dict[str, object] = {"timestamp": stamp, "phase": phase, "receiver_baud": args.receiver_baud, "cases": []}
     mega = receiver = None
     try:
@@ -193,7 +263,10 @@ def main() -> int:
         for index, (slots, seconds) in enumerate(cases, 1):
             print(f"CASE {index}/{len(cases)} slots={slots} seconds={seconds}", flush=True)
             try:
-                case = run_case(mega, receiver, slots, seconds, args.base, args.change_ms, args.source_mac)
+                if slots == "growing":
+                    case = run_growing_case(mega, receiver, seconds, args.base, args.source_mac)
+                else:
+                    case = run_case(mega, receiver, slots, seconds, args.base, args.change_ms, args.source_mac)
             except Exception as exc:
                 case = {"slots": slots, "seconds": seconds, "passed": False, "harness_failure": str(exc)}
             report["cases"].append(case)

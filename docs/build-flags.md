@@ -72,10 +72,11 @@ The re-transmitter owns UART0/GPIO3 for physical DMX input and must not call
 `Serial.begin()` or write diagnostics to that UART. The DMXUART experiment uses
 foreground-polled `DMXUART::read()`, sends only normal three-fragment DMX
 packets, and waits for its first complete physical universe before transmitting.
-The retransmitter pauses DMX UART RX while it queues and drains one complete
-three-fragment wireless universe, then resumes RX before waiting the configured
-wireless interval. This intentionally permits physical-DMX frames to be lost
-while protecting wireless transmission.
+The retransmitter keeps DMX UART RX active while it queues and drains one
+complete three-fragment wireless universe. Each burst uses an immutable snapshot
+so newly received physical-DMX frames cannot mix with the in-flight universe.
+The previous pause behavior remains available for A/B testing with
+`RETRANSMITTER_PAUSE_RX_DURING_TX=1`.
 
 ```bash
 ./helpers/flash_retransmitter.sh
@@ -90,8 +91,15 @@ retransmitter mode. Command-line flags remain preferred for repeatable builds.
 Relevant definitions are
 `RETRANSMITTER_ESPNOW_CHANNEL`, `RETRANSMITTER_UNIVERSE_ID`,
 `RETRANSMITTER_WIRELESS_REFRESH_HZ`, `RETRANSMITTER_TX_DRAIN_TIMEOUT_MS`,
-`RETRANSMITTER_TX_OVERHEAD_MS`, `RETRANSMITTER_DIAGNOSTICS`, and
-`RETRANSMITTER_DIAGNOSTIC_BROADCAST`. The normal queued retransmitter pacing
+`RETRANSMITTER_TX_OVERHEAD_MS`, `RETRANSMITTER_DIAGNOSTICS`,
+`RETRANSMITTER_DIAGNOSTIC_BROADCAST`, and `RETRANSMITTER_PAUSE_RX_DURING_TX`.
+The A/B scheduler flags `RETRANSMITTER_SERIALIZE_FRAGMENTS`,
+`RETRANSMITTER_FRAGMENT_SPACING_MS`, `RETRANSMITTER_DISABLE_WIFI_SLEEP`, and
+`RETRANSMITTER_DIAGNOSTIC_IDLE_POLL_ONLY` are also available through the
+generic `--define` option. Serialized mode admits one ESP-NOW fragment only
+when the transport is idle, spaces fragment deadlines explicitly, and uses an
+absolute universe cadence; it never advances past a busy fragment admission.
+The normal queued retransmitter pacing
 uses the requested interval minus `RETRANSMITTER_TX_OVERHEAD_MS`, measured from
 the previous wireless drain completion.
 It also invokes Arduino CLI with `--clean` so each flashed image is rebuilt from
@@ -111,6 +119,27 @@ received slot count through channel 512. The helper is:
 ```
 
 Malformed frames and nonzero start codes remain rejected by the input library.
+
+## Receiver promotion invariant
+
+The receiver stages every normal universe in a separate 512-byte buffer. A
+universe is eligible for promotion only after all canonical fragment tiles cover
+all 512 bytes for one sequence. Malformed, overlapping, incomplete, stale, and
+duplicate fragment traffic cannot alter the active universe. Silent diagnostic
+images add deterministic content/source validation **before** the staging buffer
+is swapped into the active buffer; rejected complete candidates therefore do not
+increment `completeUniverses`, change the active sequence, or reach the DMX
+output. `RDS1` reports `complete_candidates`, `rejected_complete`, `promotions`,
+and `matching` so the invariant can be checked after every test. In silent
+diagnostic mode, `corrupt` and `rejected_complete` count complete candidates
+that were rejected before promotion; they are not promoted-corruption counts.
+The required safety invariant is `promotions == matching` and
+`complete_candidates == promotions + rejected_complete`.
+
+The deeper validation sequence should include normal 512-slot controls followed
+by isolated fault-injection runs for dropped, duplicated, reordered, corrupted,
+stale, and malformed fragments. Each fault run must show no new promotion of an
+improper universe, while a subsequent valid frame must still promote normally.
 
 The processing cost is negligible because the retransmitter already maintains
 and clears a 512-channel destination buffer. Partial operation depends on

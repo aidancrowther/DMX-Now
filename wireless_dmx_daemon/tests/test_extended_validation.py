@@ -16,6 +16,11 @@ class ExtendedValidationTests(unittest.TestCase):
                                                  255, 256, 257, 471, 472, 473,
                                                  511, 512))
 
+    def test_long_matrix_adds_full_universe_boundaries(self):
+        self.assertIn(24, MODULE.LONG_SLOTS)
+        self.assertIn(300, MODULE.LONG_SLOTS)
+        self.assertIn(512, MODULE.LONG_SLOTS)
+
     def test_parse_helpers_extract_protocol_lines(self):
         self.assertEqual(MODULE.last_line(b"noise\nRESULT source_rate_hz=40.95\n", b"RESULT "),
                          "RESULT source_rate_hz=40.95")
@@ -43,6 +48,15 @@ class ExtendedValidationTests(unittest.TestCase):
     def test_receiver_reset_is_a_separate_once_per_invocation_operation(self):
         self.assertEqual(MODULE.reset_receiver.__name__, "reset_receiver")
         self.assertEqual(MODULE.command.__name__, "command")
+
+    def test_promotion_integrity_requires_only_validated_candidates_to_promote(self):
+        values = MODULE.parse_values(
+            "RDS1 promotions=10 matching=10 complete_candidates=12 rejected_complete=2 corrupt=2"
+        )
+        self.assertEqual(values["promotions"], values["matching"])
+        self.assertEqual(values["complete_candidates"],
+                         values["promotions"] + values["rejected_complete"])
+        self.assertEqual(values["corrupt"], values["rejected_complete"])
 
 
 if __name__ == "__main__":

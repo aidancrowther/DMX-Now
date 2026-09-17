@@ -44,6 +44,18 @@
 #ifndef RETRANSMITTER_DMX_SLOT_STABILITY_FRAMES
 #define RETRANSMITTER_DMX_SLOT_STABILITY_FRAMES 3
 #endif
+#ifndef RETRANSMITTER_PAUSE_RX_DURING_TX
+#define RETRANSMITTER_PAUSE_RX_DURING_TX 0
+#endif
+#ifndef RETRANSMITTER_SERIALIZE_FRAGMENTS
+#define RETRANSMITTER_SERIALIZE_FRAGMENTS 0
+#endif
+#ifndef RETRANSMITTER_DISABLE_WIFI_SLEEP
+#define RETRANSMITTER_DISABLE_WIFI_SLEEP 0
+#endif
+#ifndef RETRANSMITTER_DIAGNOSTIC_IDLE_POLL_ONLY
+#define RETRANSMITTER_DIAGNOSTIC_IDLE_POLL_ONLY 0
+#endif
 #if RETRANSMITTER_WIRELESS_REFRESH_HZ == 0
 #error RETRANSMITTER_WIRELESS_REFRESH_HZ must be positive
 #endif
@@ -68,11 +80,6 @@ static uint32_t inputInvalidLengths = 0;
 static uint8_t g_universe[DMX_UNIVERSE_SIZE];
 static uint8_t g_txUniverse[DMX_UNIVERSE_SIZE];
 static uint32_t g_frameSequence = 0;
-/* A valid universe may remain available after it has been transmitted, but a
- * new wireless cycle must not reuse it until a fresh physical-DMX frame has
- * completed. This matters when a 236-slot source changes to 512 slots: the
- * old universe is intentionally zero-filled after slot 236. */
-static bool freshUniverseAvailable = false;
 static volatile uint8_t sendConfirmations = 0;
 static volatile uint32_t txCallbackSuccess = 0;
 static volatile uint32_t txCallbackFailure = 0;
@@ -105,8 +112,12 @@ static const uint8_t txFragmentOrder[DMX_FRAGMENTS_PER_UNIVERSE] = {0, 1, 2};
 #endif
 static bool haveUniverse = false;
 static unsigned long lastFrameGenerationTime = 0;
+static unsigned long nextFrameAt = 0;
+static unsigned long nextFragmentAt = 0;
 static unsigned long stateAt = 0;
 static uint8_t currentFragment = 0;
+static const uint8_t retransmitterBroadcastAddress[6] =
+    {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 enum TxState { TX_WAIT_INPUT, TX_IDLE, TX_SENDING, TX_DRAIN };
 static TxState txState = TX_WAIT_INPUT;
@@ -116,6 +127,8 @@ static TxState txState = TX_WAIT_INPUT;
 static constexpr unsigned long TX_INTERVAL_MS =
     (1000UL / RETRANSMITTER_WIRELESS_REFRESH_HZ > RETRANSMITTER_TX_OVERHEAD_MS)
         ? (1000UL / RETRANSMITTER_WIRELESS_REFRESH_HZ - RETRANSMITTER_TX_OVERHEAD_MS) : 0UL;
+static constexpr unsigned long FRAME_PERIOD_MS =
+    1000UL / RETRANSMITTER_WIRELESS_REFRESH_HZ;
 static bool dmxRxPaused = false;
 
 static void pollDmxInput(void) {
@@ -164,10 +177,16 @@ static void pollDmxInput(void) {
      * stable frame into dmxReadBuffer in foreground context. */
     memcpy(g_universe, dmxReadBuffer, (size_t)slots);
     memset(g_universe + slots, 0, DMX_UNIVERSE_SIZE - (size_t)slots);
+#if RETRANSMITTER_PAUSE_RX_DURING_TX
     captureRequested = false;
+#else
+    /* Continuous-RX mode always accepts the latest complete physical frame.
+     * g_universe is only updated here in loop context, while g_txUniverse is
+     * the already-latched snapshot used by the wireless burst. */
+    captureRequested = true;
+#endif
     inputFramesReceived++;
     haveUniverse = true;
-    freshUniverseAvailable = true;
 }
 
 static void submitFragment(uint8_t fragmentIndex) {
@@ -230,6 +249,9 @@ void setup(void) {
     dmxInput = &input;
     WiFi.mode(WIFI_STA);
     WiFi.disconnect(false);
+#if RETRANSMITTER_DISABLE_WIFI_SLEEP
+    WiFi.setSleep(false);
+#endif
     /* Use asynchronous QuickESPNow. Fragment serialization is enforced by
      * the library's packet-aware queue/in-flight state, not by the sketch's
      * global and untagged send callback. */
@@ -256,22 +278,53 @@ void loop(void) {
         return;
     }
 #endif
+#if RETRANSMITTER_DIAGNOSTICS && RETRANSMITTER_DIAGNOSTIC_IDLE_POLL_ONLY
+    if (txState == TX_IDLE &&
+        now - lastFrameGenerationTime < TX_INTERVAL_MS &&
+        quickEspNow.readyForSerializedSend() &&
+        now - lastDiagnosticsAt >= DIAGNOSTICS_INTERVAL_MS) {
+        lastDiagnosticsAt = now;
+        return;
+    }
+#endif
     if (!haveUniverse) {
         txState = TX_WAIT_INPUT;
         return;
     }
     if (txState == TX_WAIT_INPUT) {
-        if (!freshUniverseAvailable) return;
-        freshUniverseAvailable = false;
         lastFrameGenerationTime = now;
         txState = TX_IDLE;
     }
     switch (txState) {
         case TX_IDLE:
+#if RETRANSMITTER_SERIALIZE_FRAGMENTS
+            if ((long)(now - nextFrameAt) >= 0) {
+                if (!quickEspNow.readyForSerializedSend()) {
+                    txMissedDeadlines++;
+                    nextFrameAt += FRAME_PERIOD_MS;
+                    break;
+                }
+                memcpy(g_txUniverse, g_universe, sizeof(g_txUniverse));
+#if RETRANSMITTER_PAUSE_RX_DURING_TX
+                captureRequested = false;
+                dmxRxPaused = dmxInput->pauseRx();
+                if (!dmxRxPaused) {
+                    captureRequested = true;
+                    break;
+                }
+#endif
+                currentFragment = 0;
+                sendConfirmations = 0;
+                nextFragmentAt = now;
+                nextFrameAt += FRAME_PERIOD_MS;
+                txState = TX_SENDING;
+            }
+#else
             if (now - lastFrameGenerationTime >= TX_INTERVAL_MS) {
                 memcpy(g_txUniverse, g_universe, sizeof(g_txUniverse));
-                /* The current universe is latched above. Capture exactly one
-                 * subsequent physical-DMX frame for the next wireless cycle. */
+                /* g_txUniverse is the immutable snapshot for this burst. RX
+                 * remains active by default while the burst is transmitted. */
+#if RETRANSMITTER_PAUSE_RX_DURING_TX
                 captureRequested = false;
                 dmxRxPaused = dmxInput->pauseRx();
                 if (!dmxRxPaused) {
@@ -279,21 +332,60 @@ void loop(void) {
                     txState = TX_IDLE;
                     break;
                 }
+#endif
                 currentFragment = 0;
                 sendConfirmations = 0;
                 stateAt = now;
                 txState = TX_SENDING;
             }
+#endif
             break;
         case TX_SENDING:
+#if RETRANSMITTER_SERIALIZE_FRAGMENTS
+            if (currentFragment < DMX_FRAGMENTS_PER_UNIVERSE &&
+                (long)(now - nextFragmentAt) >= 0) {
+                const uint8_t fragment = txFragmentOrder[currentFragment];
+                const uint16_t offset = static_cast<uint16_t>(fragment) * DMX_PAYLOAD_SIZE;
+                const uint8_t payloadLength = dmx_fragment_payload_length(offset, DMX_UNIVERSE_SIZE);
+                uint8_t packetBuffer[DMX_TOTAL_PACKET_SIZE];
+                DmxFragmentPacket packet;
+                packet.magic = DMX_PACKET_MAGIC;
+                packet.protocolVersion = DMX_PROTO_VERSION;
+                packet.packetType = DMX_PACKET_TYPE;
+                packet.universeId = RETRANSMITTER_UNIVERSE_ID;
+                packet.frameSequence = g_frameSequence;
+                packet.fragmentIndex = fragment;
+                packet.fragmentCount = DMX_FRAGMENTS_PER_UNIVERSE;
+                packet.dataOffset = offset;
+                packet.payloadLength = payloadLength;
+                memcpy(packetBuffer, &packet, sizeof(packet));
+                memcpy(packetBuffer + DMX_HEADER_SIZE, g_txUniverse + offset, payloadLength);
+                const comms_send_error_t result = quickEspNow.sendSerialized(
+                    retransmitterBroadcastAddress,
+                    packetBuffer, DMX_HEADER_SIZE + payloadLength);
+                if (result == COMMS_SEND_OK) {
+                    txEnqueueAttempts[fragment]++;
+                    txEnqueueSuccess[fragment]++;
+                    currentFragment++;
+                    nextFragmentAt += RETRANSMITTER_FRAGMENT_SPACING_MS;
+                } else {
+                    txSerializedBusySkips++;
+                }
+            }
+            if (currentFragment >= DMX_FRAGMENTS_PER_UNIVERSE) {
+                txState = TX_DRAIN;
+                stateAt = now;
+            }
+#else
             if (currentFragment < DMX_FRAGMENTS_PER_UNIVERSE) {
                 /* Queue each fragment once. QuickESPNow serializes these
-                 * queued sends while DMXUART RX remains paused. */
+                 * queued sends while g_txUniverse remains immutable. */
                 submitFragment(txFragmentOrder[currentFragment++]);
             } else {
                 stateAt = now;
                 txState = TX_DRAIN;
             }
+#endif
             break;
         case TX_DRAIN:
             if (sendConfirmations >= DMX_FRAGMENTS_PER_UNIVERSE ||
@@ -302,12 +394,11 @@ void loop(void) {
                     dmxInput->resumeRx();
                     dmxRxPaused = false;
                 }
-                captureRequested = true;
                 g_frameSequence++;
                 /* Wait for a complete fresh physical-DMX frame before the
                  * next burst. Elapsed time alone is not a valid boundary for
                  * a full 512-slot frame. */
-                txState = TX_WAIT_INPUT;
+                txState = TX_IDLE;
             }
             break;
         case TX_WAIT_INPUT:
