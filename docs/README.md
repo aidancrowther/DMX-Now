@@ -13,6 +13,7 @@ protocol, hardware, fail-safe, and testing information.
 - `build-flags.md` — firmware compile-time options and test hooks.
 - `receiver-failsafe.md` — fail-safe modes, timing, configuration, and recovery.
 - `hardware.md` — receiver electronics, pins, power, and programming.
+- `retransmitter-deployment.md` — standalone and management-monitored physical-DMX retransmitter deployment.
 - `testing.md` — automated, raw-DMX timeout, and generic hardware validation procedures.
 - `lab-validation.md` — setup-specific qualification evidence.
 - `priority-packet-substantial-completion.md` — priority/gating completion record.

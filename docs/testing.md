@@ -115,3 +115,25 @@ Diagnostic records have the format `RDX1`, record type, little-endian frame
 sequence, six-byte source MAC, 512 promoted channel bytes, and CRC16. Always
 record and review the source MAC when more than one normal-DMX transmitter may
 be powered or within radio range.
+
+## Extended physical retransmitter validation
+
+The low-rate/extended runner is:
+
+```text
+wireless_dmx_daemon/tests/run_retransmitter_extended_validation.py
+```
+
+The standalone physical retransmitter production target is 10 Hz. The native
+integrated transmitter production target is 20 Hz. The receiver
+silent-capture summary enforces the promotion invariant:
+
+```text
+promotions == matching
+complete_candidates == promotions + rejected_complete
+corrupt == rejected_complete
+```
+
+Incomplete, malformed, stale, duplicate, and content-invalid universes must
+never replace the active receiver universe. The retransmitter source MAC must
+be operator-confirmed, not inferred from a host USB programmer.

@@ -47,7 +47,7 @@ Example receiver test-pattern build:
 
 | Definition | Default | Purpose |
 |---|---:|---|
-| `WIRELESS_REFRESH_HZ` | `20` | Normal wireless refresh rate. The validated production rate is 20 Hz. |
+| `WIRELESS_REFRESH_HZ` | `20` | Native/integrated transmitter production refresh rate. The standalone physical retransmitter uses its own 10 Hz default. |
 | `WIRELESS_PRIORITY_REFRESH_HZ` | `1` | Priority fragment cadence. |
 | `WIRELESS_TX_OVERHEAD_MS` | `27` | Measured normal-frame overhead used by budget pacing. |
 | `WIRELESS_TX_DRAIN_TIMEOUT_MS` | `100` | Bound for a stuck ESP-NOW transmit drain. |
@@ -80,7 +80,7 @@ while protecting wireless transmission.
 ```bash
 ./helpers/flash_retransmitter.sh
 ./helpers/flash_retransmitter.sh --menuconfig
-./helpers/flash_retransmitter.sh --channel 1 --universe 1 --rate 20
+./helpers/flash_retransmitter.sh --channel 1 --universe 1 --rate 10
 ```
 
 The helper is compile-only unless `-f` is supplied. `--menuconfig` is a small
@@ -91,9 +91,11 @@ Relevant definitions are
 `RETRANSMITTER_ESPNOW_CHANNEL`, `RETRANSMITTER_UNIVERSE_ID`,
 `RETRANSMITTER_WIRELESS_REFRESH_HZ`, `RETRANSMITTER_TX_DRAIN_TIMEOUT_MS`,
 `RETRANSMITTER_TX_OVERHEAD_MS`, `RETRANSMITTER_DIAGNOSTICS`, and
-`RETRANSMITTER_DIAGNOSTIC_BROADCAST`. The normal queued retransmitter pacing
-uses the requested interval minus `RETRANSMITTER_TX_OVERHEAD_MS`, measured from
-the previous wireless drain completion.
+The production retransmitter uses an absolute 10 Hz universe deadline. It waits
+for a fresh complete physical-DMX frame, sends when the deadline is due, and
+rebases one period forward after an overrun instead of compressing catch-up
+frames. This prevents stale-frame reuse and avoids adding a second full pacing
+interval after physical-DMX capture.
 It also invokes Arduino CLI with `--clean` so each flashed image is rebuilt from
 the requested compile options rather than relying on a shared sketch cache.
 The partial build is exported to `retransmitter/build/partial`. The helper
@@ -102,7 +104,10 @@ prints the selected mode, binary path, and SHA-256 before flashing.
 The generic `--define DEFINE` option remains available for test-only or future
 compile definitions that are not part of the retransmitter's normal menu.
 
-The re-transmitter accepts valid physical DMX frames from the pinned library's
+With no extra flags, the retransmitter helper builds the production 10 Hz image
+with diagnostics and diagnostic broadcasts disabled. The `--menuconfig` rate
+default is also 10 Hz. The re-transmitter accepts valid physical DMX frames from
+the pinned library's
 minimum callback threshold through 512 slots and zero-fills channels after the
 received slot count through channel 512. The helper is:
 

@@ -15,7 +15,7 @@
 #define RETRANSMITTER_UNIVERSE_ID DMX_UNIVERSE_ID
 #endif
 #ifndef RETRANSMITTER_WIRELESS_REFRESH_HZ
-#define RETRANSMITTER_WIRELESS_REFRESH_HZ WIRELESS_REFRESH_HZ
+#define RETRANSMITTER_WIRELESS_REFRESH_HZ 10U
 #endif
 #ifndef RETRANSMITTER_TX_DRAIN_TIMEOUT_MS
 #define RETRANSMITTER_TX_DRAIN_TIMEOUT_MS 100UL
@@ -30,7 +30,7 @@
 #define RETRANSMITTER_DIAGNOSTICS 0
 #endif
 #ifndef RETRANSMITTER_DIAGNOSTIC_BROADCAST
-#define RETRANSMITTER_DIAGNOSTIC_BROADCAST 1
+#define RETRANSMITTER_DIAGNOSTIC_BROADCAST 0
 #endif
 #ifndef RETRANSMITTER_DMX_UART
 #define RETRANSMITTER_DMX_UART 0
@@ -105,6 +105,8 @@ static const uint8_t txFragmentOrder[DMX_FRAGMENTS_PER_UNIVERSE] = {0, 1, 2};
 #endif
 static bool haveUniverse = false;
 static unsigned long lastFrameGenerationTime = 0;
+static unsigned long nextFrameAt = 0;
+static bool frameDeadlineValid = false;
 static unsigned long stateAt = 0;
 static uint8_t currentFragment = 0;
 
@@ -116,6 +118,8 @@ static TxState txState = TX_WAIT_INPUT;
 static constexpr unsigned long TX_INTERVAL_MS =
     (1000UL / RETRANSMITTER_WIRELESS_REFRESH_HZ > RETRANSMITTER_TX_OVERHEAD_MS)
         ? (1000UL / RETRANSMITTER_WIRELESS_REFRESH_HZ - RETRANSMITTER_TX_OVERHEAD_MS) : 0UL;
+static constexpr unsigned long FRAME_PERIOD_MS =
+    1000UL / RETRANSMITTER_WIRELESS_REFRESH_HZ;
 static bool dmxRxPaused = false;
 
 static void pollDmxInput(void) {
@@ -263,12 +267,16 @@ void loop(void) {
     if (txState == TX_WAIT_INPUT) {
         if (!freshUniverseAvailable) return;
         freshUniverseAvailable = false;
+        if (!frameDeadlineValid) {
+            nextFrameAt = now;
+            frameDeadlineValid = true;
+        }
         lastFrameGenerationTime = now;
         txState = TX_IDLE;
     }
     switch (txState) {
         case TX_IDLE:
-            if (now - lastFrameGenerationTime >= TX_INTERVAL_MS) {
+            if ((long)(now - nextFrameAt) >= 0) {
                 memcpy(g_txUniverse, g_universe, sizeof(g_txUniverse));
                 /* The current universe is latched above. Capture exactly one
                  * subsequent physical-DMX frame for the next wireless cycle. */
@@ -282,6 +290,10 @@ void loop(void) {
                 currentFragment = 0;
                 sendConfirmations = 0;
                 stateAt = now;
+                nextFrameAt += FRAME_PERIOD_MS;
+                /* A long send/capture stall must not cause an immediate burst
+                 * of catch-up universes. Rebase to one period from now. */
+                if ((long)(now - nextFrameAt) >= 0) nextFrameAt = now + FRAME_PERIOD_MS;
                 txState = TX_SENDING;
             }
             break;

@@ -21,7 +21,7 @@ Compile-only is the default. Use -f to flash after compiling.
 Options:
   --channel N         ESP-NOW channel (default: 1).
   --universe N        Wireless universe ID (default: 1).
-  --rate HZ           Wireless refresh rate (default: 20 Hz).
+  --rate HZ           Wireless refresh rate (default: 10 Hz).
   --menuconfig        Prompt for all retransmitter build options.
   --define DEFINE     Add an extra compiler definition.
   --port PORT         ESP8266 programming port when -f is used.
@@ -49,7 +49,7 @@ done
 if [[ "$MENUCONFIG" == true ]]; then
     read -r -p "ESP-NOW channel [1]: " value; value=${value:-1}; EXTRA_FLAGS+=("-DRETRANSMITTER_ESPNOW_CHANNEL=$value")
     read -r -p "Universe ID [1]: " value; value=${value:-1}; EXTRA_FLAGS+=("-DRETRANSMITTER_UNIVERSE_ID=$value")
-    read -r -p "Wireless rate Hz [20]: " value; value=${value:-20}; EXTRA_FLAGS+=("-DRETRANSMITTER_WIRELESS_REFRESH_HZ=$value")
+    read -r -p "Wireless rate Hz [10]: " value; value=${value:-10}; EXTRA_FLAGS+=("-DRETRANSMITTER_WIRELESS_REFRESH_HZ=$value")
     read -r -p "TX drain timeout ms [100]: " value; value=${value:-100}; EXTRA_FLAGS+=("-DRETRANSMITTER_TX_DRAIN_TIMEOUT_MS=$value")
     read -r -p "TX overhead ms [27]: " value; value=${value:-27}; EXTRA_FLAGS+=("-DRETRANSMITTER_TX_OVERHEAD_MS=$value")
 fi

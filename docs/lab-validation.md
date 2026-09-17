@@ -1,6 +1,6 @@
 # Lab validation record
 
-This document records one Linux hardware qualification and is not a required
+This document records Linux hardware qualifications and is not a required
 deployment topology. USB device assignments and monitor wiring are session
 specific; receiver identities were discovered from telemetry.
 
@@ -17,3 +17,20 @@ passed after each mode.
 
 These results document behavior, not a fixed receiver count, receiver ID set,
 USB numbering scheme, or monitor assignment.
+
+## Physical retransmitter qualification
+
+The standalone physical retransmitter has a 10 Hz production target. Its
+validated physical-DMX path includes the DMXUART full-frame BREAK correction,
+source-frame handling through 512 slots, and receiver-side complete universe
+promotion checks. Extended boundary, transition, and long-run testing completed
+with matching content and no improper receiver promotion.
+
+The physical retransmitter may be deployed without a management transmitter.
+When telemetry/control is required, use a separate transmitter locked to
+management-only mode. The management device is optional and must not become a
+competing normal-DMX authority.
+
+For wiring, image roles, flash procedures, port safety, deployment, and both
+standalone and monitored deployment procedures, see
+[`retransmitter-deployment.md`](retransmitter-deployment.md).

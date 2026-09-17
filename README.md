@@ -16,7 +16,7 @@ Lighting software -> host daemon -> ESP8266 transmitter
 
 ## Supported operating mode
 
-The validated production target is:
+The validated host/transmitter production target is:
 
 ```text
 Wireless refresh:   20 Hz
@@ -25,6 +25,12 @@ Universe:            512 channels
 Wireless transport: QuickESPNow / ESP-NOW
 Receiver output:    DMX512, 250000 baud, 8N2
 ```
+
+The standalone physical-DMX retransmitter has a separate production target of
+10 Hz, documented in [`docs/retransmitter-deployment.md`](docs/retransmitter-deployment.md).
+The native/integrated transmitter targets 20 Hz and can operate with the host
+daemon or as a native transmitter installation without the daemon, depending
+on the deployment architecture.
 
 The transport is latest-state based. A receiver retains its last complete
 universe when a fragment or wireless update is missed; incomplete universes are
@@ -95,6 +101,10 @@ Add `-f --port <device>` to flash a selected board. The helpers support
 `--define` for compile-time test settings. Never leave a test-only transmitter
 or receiver define enabled in a production image.
 
+For physical retransmitter wiring, deployment roles, optional management-only
+monitoring, and production/test image recovery, see
+[`docs/retransmitter-deployment.md`](docs/retransmitter-deployment.md).
+
 ## Host daemon
 
 ```bash
@@ -157,3 +167,9 @@ The dashboard hotkey reference is in `docs/daemon.md`.
 - ESP-NOW is unencrypted in the current QuickESPNow configuration.
 - Receiver charging and DMX equipment require the isolation precautions in the
   hardware documentation.
+
+## Project note
+
+This is a vibe-coded project: AI-assisted development was used extensively for
+implementation, documentation, and validation support. The hardware design,
+wiring, and physical engineering decisions were managed by me.
