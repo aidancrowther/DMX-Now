@@ -56,6 +56,7 @@
 #define RECEIVER_FAILSAFE_CONFIG_PACKET_TYPE 8U
 #define RECEIVER_OUTPUT_CONTROL_PACKET_TYPE 9U
 #define RECEIVER_LOCATE_PACKET_TYPE 10U
+#define RETRANSMITTER_DIAGNOSTICS_PACKET_TYPE 11U
 #define PRIORITY_COMPLETE_ACCEPTED 1U
 #define PRIORITY_COMPLETE_DUPLICATE 2U
 #define PRIORITY_COMPLETE_INVALID 3U
@@ -78,10 +79,17 @@
 #define MANAGEMENT_SET_RECEIVER_FAILSAFE 0x05U
 #define MANAGEMENT_SET_RECEIVER_OUTPUT   0x06U
 #define MANAGEMENT_LOCATE_RECEIVER       0x07U
+#define MANAGEMENT_SET_TRANSMITTER_MODE  0x08U
+#define MANAGEMENT_GET_TRANSMITTER_MODE  0x09U
 #define MANAGEMENT_RECEIVER_TELEMETRY      0x81U
 #define MANAGEMENT_PRIORITY_ACKS           0x83U
 #define MANAGEMENT_CACHE_CLEARED           0x84U
+#define MANAGEMENT_TRANSMITTER_MODE        0x88U
 #define MANAGEMENT_ERROR                   0xE0U
+#define TRANSMITTER_MODE_BRIDGE             0U
+#define TRANSMITTER_MODE_MANAGEMENT_ONLY    1U
+#define TRANSMITTER_MODE_ACCEPTED           0U
+#define TRANSMITTER_MODE_REJECTED           1U
 #define RECEIVER_FAILSAFE_HOLD             0U
 #define RECEIVER_FAILSAFE_BLACKOUT         1U
 #define RECEIVER_FAILSAFE_DISABLE_LINE    2U
@@ -214,6 +222,30 @@ struct __attribute__((packed)) ReceiverTelemetryPacket {
     uint16_t failsafeTimeoutSeconds;
     uint32_t failsafeGeneration;
     uint32_t failsafeActivations;
+};
+
+/* Low-rate diagnostic snapshot from a physical-DMX retransmitter. This is
+ * deliberately separate from receiver telemetry because the retransmitter's
+ * DMX UART owns its serial port. It is broadcast approximately once per
+ * second, only in diagnostic builds. */
+struct __attribute__((packed)) RetransmitterDiagnosticsPacket {
+    uint16_t magic;
+    uint8_t  protocolVersion;
+    uint8_t  packetType;
+    uint8_t  universeId;
+    uint32_t frameSequence;
+    uint32_t inputFramesReceived;
+    uint32_t enqueueAttempts[DMX_FRAGMENTS_PER_UNIVERSE];
+    uint32_t enqueueSuccess[DMX_FRAGMENTS_PER_UNIVERSE];
+    uint32_t enqueueFailures[DMX_FRAGMENTS_PER_UNIVERSE];
+    uint32_t callbackSuccess;
+    uint32_t callbackFailure;
+    uint32_t inputFramesSkipped;
+    uint32_t inputSlotMismatches;
+    uint16_t learnedInputSlots;
+    uint32_t serializedBusySkips;
+    uint32_t missedDeadlines;
+    uint32_t cycleOverruns;
 };
 
 struct __attribute__((packed)) ReceiverFailsafeConfigPacket {

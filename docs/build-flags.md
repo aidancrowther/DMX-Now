@@ -11,6 +11,7 @@ Compile only:
 ```bash
 ./helpers/flash_receiver.sh --define=-DNAME=value
 ./helpers/flash_transmitter.sh --define=-DNAME=value
+./helpers/flash_retransmitter.sh --define=-DNAME=value
 ```
 
 Compile and flash:
@@ -32,6 +33,9 @@ Always restore and flash a production image after a test-only build.
 | `PRIORITY_STAGING_TIMEOUT_MS` | `4000` | Lifetime of priority fragments and gate metadata while a complete priority universe is reconstructed. |
 | `RECEIVER_FAILSAFE_DEFAULT_MODE` | `RECEIVER_FAILSAFE_HOLD` | Receiver boot default: `HOLD`, `BLACKOUT`, or `DISABLE_LINE`. |
 | `RECEIVER_FAILSAFE_DEFAULT_TIMEOUT_SECONDS` | `60` | Receiver boot fail-safe timeout. Runtime daemon configuration can override it. |
+| `RECEIVER_DIAGNOSTIC_SERIAL` | `0` | Disables physical DMX output and emits complete reconstructed universes as binary `RDX1` records over UART0 at 115200 8N1, including the promoted fragment source MAC. |
+| `RECEIVER_DIAGNOSTIC_BAUD` | `115200` | Diagnostic UART baud rate. Use the same rate with the host reader; `460800` is recommended for high-rate diagnostics. |
+| `RECEIVER_DIAGNOSTIC_SILENT_CAPTURE` | `0` | Diagnostic-only mode that validates promoted universes in-device and emits compact capture summaries instead of per-universe `RDX1` records. Requires `RECEIVER_DIAGNOSTIC_SERIAL=1`. |
 
 Example receiver test-pattern build:
 
@@ -43,12 +47,80 @@ Example receiver test-pattern build:
 
 | Definition | Default | Purpose |
 |---|---:|---|
-| `WIRELESS_REFRESH_HZ` | `20` | Normal wireless refresh rate. The validated production rate is 20 Hz. |
+| `WIRELESS_REFRESH_HZ` | `20` | Native/integrated transmitter production refresh rate. The standalone physical retransmitter uses its own 10 Hz default. |
 | `WIRELESS_PRIORITY_REFRESH_HZ` | `1` | Priority fragment cadence. |
 | `WIRELESS_TX_OVERHEAD_MS` | `27` | Measured normal-frame overhead used by budget pacing. |
 | `WIRELESS_TX_DRAIN_TIMEOUT_MS` | `100` | Bound for a stuck ESP-NOW transmit drain. |
 | `TRANSMITTER_TELEMETRY_LOGGING` | `0` | Diagnostic text logging. Keep disabled because UART0 carries binary ENTTEC/management traffic. |
 | `TRANSMITTER_VERBOSE_LOGGING` | unset | Development logging. Do not enable during normal UART operation. |
+| `TRANSMITTER_MANAGEMENT_ONLY` | unset | Disables ordinary DMX fragments while retaining management and priority DMX. |
+| `TRANSMITTER_LOCK_BRIDGE` | unset | Locks the runtime role to bridge; daemon mode requests for management-only are rejected. |
+| `TRANSMITTER_LOCK_MANAGEMENT_ONLY` | unset | Locks the runtime role to management-only; daemon mode requests for bridge are rejected. |
+
+The integrated transmitter helper defaults to the normal bridge role. Select
+the optional management role with:
+
+```bash
+./helpers/flash_transmitter.sh --management-only
+./helpers/flash_transmitter.sh --lock-bridge
+./helpers/flash_transmitter.sh --lock-management-only
+```
+
+## Standalone re-transmitter
+
+The re-transmitter owns UART0/GPIO3 for physical DMX input and must not call
+`Serial.begin()` or write diagnostics to that UART. The DMXUART experiment uses
+foreground-polled `DMXUART::read()`, sends only normal three-fragment DMX
+packets, and waits for its first complete physical universe before transmitting.
+The retransmitter pauses DMX UART RX while it queues and drains one complete
+three-fragment wireless universe, then resumes RX before waiting the configured
+wireless interval. This intentionally permits physical-DMX frames to be lost
+while protecting wireless transmission.
+
+```bash
+./helpers/flash_retransmitter.sh
+./helpers/flash_retransmitter.sh --menuconfig
+./helpers/flash_retransmitter.sh --channel 1 --universe 1 --rate 10
+```
+
+The helper is compile-only unless `-f` is supplied. `--menuconfig` is a small
+interactive Bash configuration menu covering channel, universe, wireless rate,
+TX drain timeout, and TX overhead. Partial-universe acceptance is now the only
+retransmitter mode. Command-line flags remain preferred for repeatable builds.
+Relevant definitions are
+`RETRANSMITTER_ESPNOW_CHANNEL`, `RETRANSMITTER_UNIVERSE_ID`,
+`RETRANSMITTER_WIRELESS_REFRESH_HZ`, `RETRANSMITTER_TX_DRAIN_TIMEOUT_MS`,
+`RETRANSMITTER_TX_OVERHEAD_MS`, `RETRANSMITTER_DIAGNOSTICS`, and
+The production retransmitter uses an absolute 10 Hz universe deadline. It waits
+for a fresh complete physical-DMX frame, sends when the deadline is due, and
+rebases one period forward after an overrun instead of compressing catch-up
+frames. This prevents stale-frame reuse and avoids adding a second full pacing
+interval after physical-DMX capture.
+It also invokes Arduino CLI with `--clean` so each flashed image is rebuilt from
+the requested compile options rather than relying on a shared sketch cache.
+The partial build is exported to `retransmitter/build/partial`. The helper
+prints the selected mode, binary path, and SHA-256 before flashing.
+
+The generic `--define DEFINE` option remains available for test-only or future
+compile definitions that are not part of the retransmitter's normal menu.
+
+With no extra flags, the retransmitter helper builds the production 10 Hz image
+with diagnostics and diagnostic broadcasts disabled. The `--menuconfig` rate
+default is also 10 Hz. The re-transmitter accepts valid physical DMX frames from
+the pinned library's
+minimum callback threshold through 512 slots and zero-fills channels after the
+received slot count through channel 512. The helper is:
+
+```bash
+./helpers/flash_retransmitter.sh
+```
+
+Malformed frames and nonzero start codes remain rejected by the input library.
+
+The processing cost is negligible because the retransmitter already maintains
+and clears a 512-channel destination buffer. Partial operation depends on
+DMXUART's minimum channel threshold (`UART_MINCHANS_DMX`, currently 24); frames
+below that threshold do not produce a usable callback.
 
 ## Fault-injection flags
 

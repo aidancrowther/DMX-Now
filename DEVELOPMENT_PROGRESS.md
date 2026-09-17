@@ -1180,8 +1180,45 @@ Expected approximate sequence:
 13. Hardware-specific cleanup and fail-safe refinement
 14. High-priority transmission ✓ (targeted receiver ACK and retry path hardware-validated)
 15. Channel gating ✓ (daemon filtering, receiver runtime hard-gate fail-safe, and Mega validation)
+16. Management-only daemon/transmitter role and standalone physical-DMX re-transmitter ✓
 
 This ordering may change as hardware testing reveals constraints.
+
+### Feature 16: Management-only coexistence and physical-DMX re-transmitter
+
+Status: COMPLETE (hardware-validated 2026-09-17 ✓)
+
+The daemon now has a bridge-mode default plus an explicit `management_only`
+role. Management-only mode does not start ordinary DMX inputs or emit normal
+DMX, while telemetry, receiver controls, and explicit priority/gate traffic
+remain available. The integrated transmitter has a compile-time
+`TRANSMITTER_MANAGEMENT_ONLY` role with the same normal-DMX suppression.
+
+A standalone `retransmitter/` sketch receives physical DMX on UART0/GPIO3
+using the pinned BSD-licensed `LXESP8266DMX` receive implementation and sends
+only the existing normal three-fragment protocol. Its helper supports channel,
+universe, refresh-rate, optional partial-universe zero-fill flags, and an
+interactive `--menuconfig` prompt. Strict 512-slot input remains the default.
+
+Host coverage currently passes 121 tests. Bridge transmitter, management-only
+transmitter, re-transmitter, and receiver compile checks pass with ESP8266 core
+3.1.2; measured IRAM usage is 91%, 91%, 92%, and 92%, respectively.
+
+The standalone re-transmitter production target is 10 Hz, while the native and
+integrated transmitter target remains 20 Hz. Production pacing uses an absolute
+100 ms deadline with overrun rebasing, waits for a fresh complete physical-DMX
+frame, and never reuses a stale universe. Strict boundary and transition cases
+cover 24 through 512 slots, including long 512-, 24-, and 237-slot soaks.
+
+The flashed production image completed the extended retransmitter validation
+with matching reconstructed content for every accepted promotion, no source
+mismatches, no corruption, no sequence backtracks, and no queue/ring failures.
+Long-run measurements were approximately 8.9–9.9 Hz, within the documented
+measurement tolerance for the nominal 10 Hz target. Deployment and recovery
+procedures are documented in `docs/retransmitter-deployment.md`.
+
+The re-transmitter has no planned diagnostic or auxiliary I/O beyond UART0 DMX
+RX and ESP-NOW; future hardware I/O can be added without changing the protocol.
 
 ### Feature 12: Reliability and throughput testing
 

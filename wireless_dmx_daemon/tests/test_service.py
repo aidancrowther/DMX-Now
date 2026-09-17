@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).parents[1]))
 from wireless_dmx.app import WirelessDmxService
 from wireless_dmx.enttec.protocol import encode_dmx
 from wireless_dmx.raw_dmx import RAW_DMX_UNIVERSE_SIZE
-from wireless_dmx.models import ChannelGate, DaemonConfig, ReceiverLinkState, ReceiverTelemetry
+from wireless_dmx.models import ChannelGate, DaemonConfig, DaemonMode, ReceiverLinkState, ReceiverTelemetry
 from wireless_dmx.protocols import (MANAGEMENT_CACHE_CLEARED, MANAGEMENT_PRIORITY_ACKS,
                                     MANAGEMENT_RECEIVER_TELEMETRY, MANAGEMENT_SYNC, crc16_ccitt)
 from wireless_dmx.transmitter.management import ACK_HEADER, ACK_RECORD, PART_HEADER, RECORD
@@ -43,6 +43,70 @@ def telemetry_part():
 
 
 class ServiceTests(unittest.TestCase):
+    def test_management_only_rejects_normal_source_and_manual_send(self):
+        service = WirelessDmxService(
+            DaemonConfig(mode=DaemonMode.MANAGEMENT_ONLY, virtual_serial_enabled=False,
+                         raw_virtual_serial_enabled=False, artnet_enabled=False, virtual_port_path=""),
+            serial_factory=lambda: FakeSerial())
+        universe = bytes([55]) * 512
+        service._accept_source_frame(universe, "serial")
+        self.assertEqual(service.stats.source_frames_rejected, 1)
+        self.assertEqual(service.manual_universe_snapshot(), bytes(512))
+        with self.assertRaises(RuntimeError):
+            service.send_manual(priority=False)
+
+    def test_management_only_preserves_priority_submission(self):
+        service = WirelessDmxService(
+            DaemonConfig(mode=DaemonMode.MANAGEMENT_ONLY, virtual_serial_enabled=False,
+                         raw_virtual_serial_enabled=False, artnet_enabled=False, virtual_port_path=""),
+            serial_factory=lambda: FakeSerial())
+        priority_id = service.send_manual(priority=True)
+        self.assertEqual(priority_id, 0)
+        self.assertEqual(service.pacer.priority_status().queue_depth, 1)
+
+    def test_management_only_does_not_start_dmx_backends(self):
+        service = WirelessDmxService(
+            DaemonConfig(mode=DaemonMode.MANAGEMENT_ONLY, virtual_serial_enabled=True,
+                         raw_virtual_serial_enabled=True, artnet_enabled=True),
+            serial_factory=lambda: FakeSerial())
+        service.start()
+        try:
+            self.assertIsNone(service.virtual.master_fd)
+            self.assertIsNone(service.raw_virtual.master_fd)
+            self.assertIsNone(service.artnet.socket if service.artnet else None)
+        finally:
+            service.stop()
+
+    def test_start_queries_transmitter_mode_before_cache_clear(self):
+        fake = FakeSerial()
+        service = WirelessDmxService(
+            DaemonConfig(mode=DaemonMode.MANAGEMENT_ONLY, virtual_serial_enabled=False,
+                         raw_virtual_serial_enabled=False, artnet_enabled=False, virtual_port_path=""),
+            serial_factory=lambda: fake)
+        service.start()
+        try:
+            deadline = time.monotonic() + 1
+            while time.monotonic() < deadline and len(fake.writes) < 2:
+                time.sleep(0.01)
+            self.assertGreaterEqual(len(fake.writes), 2)
+            self.assertEqual(fake.writes[0][3], 0x09)
+            self.assertEqual(fake.writes[0][4:6], b"\x00\x00")
+            self.assertNotEqual(fake.writes[1][3], 0x04)
+        finally:
+            service.stop()
+
+    def test_rejected_transmitter_mode_is_reported_as_error(self):
+        service = WirelessDmxService(DaemonConfig(mode=DaemonMode.BRIDGE),
+                                     serial_factory=lambda: FakeSerial())
+        body = bytes((1, 0x88, 2, 0, 1, 1))
+        frame = MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body))
+        service._on_transmitter_data(frame)
+        snapshot = service.snapshot()
+        self.assertEqual(snapshot.health.value, "transmitter_mode_rejected")
+        self.assertEqual(snapshot.transmitter_mode, "management_only")
+        self.assertEqual(snapshot.transmitter_mode_sync, "rejected")
+        self.assertIn("rejected requested mode bridge", snapshot.last_error)
+
     def test_service_accepts_raw_dmx_universe(self):
         backend = LinuxPtyBackend()
         raw_backend = LinuxPtyBackend()
@@ -139,8 +203,11 @@ class ServiceTests(unittest.TestCase):
             time.sleep(0.05)
             self.assertFalse(service.snapshot().telemetry.cache_clear_acknowledged)
             self.assertFalse(any(write[3] == 0x81 for write in fake.writes if len(write) > 3))
-            body = bytes((1, MANAGEMENT_CACHE_CLEARED, 0, 0))
-            fake.reads.append(MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body)))
+            mode_body = bytes((1, 0x88, 2, 0, 0, 0))
+            cache_body = bytes((1, MANAGEMENT_CACHE_CLEARED, 0, 0))
+            fake.reads.append(
+                MANAGEMENT_SYNC + mode_body + struct.pack("<H", crc16_ccitt(mode_body)) +
+                MANAGEMENT_SYNC + cache_body + struct.pack("<H", crc16_ccitt(cache_body)))
             deadline = time.monotonic() + 1
             while time.monotonic() < deadline and not service.snapshot().telemetry.cache_clear_acknowledged:
                 time.sleep(0.01)
@@ -437,8 +504,11 @@ class ServiceTests(unittest.TestCase):
         )
         service.start()
         try:
-            body = bytes((1, MANAGEMENT_CACHE_CLEARED, 0, 0))
-            fake.reads.append(MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body)))
+            mode_body = bytes((1, 0x88, 2, 0, 0, 0))
+            cache_body = bytes((1, MANAGEMENT_CACHE_CLEARED, 0, 0))
+            fake.reads.append(
+                MANAGEMENT_SYNC + mode_body + struct.pack("<H", crc16_ccitt(mode_body)) +
+                MANAGEMENT_SYNC + cache_body + struct.pack("<H", crc16_ccitt(cache_body)))
             deadline = time.monotonic() + 2.0
             while time.monotonic() < deadline and service.snapshot().telemetry.requests_sent < 3:
                 time.sleep(0.01)

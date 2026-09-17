@@ -1,3 +1,6 @@
+[daemon]
+mode = "bridge" # bridge or management_only
+
 [virtual_port]
 enabled = true
 requested_path = "/tmp/wireless-dmx"

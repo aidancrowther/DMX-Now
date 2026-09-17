@@ -72,3 +72,68 @@ do not wait indefinitely for `disable_line` or a deliberately absent raw burst.
 This procedure validates both raw input framing and end-to-end physical DMX
 output. The timeout itself is validated by the absence of a partial promotion
 and successful recovery on the next complete universe.
+
+## Physical-DMX re-transmitter end-to-end setup
+
+The re-transmitter hardware setup uses an Arduino Mega as both the physical DMX
+generator and the returned-DMX monitor. The Mega harness is:
+
+```text
+tests/retransmitter_end_to_end/retransmitter_end_to_end.ino
+```
+
+Compile it without flashing:
+
+```bash
+./helpers/flash_retransmitter_e2e_mega.sh
+```
+
+The detailed topology, separate Mega UART allocation, RS-485 requirements,
+partial-universe cases, management-only coexistence cases, and acceptance
+criteria are documented in:
+
+```text
+tests/RETRANSMITTER_E2E_TEST_PLAN.md
+```
+
+The live runner is deliberately outside the automated suite:
+
+```text
+wireless_dmx_daemon/tests/run_retransmitter_acceptance.py
+```
+
+It must not be invoked until physical wiring and firmware flashing have been
+explicitly approved. For the diagnostic receiver pathway, build the receiver with
+`RECEIVER_DIAGNOSTIC_SERIAL=1`. This disables `espDMX` and the MAX3485 output;
+the receiver instead emits complete `RDX1` binary reconstructed-universe
+records on UART0/GPIO1, read through the receiver's USB serial adapter. Use
+`RECEIVER_DIAGNOSTIC_BAUD` and the runner's `--receiver-baud` together; for
+example, build with `--diagnostic --diagnostic-baud 460800` and run with
+`--receiver-baud 460800`. The Mega then only needs to generate physical DMX on
+USART1. The live runner uses `--receiver-port` for this diagnostic stream.
+Diagnostic records have the format `RDX1`, record type, little-endian frame
+sequence, six-byte source MAC, 512 promoted channel bytes, and CRC16. Always
+record and review the source MAC when more than one normal-DMX transmitter may
+be powered or within radio range.
+
+## Extended physical retransmitter validation
+
+The low-rate/extended runner is:
+
+```text
+wireless_dmx_daemon/tests/run_retransmitter_extended_validation.py
+```
+
+The standalone physical retransmitter production target is 10 Hz. The native
+integrated transmitter production target is 20 Hz. The receiver
+silent-capture summary enforces the promotion invariant:
+
+```text
+promotions == matching
+complete_candidates == promotions + rejected_complete
+corrupt == rejected_complete
+```
+
+Incomplete, malformed, stale, duplicate, and content-invalid universes must
+never replace the active receiver universe. The retransmitter source MAC must
+be operator-confirmed, not inferred from a host USB programmer.

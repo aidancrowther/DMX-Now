@@ -9,8 +9,9 @@ sys.path.insert(0, str(Path(__file__).parents[1]))
 from wireless_dmx.dashboard import (ADVANCED_COMMANDS, MAIN_COMMANDS, MANUAL_COMMANDS, SETUP_COMMANDS,
                                     DashboardController, bar, build_parser, channel_gate_color,
                                     channel_gate_selected_color,
-                                     priority_feedback, receiver_display_segments, rssi_quality)
-from wireless_dmx.models import ChannelGate, DaemonConfig, ReceiverLinkState, ReceiverTelemetry
+                                      manual_priority_locked, priority_feedback, receiver_display_segments, rssi_quality)
+from wireless_dmx.models import ChannelGate, DaemonConfig, DaemonMode, ReceiverLinkState, ReceiverTelemetry
+from wireless_dmx.config import apply_args
 
 
 class DashboardTests(unittest.TestCase):
@@ -19,6 +20,16 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(args.mega_port, "/dev/ttyUSB1")
         self.assertFalse(args.no_daemon)
 
+    def test_dashboard_parser_documents_and_applies_transmitter_modes(self):
+        management_args = build_parser().parse_args(["--management-only"])
+        bridge_args = build_parser().parse_args(["--bridge-mode"])
+        self.assertTrue(management_args.management_only)
+        self.assertTrue(bridge_args.bridge_mode)
+        self.assertEqual(apply_args(DaemonConfig(mode=DaemonMode.BRIDGE), management_args).mode,
+                         DaemonMode.MANAGEMENT_ONLY)
+        self.assertEqual(apply_args(DaemonConfig(mode=DaemonMode.MANAGEMENT_ONLY), bridge_args).mode,
+                         DaemonMode.BRIDGE)
+
     def test_controller_starts_without_hardware_when_not_started(self):
         controller = DashboardController(DaemonConfig(virtual_port_path="/tmp/dashboard-test"))
         try:
@@ -26,6 +37,22 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("dashboard", controller.events) if controller.events else None
         finally:
             controller.close()
+
+    def test_management_only_dashboard_starts_without_pty_path_error(self):
+        config = DaemonConfig(mode=DaemonMode.MANAGEMENT_ONLY,
+                              virtual_serial_enabled=False,
+                              raw_virtual_serial_enabled=False,
+                              artnet_enabled=False)
+        controller = DashboardController(config)
+        try:
+            controller.start_daemon()
+            self.assertIn("PTY=-", controller.events[0])
+        finally:
+            controller.close()
+
+    def test_manual_editor_locks_priority_in_management_only_mode(self):
+        self.assertTrue(manual_priority_locked(DaemonConfig(mode=DaemonMode.MANAGEMENT_ONLY)))
+        self.assertFalse(manual_priority_locked(DaemonConfig(mode=DaemonMode.BRIDGE)))
 
     def test_default_config_is_read_only_and_save_as_switches_file(self):
         with tempfile.TemporaryDirectory() as directory:

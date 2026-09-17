@@ -4,6 +4,12 @@ Normal DMX universes use packed canonical fragment headers. Receivers enforce
 magic, version, packet type, universe, fragment geometry, coverage, sequence
 ordering, and complete promotion.
 
+In a retransmitter deployment, normal `DMX_PACKET_TYPE` fragments have exactly
+one authority: the physical-DMX re-transmitter. A management-only transmitter
+must not emit normal fragments. It may emit `DMX_PRIORITY_PACKET_TYPE` and
+matching gate metadata for explicit management operations; those packets are a
+separate receiver reconstruction path.
+
 Priority fragments add target receiver, priority ID, attempt, and repeat count.
 Priority gate metadata is staged independently and applied only when the
 matching complete priority universe is reconstructed. Completion ACKs identify

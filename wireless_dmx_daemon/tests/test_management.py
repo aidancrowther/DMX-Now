@@ -14,6 +14,11 @@ from wireless_dmx.transmitter.management import (ACK_HEADER, ACK_RECORD, Managem
                                                   clear_receiver_cache_request, get_telemetry_request,
                                                     mark_next_priority, set_receiver_failsafe_request,
                                                     set_receiver_output_request, locate_receiver_request)
+from wireless_dmx.transmitter.management import (TransmitterModeResponse, get_transmitter_mode_request,
+                                                 set_transmitter_mode_request)
+from wireless_dmx.receiver_diagnostic import (DIAGNOSTIC_MAGIC, ReceiverDiagnosticParser,
+                                               mask_accounting, parse_summary_line)
+from wireless_dmx.retransmitter_patterns import dynamic_mismatches, dynamic_universe
 
 
 def make_part(sequence, index, count, records):
@@ -35,6 +40,88 @@ def make_part(sequence, index, count, records):
 
 
 class ManagementTests(unittest.TestCase):
+    def test_rds1_summary_parser_and_mask_accounting(self):
+        values = parse_summary_line("RDS1 m001=2 m111=5 qrx_evictions=0")
+        self.assertEqual(values["m001"], 2)
+        self.assertEqual(values["qrx_evictions"], 0)
+        self.assertEqual(mask_accounting({1: 2, 3: 1, 7: 5}), {
+            "observed_frames": 8, "fragment_0": 8, "fragment_1": 6, "fragment_2": 5})
+
+    def test_acceptance_summary_maps_fragment_diagnostics(self):
+        values = parse_summary_line("RDS1 rx0=10 rx1=9 rx2=8 m101=3 unseen_sequences=4")
+        self.assertEqual(values["rx0"], 10)
+        self.assertEqual(values["m101"], 3)
+        self.assertEqual(values["unseen_sequences"], 4)
+
+    def test_rds1_summary_parser_maps_transmitter_diagnostics(self):
+        values = parse_summary_line("RDS1 txdiag=8 txa0=100 txe1=99 txf2=1 txcbfail=2")
+        self.assertEqual(values["txdiag"], 8)
+        self.assertEqual(values["txa0"], 100)
+        self.assertEqual(values["txe1"], 99)
+        self.assertEqual(values["txf2"], 1)
+        self.assertEqual(values["txcbfail"], 2)
+
+    def test_rds1_summary_parser_rejects_wrong_prefix(self):
+        with self.assertRaises(ValueError):
+            parse_summary_line("STATUS capture=idle")
+
+    def test_dynamic_partial_pattern_is_coherent_and_zero_filled(self):
+        universe = dynamic_universe(91, 236, 17)
+        self.assertEqual(dynamic_mismatches(universe, 91, 236), [])
+        self.assertEqual(universe[236:], bytes(276))
+
+    def test_dynamic_pattern_rejects_torn_fragment_and_tail_corruption(self):
+        universe = bytearray(dynamic_universe(91, 237, 17))
+        universe[236] ^= 0x01
+        self.assertTrue(dynamic_mismatches(bytes(universe), 91, 237))
+        universe = bytearray(dynamic_universe(91, 237, 17))
+        universe[400] = 1
+        self.assertTrue(dynamic_mismatches(bytes(universe), 91, 237))
+
+    def test_receiver_diagnostic_parser_round_trip_and_resynchronizes(self):
+        universe = bytes([77]) * 512
+        source_mac = bytes.fromhex("18fe34daff38")
+        body = DIAGNOSTIC_MAGIC + bytes((1,)) + (42).to_bytes(4, "little") + source_mac + universe
+        frame = body + crc16_ccitt(body).to_bytes(2, "little")
+        parser = ReceiverDiagnosticParser()
+        records = parser.feed(b"noise" + frame[:80])
+        records += parser.feed(frame[80:])
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].sequence, 42)
+        self.assertEqual(records[0].source_mac, source_mac)
+        self.assertEqual(records[0].universe, universe)
+
+    def test_receiver_diagnostic_parser_rejects_bad_crc(self):
+        body = (DIAGNOSTIC_MAGIC + bytes((1,)) + (1).to_bytes(4, "little") +
+                bytes.fromhex("18fe34daff38") + bytes(512))
+        frame = bytearray(body + crc16_ccitt(body).to_bytes(2, "little"))
+        frame[-1] ^= 0xFF
+        parser = ReceiverDiagnosticParser()
+        self.assertEqual(parser.feed(bytes(frame)), [])
+        self.assertEqual(parser.records_bad_crc, 1)
+    def test_transmitter_mode_request_has_valid_crc(self):
+        request = set_transmitter_mode_request(1)
+        self.assertEqual(request[3], 0x08)
+        self.assertEqual(request[6], 1)
+        self.assertEqual(crc16_ccitt(request[2:-2]), struct.unpack("<H", request[-2:])[0])
+
+    def test_transmitter_mode_query_has_valid_crc(self):
+        request = get_transmitter_mode_request()
+        self.assertEqual(request[3], 0x09)
+        self.assertEqual(request[4:6], b"\x00\x00")
+        self.assertEqual(crc16_ccitt(request[2:-2]), struct.unpack("<H", request[-2:])[0])
+
+    def test_transmitter_mode_request_rejects_invalid_mode(self):
+        with self.assertRaises(ValueError):
+            set_transmitter_mode_request(2)
+
+    def test_transmitter_mode_response_is_parsed(self):
+        body = bytes((1, 0x88, 2, 0, 1, 1))
+        frame = MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body))
+        response = ManagementParser().feed(frame)[0]
+        self.assertIsInstance(response, TransmitterModeResponse)
+        self.assertFalse(response.accepted)
+        self.assertEqual(response.mode, 1)
     def test_request_has_valid_crc(self):
         request = get_telemetry_request()
         self.assertEqual(request[:2], MANAGEMENT_SYNC)

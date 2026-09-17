@@ -6,6 +6,13 @@ Art-Net / ENTTEC client -> Linux daemon -> ESP8266 transmitter
                                       QuickESPNow wireless transport
                                                 |
                                       one or more receivers -> DMX512
+
+An optional management-only transmitter can share the wireless channel with a
+standalone physical-DMX re-transmitter. In that deployment the re-transmitter
+is the sole source of normal DMX fragments. The management transmitter sends
+telemetry/control traffic and explicit priority DMX only; it never emits normal
+DMX fragments. The re-transmitter has no host-management dependency and may
+continue operating while the management transmitter is offline.
 ```
 
 The daemon accepts Art-Net or ENTTEC-compatible serial input, normalizes it to

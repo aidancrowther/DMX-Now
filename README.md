@@ -16,7 +16,7 @@ Lighting software -> host daemon -> ESP8266 transmitter
 
 ## Supported operating mode
 
-The validated production target is:
+The validated host/transmitter production target is:
 
 ```text
 Wireless refresh:   20 Hz
@@ -25,6 +25,12 @@ Universe:            512 channels
 Wireless transport: QuickESPNow / ESP-NOW
 Receiver output:    DMX512, 250000 baud, 8N2
 ```
+
+The standalone physical-DMX retransmitter has a separate production target of
+10 Hz, documented in [`docs/retransmitter-deployment.md`](docs/retransmitter-deployment.md).
+The native/integrated transmitter targets 20 Hz and can operate with the host
+daemon or as a native transmitter installation without the daemon, depending
+on the deployment architecture.
 
 The transport is latest-state based. A receiver retains its last complete
 universe when a fragment or wireless update is missed; incomplete universes are
@@ -47,12 +53,16 @@ discarded rather than promoted.
 - Automatic recovery after a new complete universe.
 - Linux PTY input and a terminal management dashboard.
 - Persistent host-side receiver friendly names editable from the dashboard.
+- Optional management-only daemon/transmitter role for deployments where a
+  standalone physical-DMX re-transmitter owns normal DMX.
+- Standalone UART0 physical-DMX-to-ESP-NOW re-transmitter firmware.
 
 ## Repository layout
 
 ```text
 receiver/                 ESP8266 receiver firmware
 transmitter/              ESP8266 transmitter firmware
+retransmitter/             UART0 physical DMX -> normal ESP-NOW firmware
 libraries/                pinned QuickESPNow, espDMX, and shared protocol code
 wireless_dmx_daemon/      Linux host daemon and tests
 tests/                    firmware and hardware monitor sketches
@@ -77,11 +87,23 @@ The project uses `arduino-cli`, not PlatformIO:
 ```bash
 ./helpers/flash_transmitter.sh
 ./helpers/flash_receiver.sh
+./helpers/flash_retransmitter.sh
 ```
+
+The normal transmitter helper defaults to bridge mode. Build the optional
+management-only role with `./helpers/flash_transmitter.sh --management-only`.
+The daemon defaults to bridge mode; use `[daemon] mode = "management_only"` or
+`wireless-dmx run --management-only` for management-only operation. The
+management role never emits ordinary DMX, but priority/gate transactions remain
+available.
 
 Add `-f --port <device>` to flash a selected board. The helpers support
 `--define` for compile-time test settings. Never leave a test-only transmitter
 or receiver define enabled in a production image.
+
+For physical retransmitter wiring, deployment roles, optional management-only
+monitoring, and production/test image recovery, see
+[`docs/retransmitter-deployment.md`](docs/retransmitter-deployment.md).
 
 ## Host daemon
 
@@ -145,3 +167,9 @@ The dashboard hotkey reference is in `docs/daemon.md`.
 - ESP-NOW is unencrypted in the current QuickESPNow configuration.
 - Receiver charging and DMX equipment require the isolation precautions in the
   hardware documentation.
+
+## Project note
+
+This is a vibe-coded project: AI-assisted development was used extensively for
+implementation, documentation, and validation support. The hardware design,
+wiring, and physical engineering decisions were managed by me.

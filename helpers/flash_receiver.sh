@@ -1,6 +1,6 @@
 #!/bin/bash
 # Build/flash script for the integrated Wireless DMX receiver sketch
-# (QuickESPNow RX -> espDMX DMX output on UART0/GPIO1 -> MAX3485).
+# (QuickESPNow RX -> espDMX DMX output, or diagnostic UART0 stream).
 #
 # Usage:
 #   ./flash_receiver.sh
@@ -34,6 +34,26 @@ BINARY="${SKETCH_DIR}/build/esp8266.esp8266.generic/receiver.ino.bin"
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        -h|--help)
+            cat <<'EOF'
+Usage: flash_receiver.sh [OPTIONS]
+
+Compile the ESP8266 receiver. Compilation is the default; use -f to flash.
+
+Options:
+  -f                         Flash the compiled image.
+  --port PORT                ESP8266 programming port (default: /dev/ttyUSB0).
+  --diagnostic               Disable physical DMX output and emit RDX1 records on UART0.
+  --silent-capture           Use UART-queryable in-device validation instead of RDX1 records.
+  --diagnostic-baud BAUD     Diagnostic UART baud (default: 115200; 460800 recommended).
+  --define DEFINE            Add an extra compiler definition.
+  -h, --help                 Show this help.
+
+Diagnostic mode is a test image. It owns UART0/GPIO1 for binary reconstructed
+universe records and keeps the MAX3485 DMX output disabled.
+EOF
+            exit 0
+            ;;
         -f)
             FLASH=true
             shift
@@ -69,6 +89,25 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
 
+        --diagnostic)
+            EXTRA_FLAGS+=("-DRECEIVER_DIAGNOSTIC_SERIAL=1")
+            shift
+            ;;
+
+        --silent-capture)
+            EXTRA_FLAGS+=("-DRECEIVER_DIAGNOSTIC_SERIAL=1" "-DRECEIVER_DIAGNOSTIC_SILENT_CAPTURE=1")
+            shift
+            ;;
+
+        --diagnostic-baud)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: --diagnostic-baud requires a value" >&2
+                exit 1
+            fi
+            EXTRA_FLAGS+=("-DRECEIVER_DIAGNOSTIC_BAUD=$2")
+            shift 2
+            ;;
+
         --)
             shift
             break
@@ -76,7 +115,7 @@ while [[ $# -gt 0 ]]; do
 
         *)
             echo "Unknown argument: $1" >&2
-            echo "Usage: $0 [-f] [--port /dev/ttyUSB0] [--define -DEXTRA]" >&2
+            echo "Usage: $0 [-f] [--port /dev/ttyUSB0] [--diagnostic] [--diagnostic-baud BAUD] [--define -DEXTRA]" >&2
             exit 1
             ;;
     esac

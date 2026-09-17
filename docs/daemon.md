@@ -13,6 +13,13 @@ Linux PTYs, Art-Net, source arbitration, pacing, telemetry, priority traffic, ch
 gates, and receiver fail-safe behavior. See `configs/config.example.toml` for all
 fields.
 
+The default daemon role is bridge mode. Set `[daemon] mode = "management_only"`
+or pass `--management-only` to run only the management/control plane. In this
+mode the daemon does not start DMX input backends and ordinary DMX transmission
+is rejected at the service and transmitter boundaries. Telemetry, fail-safe,
+output, locate, and explicit priority/gate transactions remain available. Use
+`--bridge-mode` to override a management-only configuration for one invocation.
+
 The daemon clears the transmitter receiver cache on startup, reconnects a lost
 transmitter, rejects stale telemetry, and reapplies runtime receiver fail-safe
 configuration after startup, receiver discovery, transmitter reconnect, or
@@ -32,7 +39,9 @@ be resynchronized automatically.
 
 The dashboard displays daemon health, input/pacer statistics, receiver link and
 fail-safe state, priority state, and events. Its setup editor includes fail-safe
-mode and timeout.
+mode and timeout. The dashboard also displays the active daemon role; ordinary
+manual transmission is disabled in management-only mode while priority
+transmission remains available for locked-value and gate operations.
 
 ## Dashboard hotkeys
 

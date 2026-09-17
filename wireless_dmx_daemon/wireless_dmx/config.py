@@ -9,7 +9,7 @@ import os
 import tempfile
 from pathlib import Path
 
-from .models import DaemonConfig, ReceiverFailsafeMode
+from .models import DaemonConfig, DaemonMode, ReceiverFailsafeMode
 
 
 DEFAULT_CONFIG_PATH = "default.conf"
@@ -69,6 +69,7 @@ def load_config(path: str | None = None) -> DaemonConfig:
         with Path(path).open("rb") as stream:
             data = tomllib.load(stream)
         transmitter = data.get("transmitter", {})
+        values["mode"] = DaemonMode(data.get("daemon", {}).get("mode", DaemonMode.BRIDGE.value))
         values.update({"transmitter_" + key: value for key, value in transmitter.items()})
         values.update({"pacer_" + key: value for key, value in data.get("pacer", {}).items()})
         values.update({"telemetry_" + key: value for key, value in data.get("telemetry", {}).items()})
@@ -105,6 +106,7 @@ def save_config(config: DaemonConfig, path: str = DEFAULT_CONFIG_PATH) -> None:
     """Atomically write validated configuration as TOML."""
     config.validate()
     sections = {
+        "daemon": {"mode": getattr(config.mode, "value", config.mode)},
         "virtual_port": {"enabled": config.virtual_serial_enabled, "requested_path": config.virtual_port_path},
         "raw_virtual_port": {"enabled": config.raw_virtual_serial_enabled,
                               "requested_path": config.raw_virtual_port_path,
@@ -175,6 +177,10 @@ def save_config(config: DaemonConfig, path: str = DEFAULT_CONFIG_PATH) -> None:
 
 def apply_args(config: DaemonConfig, args: argparse.Namespace) -> DaemonConfig:
     updates = {}
+    if getattr(args, "management_only", False):
+        updates["mode"] = DaemonMode.MANAGEMENT_ONLY
+    elif getattr(args, "bridge_mode", False):
+        updates["mode"] = DaemonMode.BRIDGE
     for arg, field_name in (("transmitter", "transmitter_device"), ("baud", "transmitter_baud"),
                             ("rate", "pacer_rate_hz"), ("virtual_port", "virtual_port_path"),
                             ("telemetry_interval", "telemetry_interval_seconds")):

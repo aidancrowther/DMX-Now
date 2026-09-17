@@ -19,9 +19,15 @@ class DaemonHealth(str, Enum):
     READY = "ready"
     NO_VIRTUAL_CLIENT = "no_virtual_client"
     TRANSMITTER_DISCONNECTED = "transmitter_disconnected"
+    TRANSMITTER_MODE_REJECTED = "transmitter_mode_rejected"
     TELEMETRY_DEGRADED = "telemetry_degraded"
     RUNNING = "running"
     STOPPING = "stopping"
+
+
+class DaemonMode(str, Enum):
+    BRIDGE = "bridge"
+    MANAGEMENT_ONLY = "management_only"
 
 
 class ChannelGate(str, Enum):
@@ -181,6 +187,7 @@ class DaemonConfig:
     CLI and GUI layers share one configuration object from the beginning.
     """
 
+    mode: DaemonMode = DaemonMode.BRIDGE
     transmitter_device: str = "/dev/ttyUSB0"
     transmitter_baud: int = 115200
     transmitter_data_bits: int = 8
@@ -233,6 +240,10 @@ class DaemonConfig:
     receiver_names: tuple[tuple[int, str], ...] = ()
 
     def validate(self) -> None:
+        try:
+            DaemonMode(self.mode)
+        except ValueError as exc:
+            raise ValueError("mode must be bridge or management_only") from exc
         if not self.transmitter_device:
             raise ValueError("transmitter_device must not be empty")
         if self.transmitter_baud <= 0:
@@ -260,7 +271,8 @@ class DaemonConfig:
         if not self.virtual_port_path:
             if self.virtual_serial_enabled:
                 raise ValueError("virtual_port_path must not be empty when virtual serial is enabled")
-        if not self.virtual_serial_enabled and not self.raw_virtual_serial_enabled and not self.artnet_enabled:
+        if (self.mode == DaemonMode.BRIDGE and
+                not self.virtual_serial_enabled and not self.raw_virtual_serial_enabled and not self.artnet_enabled):
             raise ValueError("at least one DMX input must be enabled")
         if self.raw_virtual_serial_enabled and not self.raw_virtual_port_path:
             raise ValueError("raw_virtual_port_path must not be empty when raw DMX input is enabled")
@@ -341,4 +353,6 @@ class DaemonSnapshot:
     receivers: Tuple[ReceiverTelemetry, ...] = ()
     telemetry: TelemetryStatus = field(default_factory=TelemetryStatus)
     priority: PriorityStatus = field(default_factory=PriorityStatus)
+    transmitter_mode: Optional[str] = None
+    transmitter_mode_sync: str = "pending"
     last_error: Optional[str] = None

@@ -13,23 +13,38 @@ from .logging_setup import configure_logging
 
 
 def parser() -> argparse.ArgumentParser:
-    root = argparse.ArgumentParser(prog="dmx-now")
-    root.add_argument("--config")
+    root = argparse.ArgumentParser(
+        prog="dmx-now",
+        description="DMX Now host daemon and receiver-management interface.",
+    )
+    root.add_argument("--config", help="TOML/config file; defaults to the selected/default configuration")
     sub = root.add_subparsers(dest="command", required=True)
     for name in ("run", "status", "receivers", "stats"):
-        command = sub.add_parser(name)
-        command.add_argument("--transmitter")
-        command.add_argument("--baud", type=int)
-        command.add_argument("--rate", type=float)
-        command.add_argument("--virtual-port")
-        command.add_argument("--raw-dmx-enabled", action=argparse.BooleanOptionalAction, default=None)
-        command.add_argument("--raw-dmx-port")
-        command.add_argument("--raw-dmx-timeout", type=float)
-        command.add_argument("--telemetry-interval", type=float)
-        command.add_argument("--allow-experimental-rates", action="store_true")
-    sub.add_parser("version")
-    check = sub.add_parser("config-check")
-    check.add_argument("--config")
+        command = sub.add_parser(name, help={
+            "run": "run the daemon until interrupted",
+            "status": "start briefly and print a full status snapshot",
+            "receivers": "start briefly and print receiver telemetry",
+            "stats": "start briefly and print DMX statistics",
+        }[name])
+        command.add_argument("--transmitter", help="management transmitter serial device")
+        command.add_argument("--baud", type=int, help="management transmitter UART baud rate")
+        command.add_argument("--rate", type=float, help="normal DMX wireless pacing rate in Hz")
+        command.add_argument("--virtual-port", help="requested ENTTEC-compatible PTY path")
+        command.add_argument("--raw-dmx-enabled", action=argparse.BooleanOptionalAction, default=None,
+                             help="enable or disable the raw 512-byte DMX PTY")
+        command.add_argument("--raw-dmx-port", help="requested raw-DMX PTY path")
+        command.add_argument("--raw-dmx-timeout", type=float, help="incomplete raw-DMX burst timeout in seconds")
+        command.add_argument("--telemetry-interval", type=float, help="receiver telemetry polling interval in seconds")
+        command.add_argument("--allow-experimental-rates", action="store_true",
+                             help="allow configured pacer ceilings above the validated 20 Hz rate")
+        mode = command.add_mutually_exclusive_group()
+        mode.add_argument("--management-only", action="store_true",
+                          help="disable normal DMX inputs/output; retain management and priority traffic")
+        mode.add_argument("--bridge-mode", action="store_true",
+                          help="enable normal DMX bridge behavior for this invocation")
+    sub.add_parser("version", help="print the daemon version")
+    check = sub.add_parser("config-check", help="validate and print a configuration without starting hardware")
+    check.add_argument("--config", help="TOML/config file to validate")
     return root
 
 
@@ -52,9 +67,9 @@ def main(argv=None) -> int:
     service = _service(args)
     if args.command == "run":
         service.start()
-        if config.virtual_serial_enabled:
+        if service.config.virtual_serial_enabled:
             print(f"Virtual ENTTEC port: {service.virtual.path}", flush=True)
-        if config.raw_virtual_serial_enabled:
+        if service.config.raw_virtual_serial_enabled:
             print(f"Virtual raw DMX port: {service.raw_virtual.path}", flush=True)
         try:
             while True:

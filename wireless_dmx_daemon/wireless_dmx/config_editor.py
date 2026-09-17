@@ -9,6 +9,7 @@ from .config import save_config
 from .models import DaemonConfig
 
 EDITABLE_FIELDS = (
+    ("Daemon mode", "mode", str),
     ("Transmitter device", "transmitter_device", str),
     ("Transmitter baud", "transmitter_baud", int),
     ("Virtual serial enabled", "virtual_serial_enabled", bool),
