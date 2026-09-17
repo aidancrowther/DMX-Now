@@ -14,9 +14,23 @@ Lighting software -> host daemon -> ESP8266 transmitter
                                                            +--> DMX512 fixtures
 ```
 
-## Supported operating mode
+## Supported operating modes
 
-The validated host/transmitter production target is:
+The project supports the following operating modes and hardware roles.
+
+### 1. Host bridge mode — normal production operation
+
+The Linux host daemon accepts a DMX universe from one of its configured inputs,
+the integrated ESP8266 transmitter broadcasts it over QuickESPNow, and one or
+more ESP8266 receivers regenerate DMX512 for fixtures.
+
+```text
+Host input -> Linux daemon -> ESP8266 transmitter
+                              |
+                              +-- QuickESPNow -> ESP8266 receiver(s) -> DMX512
+```
+
+The validated native/integrated transmitter target is 20 Hz:
 
 ```text
 Wireless refresh:   20 Hz
@@ -26,36 +40,135 @@ Wireless transport: QuickESPNow / ESP-NOW
 Receiver output:    DMX512, 250000 baud, 8N2
 ```
 
-The standalone physical-DMX retransmitter has a separate production target of
-10 Hz, documented in [`docs/retransmitter-deployment.md`](docs/retransmitter-deployment.md).
-The native/integrated transmitter targets 20 Hz and can operate with the host
-daemon or as a native transmitter installation without the daemon, depending
-on the deployment architecture.
+The host can receive DMX through an ENTTEC-compatible serial PTY, Art-Net
+ArtDMX, or an optional raw-DMX virtual PTY. The daemon also provides the
+terminal dashboard, receiver management, priority traffic, channel gates, and
+fail-safe configuration.
 
-The transport is latest-state based. A receiver retains its last complete
-universe when a fragment or wireless update is missed; incomplete universes are
-discarded rather than promoted.
+### 2. Management-only mode
 
-## Features
+The daemon and integrated transmitter can run without emitting ordinary DMX.
+This mode is intended for a deployment where another device owns normal DMX,
+especially the standalone physical-DMX retransmitter below. Telemetry,
+receiver discovery, fail-safe settings, output control, locate, channel gates,
+and explicit priority traffic remain available.
 
-- Streaming ENTTEC DMX input and Art-Net ArtDMX input.
-- Optional raw-DMX virtual serial input accepting complete 512-byte universes.
-- Raw-DMX incomplete-burst timeout, defaulting to 1 second.
-- Bounded latest-state pacing at the validated 20 Hz rate.
-- Receiver telemetry with link freshness, battery, RSSI, sequence, counters,
-  firmware, and fail-safe state.
-- Targeted priority complete-universe delivery with bounded retries and ACKs.
-- Runtime channel gates (`OPEN`, `MANAGEMENT_ONLY`, and `LOCKED`).
-- Runtime receiver fail-safe modes:
+Start the daemon with either:
+
+```bash
+wireless-dmx run --management-only --config configs/config.example.toml
+# or set [daemon] mode = "management_only" in the configuration
+```
+
+The integrated transmitter can also be built as a locked management-only image
+with `./helpers/flash_transmitter.sh --lock-management-only`.
+
+### 3. Standalone physical-DMX retransmitter
+
+The standalone ESP8266 retransmitter receives physical DMX through a
+receive-only RS-485 interface on UART0/GPIO3 and broadcasts the existing normal
+three-fragment wireless protocol directly to the receivers. It does not require
+the Linux daemon, a host transmitter, or a management transmitter for normal
+operation.
+
+Its production target is 10 Hz. It accepts complete and supported partial
+physical-DMX frames from 24 through 512 slots, zero-filling the remaining
+channels through channel 512. The retransmitter never drives its physical DMX
+input line and has diagnostics disabled in the production image.
+
+```text
+Physical DMX source -> receive-only RS-485 -> ESP8266 retransmitter
+                                               |
+                                               +-- ESP-NOW -> receiver(s) -> fixtures
+```
+
+See [`docs/retransmitter-deployment.md`](docs/retransmitter-deployment.md) for
+wiring, production flashing, radio configuration, recovery, and validation.
+
+### 4. Monitored retransmitter deployment
+
+The retransmitter can be paired with a separate locked management-only ESP8266
+transmitter. The physical retransmitter remains the sole normal-DMX authority;
+the management transmitter provides receiver telemetry and control only. This
+mode supports remote fail-safe configuration, receiver output control, locate,
+channel gates, and explicit priority operations without creating a competing
+ordinary-DMX source.
+
+### 5. Arduino Mega USB-controlled DMX controller using `DMXSerial`
+
+`tests/mega_dmx_controller/` provides a simple local DMX source for bench
+testing. It uses the `DMXSerial` library on Mega USART1, with DMX output on pin
+18 and the USB connection available on `/dev/ttyUSB1` at 115200 baud, 8N1.
+
+Flash it with:
+
+```bash
+./helpers/flash_mega_dmx_controller.sh -f --port /dev/ttyUSB1
+```
+
+Enter newline-terminated commands over USB:
+
+```text
+<channel 1-512> <value 0-255>
+1 255
+24 128
+clear
+status
+help
+```
+
+### 6. Arduino Mega USB-controlled DMX controller using `DmxSimple`
+
+`tests/mega_dmxsimple_controller/` is the equivalent local controller using
+the `DmxSimple` library. Unlike the `DMXSerial` variant, it outputs DMX through
+Mega digital pin 3 and does not use USART1. The USB command interface is still
+available at 115200 baud, 8N1.
+
+Flash it with:
+
+```bash
+./helpers/flash_mega_dmxsimple_controller.sh -f --port /dev/ttyUSB1
+```
+
+It accepts the same `channel value`, `clear`, `status`, and `help` commands.
+
+### Wireless transport behavior
+
+The wireless transport is latest-state based. A receiver retains its last
+complete universe when a fragment or wireless update is missed; incomplete
+universes are discarded rather than promoted. The retransmitter and native
+transmitter use the same shared packet protocol.
+
+## Functions
+
+- Receives DMX through ENTTEC-compatible serial input, Art-Net ArtDMX, or an
+  optional raw-DMX virtual serial input accepting complete 512-byte universes.
+- Expires incomplete raw-DMX bursts after 1 second without changing the active
+  universe.
+- Paces native/integrated wireless transmission at the validated 20 Hz rate and
+  standalone retransmission at the validated 10 Hz rate.
+- Reconstructs fragmented 512-channel universes safely on receivers using
+  staging and active buffers; incomplete data is never promoted.
+- Retains the last complete universe through temporary wireless loss and
+  automatically recovers when a new valid universe arrives.
+- Reports receiver telemetry including link freshness, battery, RSSI, sequence,
+  counters, firmware, and fail-safe state.
+- Delivers targeted priority complete universes with bounded retries and ACKs.
+- Supports runtime channel gates: `OPEN`, `MANAGEMENT_ONLY`, and `LOCKED`.
+- Supports receiver fail-safe modes:
   - `hold`: retain the last complete universe;
   - `blackout`: output a zero universe after the timeout;
   - `disable_line`: disable the RS-485 driver after the timeout.
-- Automatic recovery after a new complete universe.
-- Linux PTY input and a terminal management dashboard.
-- Persistent host-side receiver friendly names editable from the dashboard.
-- Optional management-only daemon/transmitter role for deployments where a
-  standalone physical-DMX re-transmitter owns normal DMX.
-- Standalone UART0 physical-DMX-to-ESP-NOW re-transmitter firmware.
+- Provides receiver output enable/disable control and a temporary locate function
+  for identifying hardware.
+- Provides persistent receiver friendly names in the host configuration.
+- Provides a Linux PTY input path and terminal dashboard with manual universe
+  editing, normal/priority transmission, channel gates, receiver selection,
+  output control, locate, telemetry, and validation actions.
+- Converts physical DMX to the normal wireless protocol in standalone
+  retransmitter mode, including partial-frame zero-fill through channel 512.
+- Provides two simple Mega bench controllers that set individual channels over
+  USB and continuously transmit a 512-channel DMX universe.
 
 ## Repository layout
 

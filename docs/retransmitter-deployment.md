@@ -102,13 +102,11 @@ retransmitter may be electrically isolated from the host.
 
 ### Retransmitter
 
-Compile the validated recovery image without flashing:
+Build the normal production image without flashing:
 
 ```bash
 cd "/home/aidancrowther/Documents/Projects/Cline Testing" && \
-./helpers/flash_retransmitter.sh \
-  --define=-DRETRANSMITTER_DIAGNOSTICS=1 \
-  --define=-DRETRANSMITTER_DIAGNOSTIC_BROADCAST=1
+./helpers/flash_retransmitter.sh
 ```
 
 The helper is compile-only unless `-f` is provided. Flashing requires the
@@ -116,23 +114,31 @@ retransmitter's isolated programmer port and must be performed by the operator:
 
 ```bash
 cd "/home/aidancrowther/Documents/Projects/Cline Testing" && \
-./helpers/flash_retransmitter.sh \
-  --define=-DRETRANSMITTER_DIAGNOSTICS=1 \
-  --define=-DRETRANSMITTER_DIAGNOSTIC_BROADCAST=1 \
-  -f \
+./helpers/flash_retransmitter.sh -f \
   --port <RETRANSMITTER_PROGRAMMER_PORT>
 ```
 
-The diagnostic build's broadcasts are useful for lab diagnosis but add an
-extra ESP-NOW packet approximately once per second. For production deployment,
-build a normal image with diagnostics disabled:
+With no extra options, the helper builds the production 10 Hz image with
+diagnostics and diagnostic broadcasts disabled. Do not add diagnostic defines
+to a production image. Diagnostic builds are lab-only and add an extra
+ESP-NOW packet approximately once per second; if one is required for a specific
+bench investigation, enable it explicitly with `--define` and restore the
+normal image afterward.
+
+For a custom non-default build, the helper also provides an interactive
+configuration menu. It prompts for the ESP-NOW channel, universe ID, wireless
+rate, TX drain timeout, and TX overhead. Press Enter at each prompt to accept
+the production defaults:
 
 ```bash
 cd "/home/aidancrowther/Documents/Projects/Cline Testing" && \
-./helpers/flash_retransmitter.sh \
-  --define=-DRETRANSMITTER_DIAGNOSTICS=0 \
-  --define=-DRETRANSMITTER_DIAGNOSTIC_BROADCAST=0
+./helpers/flash_retransmitter.sh --menuconfig
 ```
+
+The menu defaults are channel `1`, universe `1`, rate `10` Hz, TX drain timeout
+`100` ms, and TX overhead `27` ms. `--menuconfig` can be combined with `-f`
+and `--port <RETRANSMITTER_PROGRAMMER_PORT>` when the resulting custom image
+is ready to flash.
 
 Always record the SHA-256 printed or calculated for the image that is flashed.
 Never use a test-only scheduling or fault-injection define in a deployment

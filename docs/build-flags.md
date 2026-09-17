@@ -85,12 +85,15 @@ while protecting wireless transmission.
 
 The helper is compile-only unless `-f` is supplied. `--menuconfig` is a small
 interactive Bash configuration menu covering channel, universe, wireless rate,
-TX drain timeout, and TX overhead. Partial-universe acceptance is now the only
-retransmitter mode. Command-line flags remain preferred for repeatable builds.
+TX drain timeout, and TX overhead. Its defaults are channel `1`, universe `1`,
+10 Hz, 100 ms, and 27 ms respectively. Partial-universe acceptance is now the
+only retransmitter mode. Command-line flags remain preferred for repeatable
+builds; use `--menuconfig` when selecting options interactively.
 Relevant definitions are
 `RETRANSMITTER_ESPNOW_CHANNEL`, `RETRANSMITTER_UNIVERSE_ID`,
 `RETRANSMITTER_WIRELESS_REFRESH_HZ`, `RETRANSMITTER_TX_DRAIN_TIMEOUT_MS`,
 `RETRANSMITTER_TX_OVERHEAD_MS`, `RETRANSMITTER_DIAGNOSTICS`, and
+`RETRANSMITTER_DIAGNOSTIC_BROADCAST`.
 The production retransmitter uses an absolute 10 Hz universe deadline. It waits
 for a fresh complete physical-DMX frame, sends when the deadline is due, and
 rebases one period forward after an overrun instead of compressing catch-up
