@@ -32,6 +32,146 @@ For macOS LaunchAgent installation, see `macos/README.md` and
 `macos/install_launch_agent.py`. macOS serial devices are normally exposed as
 `/dev/cu.*` paths.
 
+## Running the daemon
+
+The daemon has two host-side roles:
+
+* **Bridge mode** (the default) starts the configured ENTTEC PTY, optional raw
+  DMX PTY, and Art-Net input, then sends ordinary DMX through the transmitter.
+* **Management-only mode** does not start ordinary DMX inputs and rejects
+  normal DMX transmission. It retains receiver telemetry, discovery, fail-safe
+  configuration, output control, locate, channel gates, and explicit priority
+  traffic. Use this role when a standalone physical-DMX retransmitter owns the
+  normal DMX source.
+
+The role can be selected in the configuration:
+
+```toml
+[daemon]
+mode = "management_only" # bridge or management_only
+```
+
+The command-line flags override the configured role for one invocation:
+
+```bash
+wireless-dmx run --config configs/default.conf
+wireless-dmx run --management-only --config configs/default.conf
+wireless-dmx run --bridge-mode --config configs/default.conf
+```
+
+The interactive management dashboard is usually the preferred operator
+interface. It owns one in-process daemon and exposes telemetry, receiver names,
+fail-safe settings, output control, locate, channel gates, manual/priority
+operations, and status panels:
+
+```bash
+wireless-dmx-dashboard --config configs/default.conf
+wireless-dmx-dashboard --management-only --config configs/default.conf
+```
+
+Do not start a separate `wireless-dmx run` process at the same time as the
+dashboard using the same transmitter and PTY paths. The dashboard starts and
+stops its own service.
+
+### Linux foreground launch
+
+From this directory, install the package into the active Python environment and
+run the selected role in the foreground:
+
+```bash
+python3 -m pip install .
+wireless-dmx run --management-only --config configs/default.conf
+```
+
+The command prints the generated ENTTEC PTY path in bridge mode. Art-Net input
+continues to use UDP port 6454 and does not require a PTY client.
+
+### Linux systemd launch
+
+The repository provides `systemd/wireless-dmx.service`. It is a system-level
+template that expects the installed command at `/usr/bin/wireless-dmx`, the
+daemon working directory at `/opt/wireless-dmx-daemon`, and configuration at
+`/etc/wireless-dmx/config.toml`. Adjust those paths if the package is installed
+elsewhere.
+
+```bash
+sudo install -D -m 0644 systemd/wireless-dmx.service \
+  /etc/systemd/system/wireless-dmx.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now wireless-dmx.service
+sudo systemctl status wireless-dmx.service
+sudo journalctl -u wireless-dmx.service -f
+```
+
+For a management-only service, set this in the service's configuration file
+before starting or restarting it:
+
+```toml
+[daemon]
+mode = "management_only"
+```
+
+Then apply the change:
+
+```bash
+sudo systemctl restart wireless-dmx.service
+```
+
+Stop and disable the service with:
+
+```bash
+sudo systemctl disable --now wireless-dmx.service
+```
+
+The systemd unit itself does not add `--management-only`; the role comes from
+the selected TOML configuration. This keeps bridge and management-only launch
+behavior identical across Linux and macOS.
+
+### macOS foreground launch
+
+Use a `/dev/cu.*` transmitter device in the selected configuration, then run:
+
+```bash
+python3 -m pip install .
+wireless-dmx run --management-only --config configs/default.conf
+```
+
+Or launch the dashboard directly:
+
+```bash
+wireless-dmx-dashboard --management-only --config configs/default.conf
+```
+
+### macOS LaunchAgent launch
+
+The installer in `macos/install_launch_agent.py` generates a per-user
+LaunchAgent using the current Python interpreter. Select the role in the TOML
+file used by the agent, then install and load it:
+
+```bash
+python3 macos/install_launch_agent.py \
+  --config "$(pwd)/configs/default.conf"
+launchctl bootstrap "gui/$(id -u)" \
+  "$HOME/Library/LaunchAgents/com.dmxnow.daemon.plist"
+```
+
+Before installing, edit the selected configuration so it contains the desired
+role and macOS transmitter device, for example:
+
+```toml
+[daemon]
+mode = "management_only"
+
+[transmitter]
+device = "/dev/cu.YOUR_TRANSMITTER_ADAPTER"
+```
+
+Use `launchctl print` to inspect the running agent and `launchctl bootout` to
+stop it. Full paths, logs, and lifecycle commands are documented in
+`macos/README.md`. The LaunchAgent runs the daemon directly; use the dashboard
+as a separate interactive management client only when it is not also starting
+another daemon process for the same transmitter.
+
 ## Architecture
 
 ```text
