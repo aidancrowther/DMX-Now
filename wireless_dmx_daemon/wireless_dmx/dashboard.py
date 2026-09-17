@@ -6,6 +6,7 @@ import argparse
 import curses
 import json
 import os
+import sys
 import subprocess
 import threading
 import time
@@ -354,7 +355,7 @@ class DashboardController:
             return
         root = Path(__file__).resolve().parents[1]
         run_dir = root / "runs" / "dashboard-acceptance"
-        command = ["python3", str(root / "tests" / "run_30min_acceptance.py"),
+        command = [sys.executable, str(root / "tests" / "run_30min_acceptance.py"),
                    "--tx-port", self.config.transmitter_device, "--mega-port", self.mega.port_name,
                    "--seconds", "1800", "--run-dir", str(run_dir)]
         self.acceptance = subprocess.Popen(command, cwd=root, stdout=subprocess.DEVNULL,

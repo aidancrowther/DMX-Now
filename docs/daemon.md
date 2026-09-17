@@ -8,10 +8,10 @@ python3 -m pip install .
 wireless-dmx run --config config.example.toml
 ```
 
-configuration sections cover the transmitter serial device, ENTTEC and raw-DMX
-Linux PTYs, Art-Net, source arbitration, pacing, telemetry, priority traffic, channel
-gates, and receiver fail-safe behavior. See `configs/config.example.toml` for all
-fields.
+Configuration sections cover the transmitter serial device, host-selected
+Linux/macOS ENTTEC and raw-DMX PTYs, Art-Net, source arbitration, pacing,
+telemetry, priority traffic, channel gates, and receiver fail-safe behavior. See
+`configs/config.example.toml` for all fields.
 
 The default daemon role is bridge mode. Set `[daemon] mode = "management_only"`
 or pass `--management-only` to run only the management/control plane. In this
@@ -25,7 +25,46 @@ transmitter, rejects stale telemetry, and reapplies runtime receiver fail-safe
 configuration after startup, receiver discovery, transmitter reconnect, or
 receiver reboot.
 
-The optional `[raw_virtual_port]` creates a second Linux PTY for raw DMX input.
+## Launching and management roles
+
+The daemon supports two roles on both Linux and macOS:
+
+* `bridge`: starts normal DMX inputs and emits ordinary DMX; this is the
+  default.
+* `management_only`: suppresses normal DMX input/output while retaining
+  telemetry, discovery, fail-safe configuration, receiver output control,
+  locate, channel gates, and explicit priority traffic.
+
+Select the role in TOML or override it for one invocation:
+
+```bash
+wireless-dmx run --config configs/default.conf
+wireless-dmx run --management-only --config configs/default.conf
+wireless-dmx run --bridge-mode --config configs/default.conf
+```
+
+The terminal dashboard is the preferred interactive management interface:
+
+```bash
+wireless-dmx-dashboard --management-only --config configs/default.conf
+```
+
+It starts one in-process daemon. Do not run a second daemon or dashboard using
+the same transmitter device at the same time.
+
+On Linux, use `systemd/wireless-dmx.service` for a background daemon and select
+`mode = "management_only"` in the service's TOML configuration when a physical
+retransmitter owns normal DMX. Use `systemctl status`, `journalctl -u
+wireless-dmx.service -f`, and `systemctl restart` for lifecycle management.
+
+On macOS, use `macos/install_launch_agent.py` to generate
+`~/Library/LaunchAgents/com.dmxnow.daemon.plist`. The selected TOML file controls
+the role, and `launchctl print`/`launchctl bootout` manage the agent. macOS
+transmitter devices normally use `/dev/cu.*` paths. See `macos/README.md` for
+complete commands.
+
+The optional `[raw_virtual_port]` creates a second host-selected Linux/macOS PTY
+for raw DMX input.
 Write exactly one 512-byte DMX universe per burst; the parser also tolerates
 partial OS reads and concatenated bursts. Select it exclusively with
 `[input] source_policy = "raw_serial"`, or use `latest` to arbitrate it with

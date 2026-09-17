@@ -18,7 +18,7 @@ sys.path.insert(0, str(ROOT))
 from wireless_dmx.app import WirelessDmxService
 from wireless_dmx.enttec.protocol import encode_dmx
 from wireless_dmx.models import DaemonConfig
-from wireless_dmx.virtual_serial.linux_pty import LinuxPtyBackend
+from wireless_dmx.virtual_serial.factory import create_pty_backend
 
 
 def wait_line(port: serial.Serial, prefix: str, timeout: float) -> str:
@@ -76,7 +76,7 @@ def main() -> int:
         DaemonConfig(transmitter_device=args.tx_port, virtual_port_path=path,
                      artnet_enabled=False, telemetry_interval_seconds=1.0,
                      priority_max_attempts=5),
-        virtual_backend=LinuxPtyBackend(path),
+        virtual_backend=create_pty_backend(path),
     )
     mega = serial.Serial(args.mega_port, 115200, timeout=0.2)
     client = None
