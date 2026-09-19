@@ -213,17 +213,19 @@ Manager packages.
 
 | Library | Role | Upstream | Declared version | Exact project pin |
 |---|---|---|---:|---|
-| [QuickESPNow](https://github.com/gmag11/QuickESPNow) | ESP-NOW transport | `Libraries/QuickESPNow/` | `0.8.1` | `27f88ad99e4b58958934c3a3dfabd62ccd338c62` |
-| [espDMX](https://github.com/mtongnz/espDMX) | ESP8266 physical DMX output | `Libraries/espDMX/` | v2 | `608ce009edfeebc3bca44b184a9dc667de055284` |
+| [QuickESPNow fork](https://github.com/aidancrowther/QuickESPNow) ([upstream](https://github.com/gmag11/QuickESPNow)) | ESP-NOW transport | `Libraries/QuickESPNow/` | `0.8.1` | `27f88ad99e4b58958934c3a3dfabd62ccd338c62` |
+| [espDMX fork](https://github.com/aidancrowther/espDMX) ([upstream](https://github.com/mtongnz/espDMX)) | ESP8266 physical DMX output | `Libraries/espDMX/` | v2 | `608ce009edfeebc3bca44b184a9dc667de055284` |
 | [DMXUART](https://github.com/casesolved-co-uk/DMXUART) | Physical-DMX UART input/output | `Libraries/DMXUART/` | `4.0.3` | Bundled project copy |
 | WirelessDMX | Project-owned wireless/management protocol | `Libraries/WirelessDMX/` | `1.0.0` | Matching DMX Now source |
 
-QuickESPNow includes three project-specific commits beyond its upstream branch,
-and espDMX includes one project-specific commit beyond upstream. The exact
-commit pins above are authoritative. QuickESPNow is MIT licensed, espDMX is
-GPL-3.0, and DMXUART is MIT licensed; complete license texts are retained beside
-the bundled sources. `LXESP8266DMX` was an unused former dependency and has been
-intentionally removed.
+For now, the DMX Now build points at the `aidancrowther` forks of QuickESPNow
+and espDMX so the local changes remain available for pull requests and long-term
+preservation. The original maintainer repositories are retained as upstream
+references. QuickESPNow includes three project-specific commits beyond upstream,
+and espDMX includes one. The exact commit pins above are authoritative.
+QuickESPNow is MIT licensed, espDMX is GPL-3.0, and DMXUART is MIT licensed;
+complete license texts are retained beside the bundled sources. `LXESP8266DMX`
+was an unused former dependency and has been intentionally removed.
 
 ## Build and flash
 

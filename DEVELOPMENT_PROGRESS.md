@@ -114,10 +114,11 @@ ESP-01 modules may have different flash capacities, so do not assume a particula
 Repository:
 
 ```
-https://github.com/gmag11/QuickESPNow
+https://github.com/aidancrowther/QuickESPNow
 ```
 
-QuickESPNow MUST be obtained directly from this GitHub repository.
+QuickESPNow MUST be obtained from the DMX Now fork above for the current build.
+The upstream repository is https://github.com/gmag11/QuickESPNow.
 
 Do not install or substitute a version from Arduino Library Manager.
 
@@ -140,10 +141,11 @@ The ESP8266 implementation is documented as providing approximately 200 kbps of 
 Repository:
 
 ```
-https://github.com/mtongnz/espDMX
+https://github.com/aidancrowther/espDMX
 ```
 
-espDMX MUST be obtained directly from this GitHub repository.
+espDMX MUST be obtained from the DMX Now fork above for the current build.
+The upstream repository is https://github.com/mtongnz/espDMX.
 
 Do not install or substitute a version from Arduino Library Manager.
 
@@ -658,8 +660,9 @@ Inspect the locally checked-out QuickESPNow and espDMX source whenever their beh
 
 ## Dependency Revisions
 
-Only **QuickESPNow** and **espDMX** are third-party dependencies, cloned directly
-from their GitHub repositories into `./Libraries/`.
+**QuickESPNow** and **espDMX** are third-party dependencies maintained in the
+project's GitHub forks and pinned in `./Libraries/`. **DMXUART** is a bundled
+third-party source copy used by the physical-DMX retransmitter.
 
 The wireless protocol definition (`WirelessDMX`) is a **project-owned local
 library** (`./Libraries/WirelessDMX/`) — see Feature 5. It is not a git
@@ -667,14 +670,21 @@ dependency.
 
 ```
 QuickESPNow
-Repository: https://github.com/gmag11/QuickESPNow
-Commit: ec3e337bfdbb744d430b685c8af99298b5b6b91b
-Local modifications: None
+Current repository: https://github.com/aidancrowther/QuickESPNow
+Upstream repository: https://github.com/gmag11/QuickESPNow
+Commit: 27f88ad99e4b58958934c3a3dfabd62ccd338c62
+Local modifications: Preserved in the DMX Now fork
 
 espDMX
-Repository: https://github.com/mtongnz/espDMX
-Commit: 02eb697f5b0b2874eafe461d699d699d6204796cdde
-Local modifications: None (unmodified, upstream "compile-error" fix commit)
+Current repository: https://github.com/aidancrowther/espDMX
+Upstream repository: https://github.com/mtongnz/espDMX
+Commit: 608ce009edfeebc3bca44b184a9dc667de055284
+Local modifications: Preserved in the DMX Now fork
+
+DMXUART
+Repository: https://github.com/casesolved-co-uk/DMXUART
+Version: 4.0.3
+Local copy: `./Libraries/DMXUART/`
 ```
 
 These local copies MUST be used for compilation (see Build Information). A different
@@ -809,10 +819,14 @@ Status: COMPLETE (compile-verified 2026-08-21, not hardware-verified)
 Completed:
 
 * repository structure established (`./Firmware/Receiver/`, `./Libraries/`, `./shared/`, `./Firmware/Transmitter/`)
-* QuickESPNow cloned from https://github.com/gmag11/QuickESPNow at
-  commit `ec3e337bfdbb744d430b685c8af99298b5b6b91b` (no local modifications)
-* espDMX cloned from https://github.com/mtongnz/espDMX at
-  commit `02eb697f5b0b2874eafe461d699d699d6204796cdde` (no local modifications)
+* QuickESPNow is pinned to the DMX Now fork
+  `https://github.com/aidancrowther/QuickESPNow` at commit
+  `27f88ad99e4b58958934c3a3dfabd62ccd338c62`; upstream is
+  `https://github.com/gmag11/QuickESPNow`.
+* espDMX is pinned to the DMX Now fork
+  `https://github.com/aidancrowther/espDMX` at commit
+  `608ce009edfeebc3bca44b184a9dc667de055284`; upstream is
+  `https://github.com/mtongnz/espDMX`.
 * both library APIs inspected (see Dependency Revisions)
 * minimal receiver sketch created at `./Firmware/Receiver/receiver.ino`
   (defines pin constants, includes both libraries)

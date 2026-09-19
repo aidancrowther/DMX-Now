@@ -7,16 +7,18 @@ the firmware.
 
 ## Retained dependencies
 
-| Library | Purpose | Upstream | Declared version | Exact project pin |
-|---|---|---|---:|---|
-| QuickESPNow | ESP-NOW transport for ESP8266/ESP32 | [gmag11/QuickESPNow](https://github.com/gmag11/QuickESPNow) | `0.8.1` | `27f88ad99e4b58958934c3a3dfabd62ccd338c62` |
-| espDMX | ESP8266 physical DMX output | [mtongnz/espDMX](https://github.com/mtongnz/espDMX) | v2 | `608ce009edfeebc3bca44b184a9dc667de055284` |
+| Library | Purpose | Current source | Upstream reference | Declared version | Exact project pin |
+|---|---|---|---|---:|---|
+| QuickESPNow | ESP-NOW transport for ESP8266/ESP32 | [aidancrowther/QuickESPNow](https://github.com/aidancrowther/QuickESPNow) | [gmag11/QuickESPNow](https://github.com/gmag11/QuickESPNow) | `0.8.1` | `27f88ad99e4b58958934c3a3dfabd62ccd338c62` |
+| espDMX | ESP8266 physical DMX output | [aidancrowther/espDMX](https://github.com/aidancrowther/espDMX) | [mtongnz/espDMX](https://github.com/mtongnz/espDMX) | v2 | `608ce009edfeebc3bca44b184a9dc667de055284` |
 | DMXUART | ESP8266/ESP32 physical DMX input/output UART support | [casesolved-co-uk/DMXUART](https://github.com/casesolved-co-uk/DMXUART) | `4.0.3` | Bundled project copy |
 | WirelessDMX | Canonical DMX fragment and management protocol | Project-owned | `1.0.0` | Matching DMX Now source |
 
-QuickESPNow is three commits ahead of its upstream `main` branch in the pinned
-working tree. espDMX is one commit ahead of its upstream `master` branch. The
-commit hashes above are authoritative for this project and include the local
+The current DMX Now build points at the `aidancrowther` forks until the local
+changes are merged upstream, if they are accepted. The original repositories
+remain the upstream references. QuickESPNow is three commits ahead of upstream
+`main` in the pinned fork, and espDMX is one commit ahead of upstream `master`.
+The commit hashes above are authoritative for this project and include the local
 changes required by DMX Now.
 
 QuickESPNow is MIT licensed, espDMX is GPL-3.0, and DMXUART is MIT licensed;
