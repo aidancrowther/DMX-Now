@@ -124,7 +124,7 @@ Do not install or substitute a version from Arduino Library Manager.
 Preferred local location:
 
 ```
-./libraries/QuickESPNow/
+./Libraries/QuickESPNow/
 ```
 
 The checked-out source should be inspected before using its API.
@@ -150,7 +150,7 @@ Do not install or substitute a version from Arduino Library Manager.
 Preferred local location:
 
 ```
-./libraries/espDMX/
+./Libraries/espDMX/
 ```
 
 espDMX is responsible for generating the physical DMX512 output from receiver ESP8266 modules.
@@ -539,7 +539,7 @@ the wireless receive callback.
 
 Telemetry must remain lower priority than realtime DMX reception.
 
-The production transmitter sketch at `./transmitter/transmitter.ino` accepts
+The production transmitter sketch at `./Firmware/Transmitter/transmitter.ino` accepts
 ENTTEC DMX USB Pro input and processes received telemetry internally. UART0 is
 the binary ENTTEC input, so text output is disabled by default and must not be
 enabled during normal operation. The transmitter retains only the newest
@@ -659,10 +659,10 @@ Inspect the locally checked-out QuickESPNow and espDMX source whenever their beh
 ## Dependency Revisions
 
 Only **QuickESPNow** and **espDMX** are third-party dependencies, cloned directly
-from their GitHub repositories into `./libraries/`.
+from their GitHub repositories into `./Libraries/`.
 
 The wireless protocol definition (`WirelessDMX`) is a **project-owned local
-library** (`./libraries/WirelessDMX/`) — see Feature 5. It is not a git
+library** (`./Libraries/WirelessDMX/`) — see Feature 5. It is not a git
 dependency.
 
 ```
@@ -738,7 +738,7 @@ newer, incompatible `QuickESPNow` 2.4.0).
 Shared protocol header:
 
 The wireless protocol is defined once in the project-owned library
-`./libraries/WirelessDMX/`. The flash scripts pin it alongside QuickESPNow via
+`./Libraries/WirelessDMX/`. The flash scripts pin it alongside QuickESPNow via
 `--library`, so the sketches include it by name:
 
 ```
@@ -753,14 +753,14 @@ Re-verified after library replacement (ESP-Dmx → espDMX):
 ```
 arduino-cli compile \
   --fqbn esp8266:esp8266:generic \
-  --library ./libraries/QuickESPNow \
-  --library ./libraries/espDMX \
-  ./receiver
+  --library ./Libraries/QuickESPNow \
+  --library ./Libraries/espDMX \
+  ./Firmware/Receiver
 ```
 
 Result: success (exit 0). Flash usage 241,696 / 1,048,576 bytes (23%),
 RAM 28,932 / 80,192 bytes (36%). Verbose output confirmed both libraries were
-compiled from `./libraries/QuickESPNow` (v0.8.1) and `./libraries/espDMX`
+compiled from `./Libraries/QuickESPNow` (v0.8.1) and `./Libraries/espDMX`
 (commit 02eb697f...); only the core-provided `ESP8266WiFi` library was taken from the
 installed board package.
 
@@ -776,8 +776,8 @@ This script compiles and flashes to `/dev/ttyUSB0`. Adjust the port as needed.
 
 ### Transmitter
 
-The Feature 5 wireless transmitter test remains at `./tests/espnow_universe_tx/`.
-The production `./transmitter/transmitter.ino` sketch now accepts ENTTEC DMX
+The Feature 5 wireless transmitter test remains at `./Tests/espnow_universe_tx/`.
+The production `./Firmware/Transmitter/transmitter.ino` sketch now accepts ENTTEC DMX
 USB Pro input while retaining the verified wireless fragmentation and telemetry
 processing paths.
 
@@ -787,14 +787,14 @@ via `./flash_espnow_tx.sh` (compile-only, no `-f`):
 ```
 arduino-cli compile \
   -b esp8266:esp8266:generic \
-  --library ./libraries/QuickESPNow \
-  --library ./libraries/WirelessDMX \
-  ./tests/espnow_universe_tx
+  --library ./Libraries/QuickESPNow \
+  --library ./Libraries/WirelessDMX \
+  ./Tests/espnow_universe_tx
 ```
 
-The receiver test (`./tests/espnow_universe_rx/`) builds the same way via
+The receiver test (`./Tests/espnow_universe_rx/`) builds the same way via
 `./flash_espnow_rx.sh`. Both pin the shared protocol header
-`./libraries/WirelessDMX/` via `--library` and include it as
+`./Libraries/WirelessDMX/` via `--library` and include it as
 `#include <wireless_protocol.h>`. Flash with the `-f` flag when a serial
 port is attached.
 
@@ -808,13 +808,13 @@ Status: COMPLETE (compile-verified 2026-08-21, not hardware-verified)
 
 Completed:
 
-* repository structure established (`./receiver/`, `./libraries/`, `./shared/`, `./transmitter/`)
+* repository structure established (`./Firmware/Receiver/`, `./Libraries/`, `./shared/`, `./Firmware/Transmitter/`)
 * QuickESPNow cloned from https://github.com/gmag11/QuickESPNow at
   commit `ec3e337bfdbb744d430b685c8af99298b5b6b91b` (no local modifications)
 * espDMX cloned from https://github.com/mtongnz/espDMX at
   commit `02eb697f5b0b2874eafe461d699d699d6204796cdde` (no local modifications)
 * both library APIs inspected (see Dependency Revisions)
-* minimal receiver sketch created at `./receiver/receiver.ino`
+* minimal receiver sketch created at `./Firmware/Receiver/receiver.ino`
   (defines pin constants, includes both libraries)
 * both mandatory libraries verified to coexist in a single build
 * successful compile against `esp8266:esp8266:generic` using the local library
@@ -834,7 +834,7 @@ Status: COMPLETE (compile-verified + espDMX hardware-verified 2026-08-21 ✓)
 
 Completed:
 
-* espDMX library integrated into `./receiver/receiver.ino` with minimal usage pattern:
+* espDMX library integrated into `./Firmware/Receiver/receiver.ino` with minimal usage pattern:
   - `dmxA.begin()` initializes the library on UART0/GPIO1.
   - `dmxA.setChans(universe, DMX_UNIVERSE_CHANNELS, 1)` sets channel data;
     output is interrupt-driven and self-refreshing (no `update()` call).
@@ -863,7 +863,7 @@ Verified items:
 
 Library state: espDMX works unmodified (commit 02eb697f...). No patches required.
 
-Note: `libraries/ESP-Dmx/` (Rickgg fork) and `libraries/patches/*.patch` belong to the earlier abandoned approach; they are not used by this receiver build.
+Note: `Libraries/ESP-Dmx/` (Rickgg fork) and `Libraries/patches/*.patch` belong to the earlier abandoned approach; they are not used by this receiver build.
 
 ### Feature 5: Wireless DMX universe (fragmented broadcast)
 
@@ -871,15 +871,15 @@ Status: COMPLETE (hardware-verified 2026-08-24 ✓)
 
 This is the first real wireless DMX data path: the transmitter broadcasts a
 512-channel universe as 3 QuickESPNow fragments and the receiver validates each
-fragment. Test sketches live under `./tests/`:
+fragment. Test sketches live under `./Tests/`:
 
-* `tests/espnow_universe_tx/` — Feature 5 transmitter (broadcast)
-* `tests/espnow_universe_rx/` — Feature 5 receiver (per-fragment validation)
-* `tests/espnow_basic_tx/` / `tests/espnow_basic_rx/` — Feature 4 (basic link) sanity tests
+* `Tests/espnow_universe_tx/` — Feature 5 transmitter (broadcast)
+* `Tests/espnow_universe_rx/` — Feature 5 receiver (per-fragment validation)
+* `Tests/espnow_basic_tx/` / `Tests/espnow_basic_rx/` — Feature 4 (basic link) sanity tests
 
 Wire protocol (canonical, single source of truth):
 
-* Defined once in the project-owned library `./libraries/WirelessDMX/`
+* Defined once in the project-owned library `./Libraries/WirelessDMX/`
   (`src/wireless_protocol.h`). Both TX and RX include it; no per-program copies.
 * `DmxFragmentPacket` is `__attribute__((packed))` and exactly 14 bytes
   (guarded by `static_assert(sizeof == DMX_HEADER_SIZE)`). A 14-byte header is
@@ -918,7 +918,7 @@ from QuickESPNow broadcast fragments, with safe double buffering via two distinc
 Test results are documented in `Testing/FEATURE6_RESULTS.md`. All 11/12 test cases
 passed as demonstrated by the logs (Test 8 skipped due to missing hook build; source
 code verified). The receiver implementation passes all test scenarios from the
-[Feature 6 Test Plan](./tests/FEATURE6_TEST_PLAN.md).
+[Feature 6 Test Plan](./Tests/FEATURE6_TEST_PLAN.md).
 
 #### Architecture (no FreeRTOS)
 - Plain Arduino `setup()` / `loop()` with a small deterministic state machine.
@@ -985,7 +985,7 @@ to `build.extra_flags`); hook code is compiled out when the define is absent:
     packet through the receiver's own validation path (no RF required).
 
 #### Feature 6 Testing Plan
-A comprehensive testing plan exists at `tests/FEATURE6_TEST_PLAN.md`. It documents 12 tests — normal frame reception, dropped fragments (middle/final), duplicate, reorder, late/stale fragment, corrupted payload, malformed metadata, mid-stream startup, transmitter reset re-baseline, uint32 sequence rollover, and multiple receivers. Each test lists the exact `--define` build setting(s) and the expected RX serial output/counter deltas (see the Test Hooks section above for the hook list).
+A comprehensive testing plan exists at `Tests/FEATURE6_TEST_PLAN.md`. It documents 12 tests — normal frame reception, dropped fragments (middle/final), duplicate, reorder, late/stale fragment, corrupted payload, malformed metadata, mid-stream startup, transmitter reset re-baseline, uint32 sequence rollover, and multiple receivers. Each test lists the exact `--define` build setting(s) and the expected RX serial output/counter deltas (see the Test Hooks section above for the hook list).
 
 #### RAM/Flash Usage (Receiver)
 - RAM: 32,224 / 80,192 bytes (40%)
@@ -1003,10 +1003,10 @@ Completed:
 * **Budget pacing (Feature 7)**: the transmitter's per-frame overhead is now
   subtracted from the requested interval so period ≈ 1000/Hz. Implemented with
   `-DWIRELESS_TX_OVERHEAD_MS=27` and `-DWIRELESS_TX_DRAIN_TIMEOUT_MS=100` in
-  `tests/espnow_universe_tx.ino`. This fix addresses the ~27 ms constant added in
+  `Tests/espnow_universe_tx.ino`. This fix addresses the ~27 ms constant added in
   series (radio airtime for a 512-channel frame) and tightens the drain timeout
   from 200 ms to 100 ms. Compile-verified at all rates.
-* MEGA DMX monitor `tests/dmx_refresh_monitor/dmx_refresh_monitor.ino`: sits on the
+* MEGA DMX monitor `Tests/dmx_refresh_monitor/dmx_refresh_monitor.ino`: sits on the
   integrated receiver's DMX output (DMXSerial RX on USART1/pin 19 via
   `-DDMX_USE_PORT1`), counts genuinely-new universes (on `packetReady()`, a one-shot
   latch per **complete** frame, filtered to new sequences so espDMX's ~44 Hz identical
@@ -1017,7 +1017,7 @@ Completed:
   the `DMXSerial.cpp` library compile line (verbose build).
 * `./flash_dmx_monitor.sh` — build/flash for the MEGA (passes the global
   `DMX_USE_PORT1` flag; `arduino-cli upload` for AVR).
-* `tests/pico_dmx_refresh_monitor/pico_dmx_refresh_monitor.ino` — optional
+* `Tests/pico_dmx_refresh_monitor/pico_dmx_refresh_monitor.ino` — optional
   Raspberry Pi Pico PIO/DMA monitor on GPIO 1 with native USB telemetry.
 * `flash_pico_dmx_monitor.sh` — build/flash helper for the Pico monitor.
 * `Testing/feature7/tools/run_sweep.py` — host runner that flashes the TX for
@@ -1052,7 +1052,7 @@ Hardware validation:
 
 Status: SUBSTANTIALLY COMPLETE (implemented and hardware-verified 2026-09-03)
 
-The integrated transmitter at `./transmitter/transmitter.ino` accepts the
+The integrated transmitter at `./Firmware/Transmitter/transmitter.ino` accepts the
 ENTTEC DMX USB Pro packet format on UART0:
 
 ```text
@@ -1167,7 +1167,7 @@ Expected approximate sequence:
 1. Project setup and dependency verification ✓
 2. Patch espDMX library to match hardware requirements (if needed) — *resolved (not required)*
 3. Hardware verification of espDMX output (channels ≥255, full 512-channel transmission) — *verified 2026-08-21*
-4. Basic QuickESPNow transmitter/receiver communication ✓
+4. Basic QuickESPNow Firmware/Transmitter/receiver communication ✓
 5. Wireless packet format and fragmentation ✓ (Feature 5, verified 2026-08-24)
 6. Receiver universe reconstruction/double buffering ✓ (Feature 6, verified 2026-08-27)
 7. Configurable transmitter wireless refresh + reliable-rate test harness ✓ (hardware-validated 2026-09-02; conservative reliable ceiling 20 Hz)
@@ -1194,8 +1194,8 @@ DMX, while telemetry, receiver controls, and explicit priority/gate traffic
 remain available. The integrated transmitter has a compile-time
 `TRANSMITTER_MANAGEMENT_ONLY` role with the same normal-DMX suppression.
 
-A standalone `retransmitter/` sketch receives physical DMX on UART0/GPIO3
-using the pinned BSD-licensed `LXESP8266DMX` receive implementation and sends
+A standalone `Firmware/ReTransmitter/` sketch receives physical DMX on UART0/GPIO3
+using the pinned MIT-licensed `DMXUART` receive implementation and sends
 only the existing normal three-fragment protocol. Its helper supports channel,
 universe, refresh-rate, optional partial-universe zero-fill flags, and an
 interactive `--menuconfig` prompt. Strict 512-slot input remains the default.
@@ -1215,14 +1215,14 @@ with matching reconstructed content for every accepted promotion, no source
 mismatches, no corruption, no sequence backtracks, and no queue/ring failures.
 Long-run measurements were approximately 8.9–9.9 Hz, within the documented
 measurement tolerance for the nominal 10 Hz target. Deployment and recovery
-procedures are documented in `docs/retransmitter-deployment.md`.
+procedures are documented in `Docs/retransmitter-deployment.md`.
 
 The re-transmitter has no planned diagnostic or auxiliary I/O beyond UART0 DMX
 RX and ESP-NOW; future hardware I/O can be added without changing the protocol.
 
 ### Feature 12: Reliability and throughput testing
 
-Status: COMPLETE for the validated Linux/20 Hz ESP8266/transmitter/receiver/
+Status: COMPLETE for the validated Linux/20 Hz ESP8266/Firmware/Transmitter/Firmware/Receiver/
 Arduino Mega deployment.
 
 The 30-minute two-receiver acceptance submitted 36,000 DMX frames at 20 Hz and
@@ -1336,7 +1336,7 @@ Completed:
   Save As support, and dashboard setup editing.
 * btop-like curses dashboard with color-coded telemetry visualizations and
   Advanced hardware-testing controls.
-* 66 automated host tests and live Art-Net/transmitter/receiver
+* 66 automated host tests and live Art-Net/Firmware/Transmitter/receiver
   validation.
 * 30-minute end-to-end acceptance run with 36,000 DMX frames submitted at 20 Hz,
   79,869/79,869 Mega DMX checks passing, zero failures, and two receivers

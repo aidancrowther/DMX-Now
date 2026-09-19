@@ -1,0 +1,219 @@
+# Host daemon
+
+Install and run:
+
+```bash
+cd "Host Software/wireless_dmx_daemon"
+python3 -m pip install .
+wireless-dmx run --config config.example.toml
+```
+
+Configuration sections cover the transmitter serial device, host-selected
+Linux/macOS ENTTEC and raw-DMX PTYs, Art-Net, source arbitration, pacing,
+telemetry, priority traffic, channel gates, and receiver fail-safe behavior. See
+`configs/config.example.toml` for all fields.
+
+The default daemon role is bridge mode. Set `[daemon] mode = "management_only"`
+or pass `--management-only` to run only the management/control plane. In this
+mode the daemon does not start DMX input backends and ordinary DMX transmission
+is rejected at the service and transmitter boundaries. Telemetry, fail-safe,
+output, locate, and explicit priority/gate transactions remain available. Use
+`--bridge-mode` to override a management-only configuration for one invocation.
+
+The daemon clears the transmitter receiver cache on startup, reconnects a lost
+transmitter, rejects stale telemetry, and reapplies runtime receiver fail-safe
+configuration after startup, receiver discovery, transmitter reconnect, or
+receiver reboot.
+
+## Launching and management roles
+
+The daemon supports two roles on both Linux and macOS:
+
+* `bridge`: starts normal DMX inputs and emits ordinary DMX; this is the
+  default.
+* `management_only`: suppresses normal DMX input/output while retaining
+  telemetry, discovery, fail-safe configuration, receiver output control,
+  locate, channel gates, and explicit priority traffic.
+
+Select the role in TOML or override it for one invocation:
+
+```bash
+wireless-dmx run --config configs/default.conf
+wireless-dmx run --management-only --config configs/default.conf
+wireless-dmx run --bridge-mode --config configs/default.conf
+```
+
+The terminal dashboard is the preferred interactive management interface:
+
+```bash
+wireless-dmx-dashboard --management-only --config configs/default.conf
+```
+
+It starts one in-process daemon. Do not run a second daemon or dashboard using
+the same transmitter device at the same time.
+
+On Linux, use `systemd/wireless-dmx.service` for a background daemon and select
+`mode = "management_only"` in the service's TOML configuration when a physical
+retransmitter owns normal DMX. Use `systemctl status`, `journalctl -u
+wireless-dmx.service -f`, and `systemctl restart` for lifecycle management.
+
+On macOS, use `macos/install_launch_agent.py` to generate
+`~/Library/LaunchAgents/com.dmxnow.daemon.plist`. The selected TOML file controls
+the role, and `launchctl print`/`launchctl bootout` manage the agent. macOS
+transmitter devices normally use `/dev/cu.*` paths. See `macos/README.md` for
+complete commands.
+
+The optional `[raw_virtual_port]` creates a second host-selected Linux/macOS PTY
+for raw DMX input.
+Write exactly one 512-byte DMX universe per burst; the parser also tolerates
+partial OS reads and concatenated bursts. Select it exclusively with
+`[input] source_policy = "raw_serial"`, or use `latest` to arbitrate it with
+the other enabled inputs. The printed raw-DMX PTY path is separate from the
+ENTTEC-compatible PTY.
+`timeout_seconds` defaults to 1.0 and abandons an incomplete universe after
+that interval without changing the previously active universe.
+Because raw DMX has no delimiter or length marker, the raw input stream must
+remain aligned to 512-byte universe boundaries; an extra or missing byte cannot
+be resynchronized automatically.
+
+The dashboard displays daemon health, input/pacer statistics, receiver link and
+fail-safe state, priority state, and events. Its setup editor includes fail-safe
+mode and timeout. The dashboard also displays the active daemon role; ordinary
+manual transmission is disabled in management-only mode while priority
+transmission remains available for locked-value and gate operations.
+
+In management-only mode, the manual universe view is populated from the latest
+complete universe observed by the management transmitter on the ESP-NOW channel.
+The view is labeled best-effort and reports `LIVE`, `STALE`, or `UNAVAILABLE`
+with source, age, and sequence information. Observation is read-only and never
+feeds the DMX pacer. Before a retransmitter observation is available, the view
+uses the latest local priority universe as a fallback.
+
+## Dashboard hotkeys
+
+### Main view
+
+| Key | Action |
+|---|---|
+| `d` | Start or stop the daemon. |
+| `r` | Request immediate telemetry. |
+| `s` | Open configuration. |
+| `u` | Open the manual universe editor. |
+| `n` | Open the persistent receiver-name editor. |
+| `o` | Open the centered multi-select receiver menu for MAX3485 output control. |
+| `i` | Open the centered multi-select receiver locator. Locating interrupts DMX for 15 seconds. |
+| `p` | Open the centered priority-traffic status alert. |
+| `x` | Open advanced hardware testing. |
+| `l` | Show or hide the event log. |
+| `q` | Stop components and quit. |
+
+### Configuration editor
+
+| Key | Action |
+|---|---|
+| Up/Down or `j`/`k` | Select a setting. |
+| `e` | Edit the selected setting. |
+| `w` | Save atomically. |
+| `x` | Discard changes and return. |
+| `q` | Quit. |
+
+When the dashboard is started without `--config`, it opens a configuration-file
+selector before starting the daemon. Choose a `.conf` or `.toml` file with
+Up/Down or `j`/`k` and press Enter. Press `c` on the main dashboard to reopen
+the selector; selecting another file stops the current daemon before loading
+the new configuration. Supplying `--config <path>` skips the selector and is
+still supported for CLI and scripted management.
+
+The selector searches `Host Software/wireless_dmx_daemon/configs/`. The checked-in
+`default.conf` and `config.example.toml` files are read-only baselines. In the setup editor,
+press `a` for Save As, enter a new `.toml` or `.conf` filename, and press Enter.
+The new file is saved atomically and becomes the active dashboard configuration.
+Use `w` to save subsequent edits to that active file. Save As cannot overwrite
+`default.conf` or `config.example.toml`.
+
+After a writable configuration is selected or saved, it is remembered for the
+next dashboard launch. If no remembered writable file exists, the newest
+writable configuration in `configs/` is selected automatically; otherwise the
+selector opens with the read-only default baseline selected.
+
+### Manual universe editor
+
+| Key | Action |
+|---|---|
+| Up/Down or `j`/`k` | Select a channel; move by rows in grid mode. |
+| Left/Right | Move one channel in grid mode. |
+| `a` | Jump to a channel. |
+| `e` | Set a channel value. |
+| `+`/`-` | Nudge a channel value. |
+| `l` | Cycle the selected channel gate. |
+| `n`/`p` | Select normal or priority transmission. |
+| `r` | Cycle priority repeat count. |
+| `t` | Cycle priority TTL. |
+| Enter | Send the complete current universe. |
+| `c` | Clear the manual universe, including locked channels. |
+| `z` | Reset editable channels to zero without transmitting. |
+| `u` | Toggle full-universe view. |
+| `g` | Toggle grid view. |
+| `x` | Return to the main dashboard. |
+| `q` | Quit. |
+
+In full-universe grid mode, type a DMX value directly with the number keys. The
+typed value appears in the selected cell; press Enter to apply it. Values from
+0 through 255 are accepted. Backspace removes the last digit, and navigation
+clears an unfinished entry. Pressing Enter without a typed value retains the
+existing behavior of sending the complete manual universe.
+
+Priority sends report the priority ID, expected receivers, acknowledged
+receivers, retry count, and gate-applied receivers when applicable.
+
+Channel gates apply by data origin. Ordinary serial, Art-Net, and retransmitter
+observations cannot overwrite `LOCKED` channels. Explicit management edits can
+change them and priority transmission is the mechanism used to apply those
+changes in management-only mode. When `l` changes a channel into `LOCKED` in
+management-only mode, the current observed value is captured first; later
+observations retain that value. This matches receiver hard-gate behavior while
+allowing the operator to deliberately override a lock.
+
+The main dashboard's `o` and `i` actions open centered receiver-selection menus.
+Use Up/Down or `j`/`k` to move, Space to toggle multiple online receivers, and
+Enter to continue. The output menu then accepts `o` for on or `f` for off.
+Selecting `ALL ONLINE RECEIVERS` uses the broadcast management packet. Turning
+output off is a visible DMX interruption and should be treated as a hardware
+test action; the operator must explicitly turn it back on.
+
+The locate menu sends a 15-second request to each selected receiver, or a
+single broadcast request for all online receivers. **WARNING: locating disables
+DMX and pulses the receiver pins. Use it only when the selected receivers are
+disconnected from DMX fixtures.**
+
+The receiver-name editor lists discovered receivers, including stale/offline
+receivers retained in the telemetry cache. Select a receiver with Up/Down or
+`j`/`k`, press `e`, enter a friendly name, and press Enter. Names are saved
+atomically to the active TOML file under `[receiver_names]`; submitting a blank
+name removes the alias. The dashboard continues to show the stable `RX-...`
+hardware ID beside each name.
+
+The compact receiver table displays up to 16 name characters beside the stable
+hardware ID. Longer names scroll slowly within that fixed-width field so they do
+not overlap link, battery, RSSI, or counter columns. The name editor and
+receiver-selection modals display the full configured name.
+
+Priority universe sends initiated from the manual editor automatically open the
+centered priority alert. It remains visible while the transaction is active and
+closes 10 seconds after completion with a live countdown; `c` cancels the
+automatic close and keeps it open. `x`, `Esc`, or Enter closes it early.
+Press `p` on the main dashboard to open the same alert manually. Manually opened
+alerts do not use the automatic close timer. The alert repeats
+the latest priority ID, status, expected receivers, acknowledged receivers,
+retry count, and gate-applied receivers so priority traffic is visible without
+relying on the narrow status line.
+
+### Advanced hardware view
+
+| Key | Action |
+|---|---|
+| `m` | Connect to the configured monitor and start a bounded measurement. |
+| `a` | Launch the external acceptance runner. |
+| `b` | Abort the active monitor measurement. |
+| `x` | Return to the main dashboard. |
+| `q` | Quit. |

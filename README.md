@@ -61,7 +61,7 @@ wireless-dmx run --management-only --config configs/config.example.toml
 ```
 
 The integrated transmitter can also be built as a locked management-only image
-with `./helpers/flash_transmitter.sh --lock-management-only`.
+with `./Helpers/flash_transmitter.sh --lock-management-only`.
 
 In management-only mode, the transmitter passively listens for the standalone
 retransmitter's ordinary ESP-NOW fragments and periodically reports the latest
@@ -91,7 +91,7 @@ Physical DMX source -> receive-only RS-485 -> ESP8266 retransmitter
                                                +-- ESP-NOW -> receiver(s) -> fixtures
 ```
 
-See [`docs/retransmitter-deployment.md`](docs/retransmitter-deployment.md) for
+See [`Docs/retransmitter-deployment.md`](Docs/retransmitter-deployment.md) for
 wiring, production flashing, radio configuration, recovery, and validation.
 
 ### 4. Monitored retransmitter deployment
@@ -105,14 +105,14 @@ ordinary-DMX source.
 
 ### 5. Arduino Mega USB-controlled DMX controller using `DMXSerial`
 
-`tests/mega_dmx_controller/` provides a simple local DMX source for bench
+`Tests/mega_dmx_controller/` provides a simple local DMX source for bench
 testing. It uses the `DMXSerial` library on Mega USART1, with DMX output on pin
 18 and the USB connection available on `/dev/ttyUSB1` at 115200 baud, 8N1.
 
 Flash it with:
 
 ```bash
-./helpers/flash_mega_dmx_controller.sh -f --port /dev/ttyUSB1
+./Helpers/flash_mega_dmx_controller.sh -f --port /dev/ttyUSB1
 ```
 
 Enter newline-terminated commands over USB:
@@ -128,7 +128,7 @@ help
 
 ### 6. Arduino Mega USB-controlled DMX controller using `DmxSimple`
 
-`tests/mega_dmxsimple_controller/` is the equivalent local controller using
+`Tests/mega_dmxsimple_controller/` is the equivalent local controller using
 the `DmxSimple` library. Unlike the `DMXSerial` variant, it outputs DMX through
 Mega digital pin 3 and does not use USART1. The USB command interface is still
 available at 115200 baud, 8N1.
@@ -136,7 +136,7 @@ available at 115200 baud, 8N1.
 Flash it with:
 
 ```bash
-./helpers/flash_mega_dmxsimple_controller.sh -f --port /dev/ttyUSB1
+./Helpers/flash_mega_dmxsimple_controller.sh -f --port /dev/ttyUSB1
 ```
 
 It accepts the same `channel value`, `clear`, `status`, and `help` commands.
@@ -185,15 +185,15 @@ transmitter use the same shared packet protocol.
 ## Repository layout
 
 ```text
-receiver/                 ESP8266 receiver firmware
-transmitter/              ESP8266 transmitter firmware
-retransmitter/             UART0 physical DMX -> normal ESP-NOW firmware
-libraries/                pinned QuickESPNow, espDMX, and shared protocol code
-wireless_dmx_daemon/      Linux host daemon and tests
-tests/                    firmware and hardware monitor sketches
-helpers/                  compile/flash helpers
-docs/                     detailed architecture, protocol, and validation docs
-Hardware/                 receiver schematic
+Firmware/Receiver/                  ESP8266 receiver firmware
+Firmware/Transmitter/               ESP8266 transmitter firmware
+Firmware/ReTransmitter/             UART0 physical DMX -> normal ESP-NOW firmware
+Libraries/                           pinned project and third-party libraries
+Host Software/wireless_dmx_daemon/   Linux/macOS host daemon and tests
+Tests/                               firmware and hardware monitor sketches
+Helpers/                             compile/flash helpers
+Docs/                                detailed architecture, protocol, and validation docs
+Hardware/                            PCB, schematic, enclosure, and manufacturing assets
 DEVELOPMENT_PROGRESS.md   development history and status
 ```
 
@@ -202,21 +202,41 @@ DEVELOPMENT_PROGRESS.md   development history and status
 Each receiver uses an ESP-01/ESP8266, MAX3485 RS-485 transceiver, battery
 power/charging circuitry, and an external low-battery comparator. The receiver
 uses GPIO1 for DMX TX, GPIO2 for inverted MAX3485 driver enable, and GPIO3 for
-the active-high low-battery signal. See `docs/hardware.md` and the schematic in
-`Hardware/1-Schematic_ESP DMX.json`.
+the active-high low-battery signal. See `Docs/hardware.md` and the schematic in
+`Hardware/PCB Files/1-Schematic_ESP DMX.json`.
+
+## Bundled libraries and pinned versions
+
+DMX Now ships with the following bundled libraries. Use these project copies for
+reproducible builds rather than substituting similarly named Arduino Library
+Manager packages.
+
+| Library | Role | Upstream | Declared version | Exact project pin |
+|---|---|---|---:|---|
+| [QuickESPNow](https://github.com/gmag11/QuickESPNow) | ESP-NOW transport | `Libraries/QuickESPNow/` | `0.8.1` | `27f88ad99e4b58958934c3a3dfabd62ccd338c62` |
+| [espDMX](https://github.com/mtongnz/espDMX) | ESP8266 physical DMX output | `Libraries/espDMX/` | v2 | `608ce009edfeebc3bca44b184a9dc667de055284` |
+| [DMXUART](https://github.com/casesolved-co-uk/DMXUART) | Physical-DMX UART input/output | `Libraries/DMXUART/` | `4.0.3` | Bundled project copy |
+| WirelessDMX | Project-owned wireless/management protocol | `Libraries/WirelessDMX/` | `1.0.0` | Matching DMX Now source |
+
+QuickESPNow includes three project-specific commits beyond its upstream branch,
+and espDMX includes one project-specific commit beyond upstream. The exact
+commit pins above are authoritative. QuickESPNow is MIT licensed, espDMX is
+GPL-3.0, and DMXUART is MIT licensed; complete license texts are retained beside
+the bundled sources. `LXESP8266DMX` was an unused former dependency and has been
+intentionally removed.
 
 ## Build and flash
 
 The project uses `arduino-cli`, not PlatformIO:
 
 ```bash
-./helpers/flash_transmitter.sh
-./helpers/flash_receiver.sh
-./helpers/flash_retransmitter.sh
+./Helpers/flash_transmitter.sh
+./Helpers/flash_receiver.sh
+./Helpers/flash_retransmitter.sh
 ```
 
 The normal transmitter helper defaults to bridge mode. Build the optional
-management-only role with `./helpers/flash_transmitter.sh --management-only`.
+management-only role with `./Helpers/flash_transmitter.sh --management-only`.
 The daemon defaults to bridge mode; use `[daemon] mode = "management_only"` or
 `wireless-dmx run --management-only` for management-only operation. The
 management role never emits ordinary DMX, but priority/gate transactions remain
@@ -233,22 +253,22 @@ or receiver define enabled in a production image.
 
 For physical retransmitter wiring, deployment roles, optional management-only
 monitoring, and production/test image recovery, see
-[`docs/retransmitter-deployment.md`](docs/retransmitter-deployment.md).
+[`Docs/retransmitter-deployment.md`](Docs/retransmitter-deployment.md).
 
 ## Host daemon
 
 ```bash
-cd wireless_dmx_daemon
+cd "Host Software/wireless_dmx_daemon"
 python3 -m pip install .
 wireless-dmx run --config configs/config.example.toml
 ```
 
 The daemon prints the Linux PTY path. Configure a serial-capable application to
 use that path, or use Art-Net Universe 0 over UDP port 6454. The complete daemon
-configuration is documented in `docs/daemon.md` and demonstrated in
-`wireless_dmx_daemon/configs/config.example.toml`.
+configuration is documented in `Docs/daemon.md` and demonstrated in
+`Host Software/wireless_dmx_daemon/configs/config.example.toml`.
 
-Dashboard configurations are stored under `wireless_dmx_daemon/configs/`. The
+Dashboard configurations are stored under `Host Software/wireless_dmx_daemon/configs/`. The
 dashboard can select a configuration interactively when launched without
 `--config`. The CLI and scripted dashboard forms continue to accept
 `--config <path>`.
@@ -270,23 +290,23 @@ Settings are sent at runtime and are not persisted in receiver flash. Receivers
 start with compile-time defaults and the daemon reapplies its configured
 generation after startup, transmitter reconnect, receiver discovery, or
 receiver reboot. Detailed semantics and finite validation procedures are in
-`docs/receiver-failsafe.md`.
+`Docs/receiver-failsafe.md`.
 
 ## Tests
 
 Run the host suite with:
 
 ```bash
-cd wireless_dmx_daemon
+cd "Host Software/wireless_dmx_daemon"
 python3 -m pytest -q
 ```
 
-The detailed test catalogue is in `docs/testing.md`. Hardware-specific results
-are kept separately in `docs/lab-validation.md`; they are evidence for one
+The detailed test catalogue is in `Docs/testing.md`. Hardware-specific results
+are kept separately in `Docs/lab-validation.md`; they are evidence for one
 validated setup, not a requirement that every deployment have the same number
 of receivers, USB paths, or monitor hardware.
 
-The dashboard hotkey reference is in `docs/daemon.md`.
+The dashboard hotkey reference is in `Docs/daemon.md`.
 
 ## Limitations
 
