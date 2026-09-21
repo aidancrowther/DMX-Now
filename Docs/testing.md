@@ -143,6 +143,12 @@ be powered or within radio range.
 
 ## Extended physical retransmitter validation
 
+For the current Pico bench, use the
+[Pico retransmitter procedure](pico-retransmitter-testing.md). It preserves the
+durations and acceptance criteria below. The retransmitter uses a production
+build with wireless diagnostics disabled. The receiver remains a diagnostic
+build because no physical-output decoder is configured on this bench.
+
 The low-rate/extended runner is:
 
 ```text

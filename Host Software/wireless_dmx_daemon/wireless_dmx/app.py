@@ -201,13 +201,15 @@ class WirelessDmxService:
     def observed_universe_snapshot(self) -> bytes:
         return self.observed_universe.universe
 
-    def _update_observed_universe(self, universe: bytes, sequence: int, source: str) -> None:
+    def _update_observed_universe(self, universe: bytes, sequence: int, source: str,
+                                  age_ms: int = 0) -> None:
         merged = bytearray(universe)
         for index, gate in enumerate(self._channel_gates):
             if gate == ChannelGate.LOCKED:
                 merged[index] = self.manual_universe[index]
         self.observed_universe = ObservedUniverse(bytes(merged), sequence, source,
-                                                  time.monotonic(), self.observed_universe.updates + 1)
+                                                  time.monotonic() - age_ms / 1000,
+                                                  self.observed_universe.updates + 1)
 
     def _update_local_observed_universe(self, universe: bytes) -> None:
         self._update_observed_universe(universe, 0, "local transmitter")
@@ -523,7 +525,8 @@ class WirelessDmxService:
                 self._observed_part_times.setdefault(key, time.monotonic())
                 if len(observed) == part.part_count:
                     ordered = [observed[index] for index in range(part.part_count)]
-                    if (ordered[0].offset == 0 and
+                    if (all(item.age_ms != 0xffffffff for item in ordered) and
+                            ordered[0].offset == 0 and
                             ordered[-1].offset + len(ordered[-1].data) == 512 and
                             all(left.offset + len(left.data) == right.offset
                                 for left, right in zip(ordered, ordered[1:])) and
@@ -532,7 +535,8 @@ class WirelessDmxService:
                                 item.sequence == ordered[0].sequence for item in ordered)):
                         self._update_observed_universe(
                             b"".join(item.data for item in ordered),
-                            ordered[0].sequence, "retransmitter")
+                            ordered[0].sequence, "retransmitter",
+                            age_ms=max(item.age_ms for item in ordered))
                     self._observed_parts.pop(key, None)
                     self._observed_part_times.pop(key, None)
                 continue

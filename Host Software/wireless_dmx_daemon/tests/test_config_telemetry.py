@@ -28,7 +28,9 @@ class ConfigTelemetryTests(unittest.TestCase):
             writable = root / "show.toml"
             writable.write_text("")
             remember_config_path(str(writable), directory)
-            self.assertEqual(last_config_path(directory), str(writable))
+            # remember_config_path stores the canonical path. On macOS /var
+            # is a symlink to /private/var, including temporary directories.
+            self.assertEqual(last_config_path(directory), str(writable.resolve()))
             self.assertIsNone(last_config_path(str(root / "missing")))
 
     def test_last_config_falls_back_to_newest_writable_file(self):

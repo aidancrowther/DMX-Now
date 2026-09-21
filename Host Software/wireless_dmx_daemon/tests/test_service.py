@@ -4,6 +4,7 @@ import sys
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
@@ -44,6 +45,31 @@ def telemetry_part():
 
 
 class ServiceTests(unittest.TestCase):
+    def test_observed_wireless_age_survives_repeated_management_polls(self):
+        service = WirelessDmxService(
+            DaemonConfig(mode=DaemonMode.MANAGEMENT_ONLY, virtual_serial_enabled=False,
+                         raw_virtual_serial_enabled=False, artnet_enabled=False, virtual_port_path=""),
+            serial_factory=lambda: FakeSerial())
+        header = struct.Struct("<BBBBIIH6s")
+        # The transmitter keeps reporting the last RF universe after input stops.
+        # Polling must not make that universe fresh again. The sentinel means
+        # that the management transmitter has not observed an RF universe yet.
+        for now, sequence, age, expected_age in (
+                (100, 0, 0xffffffff, None),
+                (101, 12, 1000, 1000),
+                (120, 12, 20000, 20000),
+                (121, 13, 10, 10)):
+            with self.subTest(age=age), patch('wireless_dmx.app.time.monotonic', return_value=now):
+                for index, offset in enumerate((0, 180, 360)):
+                    payload = header.pack(1, index, 3, 0, sequence, age, offset,
+                                          bytes.fromhex("18fe34000001")) + bytes(min(180, 512-offset))
+                    body = bytes((1, MANAGEMENT_OBSERVED_UNIVERSE)) + struct.pack("<H", len(payload)) + payload
+                    service._on_transmitter_data(MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body)))
+                if expected_age is None:
+                    self.assertIsNone(service.observed_universe.age_ms)
+                else:
+                    self.assertAlmostEqual(service.observed_universe.age_ms, expected_age, delta=1)
+
     def test_observed_universe_preserves_hard_gates_and_does_not_pace(self):
         service = WirelessDmxService(
             DaemonConfig(mode=DaemonMode.MANAGEMENT_ONLY, virtual_serial_enabled=False,

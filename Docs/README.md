@@ -15,5 +15,7 @@ protocol, hardware, fail-safe, and testing information.
 - `hardware.md` — receiver electronics, pins, power, and programming.
 - `retransmitter-deployment.md` — standalone and management-monitored physical-DMX retransmitter deployment.
 - `testing.md` — automated, raw-DMX timeout, and generic hardware validation procedures.
+- [Pico retransmitter testing](pico-retransmitter-testing.md) covers the current
+  three-device bench, persistent assignments, and the complete acceptance mapping.
 - `lab-validation.md` — setup-specific qualification evidence.
 - `priority-packet-substantial-completion.md` — priority/gating completion record.

@@ -20,9 +20,6 @@
 #ifndef RETRANSMITTER_TX_DRAIN_TIMEOUT_MS
 #define RETRANSMITTER_TX_DRAIN_TIMEOUT_MS 100UL
 #endif
-#ifndef RETRANSMITTER_TX_OVERHEAD_MS
-#define RETRANSMITTER_TX_OVERHEAD_MS 27UL
-#endif
 #ifndef RETRANSMITTER_FRAGMENT_SPACING_MS
 #define RETRANSMITTER_FRAGMENT_SPACING_MS 15UL
 #endif
@@ -54,7 +51,6 @@
 #error RETRANSMITTER_FRAGMENT_SPACING_MS leaves no inter-universe guard time
 #endif
 
-static volatile bool captureRequested = true;
 static uint8_t dmxReadBuffer[DMX_UNIVERSE_SIZE];
 static DMXUART* dmxInput = nullptr;
 static uint32_t inputFramesReceived = 0;
@@ -103,27 +99,19 @@ static const uint8_t txFragmentOrder[DMX_FRAGMENTS_PER_UNIVERSE] = {0, 1, 2};
 #if defined(RETRANSMITTER_REVERSE_FRAGMENT_ORDER)
 #error Do not combine retransmitter fragment-order and serialization diagnostics
 #endif
-static bool haveUniverse = false;
-static unsigned long lastFrameGenerationTime = 0;
 static unsigned long nextFrameAt = 0;
 static bool frameDeadlineValid = false;
 static unsigned long stateAt = 0;
 static uint8_t currentFragment = 0;
 
-enum TxState { TX_WAIT_INPUT, TX_IDLE, TX_SENDING, TX_DRAIN };
-static TxState txState = TX_WAIT_INPUT;
-/* Match the normal transmitter's queue/drain state machine. The requested
- * 20 Hz period includes the measured wireless overhead; DMX RX is paused for
- * the complete queued send and resumed after callbacks or the drain timeout. */
-static constexpr unsigned long TX_INTERVAL_MS =
-    (1000UL / RETRANSMITTER_WIRELESS_REFRESH_HZ > RETRANSMITTER_TX_OVERHEAD_MS)
-        ? (1000UL / RETRANSMITTER_WIRELESS_REFRESH_HZ - RETRANSMITTER_TX_OVERHEAD_MS) : 0UL;
+enum TxState { TX_IDLE, TX_SENDING, TX_DRAIN };
+static TxState txState = TX_IDLE;
+/* Absolute wireless deadlines overlap continuous DMX capture with RF drain. */
 static constexpr unsigned long FRAME_PERIOD_MS =
     1000UL / RETRANSMITTER_WIRELESS_REFRESH_HZ;
-static bool dmxRxPaused = false;
 
 static void pollDmxInput(void) {
-    if (dmxInput == nullptr || dmxRxPaused) return;
+    if (dmxInput == nullptr) return;
 
     int startCode = -1;
     const int slots = dmxInput->read(&startCode);
@@ -159,18 +147,11 @@ static void pollDmxInput(void) {
         candidateInputSlotFrames = 0;
     }
 
-    if (!captureRequested) {
-        inputFramesSkipped++;
-        return;
-    }
-
     /* DMXUART owns the ISR-side frame assembly. read() copies the completed,
      * stable frame into dmxReadBuffer in foreground context. */
     memcpy(g_universe, dmxReadBuffer, (size_t)slots);
     memset(g_universe + slots, 0, DMX_UNIVERSE_SIZE - (size_t)slots);
-    captureRequested = false;
     inputFramesReceived++;
-    haveUniverse = true;
     freshUniverseAvailable = true;
 }
 
@@ -252,7 +233,7 @@ void loop(void) {
     pollDmxInput();
 #if RETRANSMITTER_DIAGNOSTICS && RETRANSMITTER_DIAGNOSTIC_BROADCAST
     if (txState == TX_IDLE &&
-        now - lastFrameGenerationTime < TX_INTERVAL_MS &&
+        (!frameDeadlineValid || (long)(nextFrameAt - now) > 0) &&
         quickEspNow.readyForSerializedSend() &&
         now - lastDiagnosticsAt >= DIAGNOSTICS_INTERVAL_MS) {
         lastDiagnosticsAt = now;
@@ -260,33 +241,19 @@ void loop(void) {
         return;
     }
 #endif
-    if (!haveUniverse) {
-        txState = TX_WAIT_INPUT;
-        return;
-    }
-    if (txState == TX_WAIT_INPUT) {
-        if (!freshUniverseAvailable) return;
-        freshUniverseAvailable = false;
-        if (!frameDeadlineValid) {
-            nextFrameAt = now;
-            frameDeadlineValid = true;
-        }
-        lastFrameGenerationTime = now;
-        txState = TX_IDLE;
+    if (!frameDeadlineValid && freshUniverseAvailable) {
+        nextFrameAt = now;
+        frameDeadlineValid = true;
     }
     switch (txState) {
         case TX_IDLE:
-            if ((long)(now - nextFrameAt) >= 0) {
+            if (freshUniverseAvailable && (long)(now - nextFrameAt) >= 0 &&
+                quickEspNow.readyForSerializedSend()) {
                 memcpy(g_txUniverse, g_universe, sizeof(g_txUniverse));
-                /* The current universe is latched above. Capture exactly one
-                 * subsequent physical-DMX frame for the next wireless cycle. */
-                captureRequested = false;
-                dmxRxPaused = dmxInput->pauseRx();
-                if (!dmxRxPaused) {
-                    captureRequested = true;
-                    txState = TX_IDLE;
-                    break;
-                }
+                // Input reception continues while the immutable g_txUniverse
+                // supplies all three fragments. A new burst requires a new
+                // complete physical frame, even after a wireless deadline.
+                freshUniverseAvailable = false;
                 currentFragment = 0;
                 sendConfirmations = 0;
                 stateAt = now;
@@ -300,7 +267,7 @@ void loop(void) {
         case TX_SENDING:
             if (currentFragment < DMX_FRAGMENTS_PER_UNIVERSE) {
                 /* Queue each fragment once. QuickESPNow serializes these
-                 * queued sends while DMXUART RX remains paused. */
+                 * queued sends while DMXUART receives the next physical frame. */
                 submitFragment(txFragmentOrder[currentFragment++]);
             } else {
                 stateAt = now;
@@ -310,19 +277,9 @@ void loop(void) {
         case TX_DRAIN:
             if (sendConfirmations >= DMX_FRAGMENTS_PER_UNIVERSE ||
                 now - stateAt >= RETRANSMITTER_TX_DRAIN_TIMEOUT_MS) {
-                if (dmxRxPaused) {
-                    dmxInput->resumeRx();
-                    dmxRxPaused = false;
-                }
-                captureRequested = true;
                 g_frameSequence++;
-                /* Wait for a complete fresh physical-DMX frame before the
-                 * next burst. Elapsed time alone is not a valid boundary for
-                 * a full 512-slot frame. */
-                txState = TX_WAIT_INPUT;
+                txState = TX_IDLE;
             }
-            break;
-        case TX_WAIT_INPUT:
             break;
     }
 }

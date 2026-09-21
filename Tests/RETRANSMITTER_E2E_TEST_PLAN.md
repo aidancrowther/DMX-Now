@@ -1,5 +1,10 @@
 # Re-transmitter end-to-end hardware test plan
 
+The current three-device bench uses the Pico generator and automatic programming
+multiplexer. Use the [Pico procedure and acceptance mapping](../Docs/pico-retransmitter-testing.md)
+for persistent role assignments and executable commands. The Mega procedure
+below remains the historical source of the acceptance criteria and durations.
+
 This plan is for the physical setup below. It is intentionally separate from
 the host unit suite and compile checks. Do not run the live acceptance runner
 until the hardware has been wired, firmware has been flashed, and the operator

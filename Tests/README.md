@@ -7,6 +7,10 @@ under `../Firmware/` and the automated Python suite under
 
 ## Contents
 
+For the current retransmitter bench, use the
+[Pico acceptance mapping](../Docs/pico-retransmitter-testing.md). It replaces
+the Mega generator procedure while preserving the test matrix.
+
 - ESP-NOW basic and universe transmitter/receiver checks.
 - Mega DMX controllers and physical-DMX monitors.
 - Pico refresh monitoring.
