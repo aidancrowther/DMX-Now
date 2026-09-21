@@ -91,6 +91,9 @@ The re-transmitter owns UART0/GPIO3 for physical DMX input and must not call
 `Serial.begin()` or write diagnostics to that UART. The DMXUART experiment uses
 foreground-polled `DMXUART::read()`, sends only normal three-fragment DMX
 packets, and waits for its first complete physical universe before transmitting.
+It is constructed with no TX pin, which makes the ESP8266 implementation select
+`SERIAL_RX_ONLY`; UART0 RX/GPIO3 remains the DMX input and UART0 TX/GPIO1 remains
+available for the optional battery comparator.
 The retransmitter pauses DMX UART RX while it queues and drains one complete
 three-fragment wireless universe, then resumes RX before waiting the configured
 wireless interval. This intentionally permits physical-DMX frames to be lost
@@ -113,6 +116,22 @@ Relevant definitions are
 `RETRANSMITTER_WIRELESS_REFRESH_HZ`, `RETRANSMITTER_TX_DRAIN_TIMEOUT_MS`,
 `RETRANSMITTER_DIAGNOSTICS`, `RETRANSMITTER_DIAGNOSTIC_BROADCAST`, and
 `RETRANSMITTER_TELEMETRY_ONLY`.
+
+Hardware-control definitions are:
+
+| Definition | Default | Purpose |
+|---|---:|---|
+| `RETRANSMITTER_DMX_INPUT_ENABLE_PIN` | `2` | GPIO driving the 2N2222 receiver `/RE` control. Set to `-1` to disable hardware control. |
+| `RETRANSMITTER_DMX_INPUT_ENABLE_ACTIVE_HIGH` | `0` | GPIO polarity for logical input enabled. The installed 2N2222 circuit is active-low: GPIO2 `LOW` enables the receiver and `HIGH` disables it. |
+| `RETRANSMITTER_BATTERY_MONITOR` | `0` | Enables the GPIO1 comparator input and reports `ok`/`low` telemetry. Disabled builds report `UNKNOWN`. |
+| `RETRANSMITTER_BATTERY_PIN` | `1` | Comparator input pin; GPIO1 is available because DMXUART uses `SERIAL_RX_ONLY`. |
+| `RETRANSMITTER_BATTERY_LOW_ACTIVE_LOW` | `1` | Comparator polarity. Set to `0` when HIGH means battery-low. |
+
+The helper provides `--receiver-control`, `--no-receiver-control`,
+`--battery-monitor`, `--no-battery-monitor`, and
+`--battery-low-active-high`. `--menuconfig` exposes receiver-control enablement,
+battery monitoring, and comparator polarity in addition to the timing/radio
+settings.
 The production retransmitter uses an absolute 10 Hz universe deadline. It waits
 for a fresh complete physical-DMX frame, sends when the deadline is due, and
 rebases one period forward after an overrun instead of compressing catch-up

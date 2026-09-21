@@ -45,13 +45,16 @@
 #define RETRANSMITTER_DMX_SLOT_STABILITY_FRAMES 3
 #endif
 #ifndef RETRANSMITTER_DMX_INPUT_ENABLE_PIN
-#define RETRANSMITTER_DMX_INPUT_ENABLE_PIN -1
+/* GPIO2 drives the 2N2222 that pulls the receive transceiver /RE low. */
+#define RETRANSMITTER_DMX_INPUT_ENABLE_PIN 2
 #endif
 #ifndef RETRANSMITTER_DMX_INPUT_ENABLE_ACTIVE_HIGH
-#define RETRANSMITTER_DMX_INPUT_ENABLE_ACTIVE_HIGH 1
+/* GPIO2 LOW keeps the 2N2222 off, so the MAX3485 /RE pull-up enables RX. */
+#define RETRANSMITTER_DMX_INPUT_ENABLE_ACTIVE_HIGH 0
 #endif
 #ifndef RETRANSMITTER_LOCATE_PIN
-#define RETRANSMITTER_LOCATE_PIN LED_BUILTIN
+/* GPIO2 is reserved for the external receiver /RE control transistor. */
+#define RETRANSMITTER_LOCATE_PIN -1
 #endif
 #ifndef RETRANSMITTER_LOCATE_ACTIVE_LOW
 #define RETRANSMITTER_LOCATE_ACTIVE_LOW 1
@@ -64,6 +67,15 @@
 #endif
 #ifndef RETRANSMITTER_TELEMETRY_ONLY
 #define RETRANSMITTER_TELEMETRY_ONLY 0
+#endif
+#ifndef RETRANSMITTER_BATTERY_MONITOR
+#define RETRANSMITTER_BATTERY_MONITOR 0
+#endif
+#ifndef RETRANSMITTER_BATTERY_PIN
+#define RETRANSMITTER_BATTERY_PIN 1
+#endif
+#ifndef RETRANSMITTER_BATTERY_LOW_ACTIVE_LOW
+#define RETRANSMITTER_BATTERY_LOW_ACTIVE_LOW 1
 #endif
 #if RETRANSMITTER_WIRELESS_REFRESH_HZ == 0
 #error RETRANSMITTER_WIRELESS_REFRESH_HZ must be positive
@@ -176,6 +188,16 @@ static void setInputEnablePin(bool enabled) {
 #endif
 }
 
+static uint8_t readBatteryState(void) {
+#if RETRANSMITTER_BATTERY_MONITOR
+    const bool comparatorActive = digitalRead(RETRANSMITTER_BATTERY_PIN) ==
+        (RETRANSMITTER_BATTERY_LOW_ACTIVE_LOW ? LOW : HIGH);
+    return comparatorActive ? 1U : 0U;
+#else
+    return RETRANSMITTER_BATTERY_UNKNOWN;
+#endif
+}
+
 static void scheduleRetransmitterTelemetry(unsigned long now, bool initial) {
     const unsigned long jitter = RETRANSMITTER_TELEMETRY_JITTER_MS
         ? (initial ? (ESP.getChipId() % (RETRANSMITTER_TELEMETRY_JITTER_MS + 1UL))
@@ -185,6 +207,10 @@ static void scheduleRetransmitterTelemetry(unsigned long now, bool initial) {
 
 static void serviceLocate(void) {
     if (!locateActive) return;
+#if RETRANSMITTER_LOCATE_PIN < 0
+    locateActive = false;
+    return;
+#else
     const unsigned long now = millis();
     if ((long)(now - locateEndMs) >= 0) {
         locateActive = false;
@@ -206,6 +232,7 @@ static void serviceLocate(void) {
                      on == (RETRANSMITTER_LOCATE_ACTIVE_LOW != 0) ? LOW : HIGH);
         locateNextPulseMs = now + 500UL;
     }
+#endif
 }
 
 static void processRetransmitterControl(void) {
@@ -249,6 +276,11 @@ static void processRetransmitterControl(void) {
             (packet.targetRetransmitterId == 0U || packet.targetRetransmitterId == ESP.getChipId()) &&
             packet.durationSeconds >= 1U && packet.durationSeconds <= 15U &&
             packet.generation >= inputControlGeneration) {
+#if RETRANSMITTER_LOCATE_PIN < 0
+            /* GPIO2 is reserved for receiver /RE control on this hardware.
+             * Do not pause DMX or alter input state when no locate output exists. */
+            return;
+#else
             inputControlGeneration = packet.generation;
             locateActive = true;
             locateRestoreInputEnabled = inputRequestedEnabled;
@@ -260,6 +292,7 @@ static void processRetransmitterControl(void) {
             administrativeInputPause = true;
             if (dmxInput && !dmxRxPaused) dmxInput->pauseRx();
             setInputEnablePin(false);
+#endif
         }
     }
 }
@@ -279,7 +312,7 @@ static void transmitRetransmitterTelemetry(void) {
     packet.telemetrySequence = telemetrySequence++;
     packet.inputEnabled = inputRequestedEnabled ? 1U : 0U;
     packet.inputSignalActive = lastInputFrameMs && millis() - lastInputFrameMs <= 1500UL;
-    packet.batteryState = RETRANSMITTER_BATTERY_UNKNOWN;
+    packet.batteryState = readBatteryState();
     packet.locateActive = locateActive ? 1U : 0U;
     packet.inputHardwareControlAvailable = RETRANSMITTER_DMX_INPUT_ENABLE_PIN >= 0 ? 1U : 0U;
     packet.learnedInputSlots = learnedInputSlots;
@@ -408,12 +441,23 @@ static void submitDiagnostics(void) {
 #endif
 
 void setup(void) {
+    /* tx_pin=-1 is intentional. On ESP8266 DMXUART selects
+     * SerialMode::SERIAL_RX_ONLY, so UART0 RX/GPIO3 remains DMX input while
+     * UART0 TX/GPIO1 is available for the optional battery comparator. */
     static DMXUART input(
         RETRANSMITTER_DMX_UART, dmxReadBuffer, -1, -1,
         RETRANSMITTER_DMX_RX_PIN, RETRANSMITTER_DMX_INVERT, false);
     dmxInput = &input;
+#if RETRANSMITTER_DMX_INPUT_ENABLE_PIN >= 0
+    pinMode(RETRANSMITTER_DMX_INPUT_ENABLE_PIN, OUTPUT);
+#endif
+#if RETRANSMITTER_BATTERY_MONITOR
+    pinMode(RETRANSMITTER_BATTERY_PIN, INPUT);
+#endif
+#if RETRANSMITTER_LOCATE_PIN >= 0
     pinMode(RETRANSMITTER_LOCATE_PIN, OUTPUT);
     digitalWrite(RETRANSMITTER_LOCATE_PIN, RETRANSMITTER_LOCATE_ACTIVE_LOW ? HIGH : LOW);
+#endif
     setInputEnablePin(true);
     WiFi.mode(WIFI_STA);
     WiFi.disconnect(false);

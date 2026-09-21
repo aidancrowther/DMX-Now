@@ -28,6 +28,11 @@ Options:
   --d1                Target a WEMOS D1 Mini/Pro-compatible board.
   --production        Build the normal DMX retransmitter with telemetry enabled (default).
   --telemetry-only    Disable DMX input and fragment transmission; send telemetry only.
+  --receiver-control  Enable GPIO2 receiver /RE control (default).
+  --no-receiver-control  Disable receiver /RE control.
+  --battery-monitor   Enable the GPIO1 battery comparator input.
+  --no-battery-monitor  Disable battery monitoring (default).
+  --battery-low-active-high  Treat HIGH comparator output as battery-low.
   --menuconfig        Prompt for all retransmitter build options.
   --define DEFINE     Add an extra compiler definition.
   --port PORT         ESP8266 programming port when -f is used.
@@ -47,6 +52,26 @@ EOF
             ;;
         --production)
             PRODUCTION=true
+            shift
+            ;;
+        --receiver-control)
+            EXTRA_FLAGS+=("-DRETRANSMITTER_DMX_INPUT_ENABLE_PIN=2")
+            shift
+            ;;
+        --no-receiver-control)
+            EXTRA_FLAGS+=("-DRETRANSMITTER_DMX_INPUT_ENABLE_PIN=-1")
+            shift
+            ;;
+        --battery-monitor)
+            EXTRA_FLAGS+=("-DRETRANSMITTER_BATTERY_MONITOR=1")
+            shift
+            ;;
+        --no-battery-monitor)
+            EXTRA_FLAGS+=("-DRETRANSMITTER_BATTERY_MONITOR=0")
+            shift
+            ;;
+        --battery-low-active-high)
+            EXTRA_FLAGS+=("-DRETRANSMITTER_BATTERY_LOW_ACTIVE_LOW=0")
             shift
             ;;
         --port) [[ $# -ge 2 ]] || { echo "--port requires a value" >&2; exit 2; }; PORT="$2"; shift 2 ;;
@@ -78,6 +103,24 @@ if [[ "$MENUCONFIG" == true ]]; then
     read -r -p "Wireless rate Hz [10]: " value; value=${value:-10}; EXTRA_FLAGS+=("-DRETRANSMITTER_WIRELESS_REFRESH_HZ=$value")
     read -r -p "TX drain timeout ms [100]: " value; value=${value:-100}; EXTRA_FLAGS+=("-DRETRANSMITTER_TX_DRAIN_TIMEOUT_MS=$value")
     read -r -p "TX overhead ms [27]: " value; value=${value:-27}; EXTRA_FLAGS+=("-DRETRANSMITTER_TX_OVERHEAD_MS=$value")
+    read -r -p "Enable receiver /RE control on GPIO2? [Y/n]: " value
+    if [[ "${value,,}" != "n" && "${value,,}" != "no" ]]; then
+        EXTRA_FLAGS+=("-DRETRANSMITTER_DMX_INPUT_ENABLE_PIN=2")
+    else
+        EXTRA_FLAGS+=("-DRETRANSMITTER_DMX_INPUT_ENABLE_PIN=-1")
+    fi
+    read -r -p "Enable battery comparator monitoring on GPIO1? [y/N]: " value
+    if [[ "${value,,}" == "y" || "${value,,}" == "yes" ]]; then
+        EXTRA_FLAGS+=("-DRETRANSMITTER_BATTERY_MONITOR=1")
+        read -r -p "Battery-low comparator active low? [Y/n]: " value
+        if [[ "${value,,}" == "n" || "${value,,}" == "no" ]]; then
+            EXTRA_FLAGS+=("-DRETRANSMITTER_BATTERY_LOW_ACTIVE_LOW=0")
+        else
+            EXTRA_FLAGS+=("-DRETRANSMITTER_BATTERY_LOW_ACTIVE_LOW=1")
+        fi
+    else
+        EXTRA_FLAGS+=("-DRETRANSMITTER_BATTERY_MONITOR=0")
+    fi
 fi
 
 QESPNOW_LIB="${PROJECT_ROOT}/Libraries/QuickESPNow"

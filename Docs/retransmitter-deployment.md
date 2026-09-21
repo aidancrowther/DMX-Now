@@ -53,6 +53,37 @@ The retransmitter must not drive the physical DMX line. Verify A/B polarity,
 signal reference, termination, and transceiver voltage levels before powering
 the system.
 
+### Retransmitter receiver control and battery comparator
+
+The installed retransmitter uses GPIO2 for remote receiver-input control and GPIO1
+for the battery comparator:
+
+```text
+ESP8266 GPIO2 -> 2N2222 base/resistor -> MAX3485 receiver /RE
+MAX3485 /RE   -> VCC through 10 kOhm; 2N2222 collector pulls /RE to GND
+ESP8266 GPIO1 -> battery-level comparator output
+```
+
+This polarity means GPIO2 `LOW` leaves the transistor off and enables the DMX
+receiver; GPIO2 `HIGH` pulls `/RE` low and disables it. The production helper
+enables this control by default. `--no-receiver-control` restores a build with no
+GPIO2 control if the hardware is not fitted.
+
+Battery monitoring is optional and disabled by default for compatibility. Enable
+it with `--battery-monitor` or through `--menuconfig`; the default comparator
+polarity treats LOW as battery-low. Use `--battery-low-active-high` when the
+comparator output polarity is reversed. Disabled monitoring reports battery
+`UNKNOWN` in retransmitter telemetry.
+
+The retransmitter DMXUART instance passes `tx_pin = -1` and `rx_pin = GPIO3`.
+On ESP8266 this selects `SERIAL_RX_ONLY`, so UART0 TX/GPIO1 is not claimed by
+serial output and can safely be used by the comparator. Do not add serial logging
+or change the DMXUART TX pin while the comparator is connected.
+
+GPIO2 is reserved for `/RE` control in this wiring and is not also used as a
+locate indicator. Retransmitter locate requests are therefore reported through
+telemetry/control state but have no separate local LED output on this hardware.
+
 ### Receiver output
 
 Each receiver uses its own MAX3485 output:
@@ -138,7 +169,8 @@ cd "/home/aidancrowther/Documents/Projects/Cline Testing" && \
 ```
 
 The menu defaults are channel `1`, universe `1`, rate `10` Hz, TX drain timeout
-`100` ms, and TX overhead `27` ms. `--menuconfig` can be combined with `-f`
+`100` ms, TX overhead `27` ms, receiver `/RE` control enabled on GPIO2, and
+battery monitoring disabled. `--menuconfig` can be combined with `-f`
 and `--port <RETRANSMITTER_PROGRAMMER_PORT>` when the resulting custom image
 is ready to flash.
 

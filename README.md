@@ -205,6 +205,12 @@ uses GPIO1 for DMX TX, GPIO2 for inverted MAX3485 driver enable, and GPIO3 for
 the active-high low-battery signal. See `Docs/hardware.md` and the schematic in
 `Hardware/PCB Files/1-Schematic_ESP DMX.json`.
 
+The standalone retransmitter has a separate pin allocation: UART0/GPIO3 is
+physical-DMX RX, GPIO2 drives a 2N2222 that controls the receive transceiver
+`/RE`, and GPIO1 reads the optional battery comparator. Its DMXUART instance
+uses ESP8266 `SERIAL_RX_ONLY`, leaving GPIO1 available. See
+`Docs/retransmitter-deployment.md` for the polarity and build flags.
+
 ## Bundled libraries and pinned versions
 
 DMX Now ships with the following bundled libraries. Use these project copies for
