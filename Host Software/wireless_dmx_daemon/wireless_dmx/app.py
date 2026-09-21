@@ -421,12 +421,21 @@ class WirelessDmxService:
             state = (type(telemetry.link_state).ONLINE if age <= self.config.telemetry_stale_seconds
                      else type(telemetry.link_state).STALE if age <= self.config.telemetry_offline_seconds
                      else type(telemetry.link_state).OFFLINE)
+            # Retransmitters are discovery devices, not a retained inventory.
+            # Only an actively reporting device should populate the dashboard
+            # or be eligible for retransmitter controls.
+            if state != type(telemetry.link_state).ONLINE:
+                continue
             result.append(replace(telemetry, link_state=state,
                                   transmitter_rssi=telemetry.transmitter_rssi))
         return tuple(sorted(result, key=lambda item: item.retransmitter_id))
 
     def _send_cache_clear(self) -> None:
         self._cache_clear_acknowledged = False
+        # Drop host-side discovery immediately; the transmitter clears both
+        # receiver and retransmitter tables when it processes this request.
+        self.telemetry.clear()
+        self._retransmitters.clear()
         self.transmitter.send_immediate(clear_receiver_cache_request())
         self._cache_clear_sent += 1
         self._cache_clear_retries = max(0, self._cache_clear_sent - 1)
@@ -551,6 +560,11 @@ class WirelessDmxService:
         for part in self.management.feed(data):
             if isinstance(part, RetransmitterTelemetryReport):
                 telemetry = part.telemetry
+                # The transmitter uses an empty record when no active
+                # retransmitter is cached. It must never become a device entry.
+                if (telemetry.retransmitter_id == 0 or
+                        telemetry.transmitter_last_seen_ms > int(self.config.telemetry_offline_seconds * 1000)):
+                    continue
                 previous = self._retransmitters.get(telemetry.retransmitter_id)
                 # A transmitter can republish the same cached retransmitter
                 # record on every management poll. Do not refresh liveness for
@@ -587,9 +601,10 @@ class WirelessDmxService:
             if isinstance(part, CacheClearedResponse):
                 self._cache_clear_acknowledged = True
                 self.telemetry.clear()
+                self._retransmitters.clear()
                 self._report_parts.clear()
                 self._report_part_times.clear()
-                self._logger.info("receiver_cache_cleared")
+                self._logger.info("telemetry_cache_cleared")
                 continue
             if isinstance(part, TransmitterModeResponse):
                 requested = 1 if self.config.mode == DaemonMode.MANAGEMENT_ONLY else 0

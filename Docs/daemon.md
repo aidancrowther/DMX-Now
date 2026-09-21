@@ -20,8 +20,8 @@ is rejected at the service and transmitter boundaries. Telemetry, fail-safe,
 output, locate, and explicit priority/gate transactions remain available. Use
 `--bridge-mode` to override a management-only configuration for one invocation.
 
-The daemon clears the transmitter receiver cache on startup, reconnects a lost
-transmitter, rejects stale telemetry, and reapplies runtime receiver fail-safe
+The daemon clears the transmitter receiver and retransmitter caches on startup,
+reconnects a lost transmitter, rejects stale telemetry, and reapplies runtime receiver fail-safe
 configuration after startup, receiver discovery, transmitter reconnect, or
 receiver reboot.
 
@@ -95,8 +95,9 @@ discovered only from valid retransmitter telemetry, not inferred from receiver
 records. Their panel reports a friendly name, stable hardware ID, input
 enabled/effective state, physical-DMX freshness, learned slot count, wireless
 frame counters, locate state, control generation, and battery as `UNKNOWN` until
-the retransmitter power hardware is validated. Retransmitter freshness is aged
-independently and transitions to stale/offline when reports stop.
+the retransmitter power hardware is validated. Retransmitters are active-only:
+they are removed from the dashboard and control target set when fresh telemetry
+stops, rather than being retained as stale/offline inventory.
 
 When multiple retransmitters do not fit in the terminal, the dashboard rotates
 them in a presentation-only carousel. Press `n` to edit a receiver or

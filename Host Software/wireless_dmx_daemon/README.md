@@ -85,11 +85,13 @@ submitted to the pacer.
 Receiver and retransmitter records are kept in separate caches. Retransmitters are
 discovered from response opcode `0x8B` and show freshness, input state, physical
 DMX source age, learned slot count, wireless counters, locate state, and control
-generation. Battery is intentionally shown as `UNKNOWN` until retransmitter
-power sensing is validated. Multiple retransmitters are presented through a
-carousel when needed. Aliases are persisted under `[receiver_names]` while stable
-hardware IDs remain visible. Input control and locate requests use the priority
-management path and are confirmed by later telemetry, not enqueue success alone.
+generation. Only actively reporting retransmitters populate this cache and
+dashboard; inactive entries are removed rather than retained as stale inventory.
+Battery is intentionally shown as `UNKNOWN` until retransmitter power sensing is
+validated. Multiple retransmitters are presented through a carousel when needed.
+Aliases are persisted under `[receiver_names]` while stable hardware IDs remain
+visible. Input control and locate requests use the priority management path and
+are confirmed by later telemetry, not enqueue success alone.
 
 ### Linux foreground launch
 

@@ -258,8 +258,14 @@ static unsigned long telemetryReportLastStartMs = 0;
 
 static void clearReceiverCache(void) {
     memset(receiverTable, 0, sizeof(receiverTable));
+    /* Receiver and retransmitter discovery share one management-cache epoch.
+     * Do not let queued retransmitter telemetry repopulate the host after a
+     * cache clear. */
+    memset(retransmitterTable, 0, sizeof(retransmitterTable));
     telemetryHead = 0;
     telemetryTail = 0;
+    retransmitterTelemetryHead = 0;
+    retransmitterTelemetryTail = 0;
     /* A daemon restart must not receive ACK records belonging to a previous
      * priority-ID namespace. Clear the exported ACK ring together with the
      * receiver telemetry cache so a fresh seeded run cannot see stale IDs. */
@@ -1149,7 +1155,11 @@ static void serviceRetransmitterReport(void) {
     packet[offset++] = MANAGEMENT_RETRANSMITTER_TELEMETRY;
     int index = -1;
     for (uint8_t i = 0; i < MAX_RETRANSMITTERS; i++) {
-        if (retransmitterTable[i].valid) { index = i; break; }
+        if (retransmitterTable[i].valid &&
+            millis() - retransmitterTable[i].lastSeenMs <= RECEIVER_OFFLINE_TIMEOUT_MS) {
+            index = i;
+            break;
+        }
     }
     const uint16_t payloadLength = (uint16_t)(sizeof(RetransmitterTelemetryPacket) + 1U + 4U);
     packet[offset++] = (uint8_t)payloadLength;

@@ -69,7 +69,7 @@ DMX remains latest-state: a newer unsent universe replaces an obsolete one.
 
 ## Telemetry flow
 
-1. The daemon clears the transmitter receiver cache.
+1. The daemon clears the transmitter receiver and retransmitter caches.
 2. After the cache-cleared response, it periodically requests telemetry.
 3. The transmitter collects receiver broadcasts in a bounded table.
 4. A multipart telemetry report is serialized over the host UART.
@@ -127,6 +127,13 @@ never represented as receivers. Entries appear in the dashboard only after
 discovery. Routine telemetry is best-effort, deterministically scheduled, and
 must yield to physical-DMX capture, normal fragments, and control traffic; it
 never creates a catch-up burst.
+
+The cache-clear management command clears both device classes atomically from the
+operator's perspective. The host drops its receiver and retransmitter references
+when the clear is sent and again when the acknowledgement arrives. The
+transmitter does the same for its embedded tables and pending telemetry rings.
+Retransmitters are reported only while their last telemetry is within the active
+offline threshold; an empty report is not a discoverable retransmitter.
 
 The fields include source identity, telemetry sequence, physical-DMX freshness,
 learned input slot count, input enabled/effective state, locate state, wireless
