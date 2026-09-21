@@ -1,0 +1,9 @@
+[submodule "Libraries/QuickESPNow"]
+	path = Libraries/QuickESPNow
+	url = https://github.com/aidancrowther/QuickESPNow.git
+[submodule "Libraries/espDMX"]
+	path = Libraries/espDMX
+	url = https://github.com/aidancrowther/espDMX.git
+[submodule "Libraries/DMXSerial"]
+	path = Libraries/DMXSerial
+	url = https://github.com/aidancrowther/DMXSerial.git

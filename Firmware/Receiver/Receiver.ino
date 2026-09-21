@@ -352,6 +352,8 @@ static uint32_t silentFirstSequence = 0;
 static uint32_t silentLastSequence = 0;
 static uint32_t silentSequenceGaps = 0;
 static uint32_t silentSequenceBacktracks = 0;
+static uint32_t silentSequenceWraps = 0;
+static uint32_t silentSequenceWrapGaps = 0;
 static uint32_t silentPromotions = 0;
 static uint32_t silentMatchingPromotions = 0;
 static uint32_t silentCorruptPromotions = 0;
@@ -462,11 +464,15 @@ static bool silentPatternMatches(const uint8_t* universe) {
     }
     const uint8_t epoch = universe[0];
     for (uint16_t channel = 1; channel <= DMX_UNIVERSE_SIZE; channel++) {
+#if RX_VALIDATE_TEST_PATTERN
+        const uint8_t expected = (uint8_t)(channel - 1 + lastActiveSequence);
+#else
         uint8_t expected = channel == 1
             ? epoch
             : (uint8_t)(silentPatternBase + epoch * 29U +
                         channel * 37U + (channel >> 3) * 11U);
         if (channel > silentPatternSlots) expected = 0;
+#endif
         if (universe[channel - 1] != expected) {
             if (!silentHaveMismatch) {
                 silentFirstMismatchChannel = channel;
@@ -480,26 +486,30 @@ static bool silentPatternMatches(const uint8_t* universe) {
     return true;
 }
 
-static void resetSilentCapture(void) {
+static void resetSilentCapture(bool preserveState = false) {
     /* Reset only the diagnostic reconstruction transaction. Keep the radio and
      * last promoted universe alive so repeated captures do not reboot the
      * receiver, but never let an old partial frame leak into a new case. */
-    stagingActive = false;
-    stagingReceivedMask = 0;
-    stagingUniqueCount = 0;
-    stagingFragmentCount = 0;
-    coverageClear();
-    hasActiveWirelessFrame = false;
-    lastActiveSequence = 0;
-    lastCompletionTimeMs = 0;
-    lastAcceptedFragmentTimeMs = 0;
-    const uint32_t savedPS = xt_rsil(15);
-    ringTail = ringHead;
-    xt_wsr_ps(savedPS);
+    if (!preserveState) {
+        stagingActive = false;
+        stagingReceivedMask = 0;
+        stagingUniqueCount = 0;
+        stagingFragmentCount = 0;
+        coverageClear();
+        hasActiveWirelessFrame = false;
+        lastActiveSequence = 0;
+        lastCompletionTimeMs = 0;
+        lastAcceptedFragmentTimeMs = 0;
+        const uint32_t savedPS = xt_rsil(15);
+        ringTail = ringHead;
+        xt_wsr_ps(savedPS);
+    }
     silentFirstSequence = 0;
     silentLastSequence = 0;
     silentSequenceGaps = 0;
     silentSequenceBacktracks = 0;
+    silentSequenceWraps = 0;
+    silentSequenceWrapGaps = 0;
     silentPromotions = 0;
     silentMatchingPromotions = 0;
     silentCorruptPromotions = 0;
@@ -555,6 +565,8 @@ static void finishSilentCapture(void) {
     Serial.print(" last_sequence="); Serial.print(silentLastSequence);
     Serial.print(" sequence_gaps="); Serial.print(silentSequenceGaps);
     Serial.print(" sequence_backtracks="); Serial.print(silentSequenceBacktracks);
+    Serial.print(" sequence_wraps="); Serial.print(silentSequenceWraps);
+    Serial.print(" sequence_wrap_gaps="); Serial.print(silentSequenceWrapGaps);
     Serial.print(" promotions="); Serial.print(silentPromotions);
     Serial.print(" matching="); Serial.print(silentMatchingPromotions);
     Serial.print(" corrupt="); Serial.print(silentCorruptPromotions);
@@ -564,6 +576,15 @@ static void finishSilentCapture(void) {
     Serial.print(" diagnostic_tx_drops="); Serial.print(diagnosticTxDrops);
     Serial.print(" malformed="); Serial.print(malformedFragments);
     Serial.print(" complete_total="); Serial.print(completeUniverses);
+    Serial.print(" duplicate_fragments="); Serial.print(duplicateFragments);
+    Serial.print(" stale_fragments="); Serial.print(staleFragments);
+    Serial.print(" abandoned_incomplete="); Serial.print(abandonedIncomplete);
+    Serial.print(" abandoned_timeout="); Serial.print(abandonedTimeout);
+    Serial.print(" integrity_failures="); Serial.print(integrityFailures);
+    Serial.print(" reset_rebaselined="); Serial.print(resetRebaselined);
+    Serial.print(" active_sequence="); Serial.print(lastActiveSequence);
+    Serial.print(" active_crc="); Serial.print(diagnosticCrc16(activeUniverse, DMX_UNIVERSE_SIZE));
+    Serial.print(" has_active_frame="); Serial.print(hasActiveWirelessFrame ? 1 : 0);
     Serial.print(" first_mismatch_channel="); Serial.print(silentFirstMismatchChannel);
     Serial.print(" first_mismatch_actual="); Serial.print(silentFirstMismatchActual);
     Serial.print(" first_mismatch_expected="); Serial.print(silentFirstMismatchExpected);
@@ -608,7 +629,9 @@ static void finishSilentCapture(void) {
 static void processSilentCommand(char* command) {
     unsigned long base = 0, slots = 0, seconds = 0;
     char mac[18] = {0};
-    if (sscanf(command, "CAPTURE START %17s %lu %lu %lu", mac, &base, &slots, &seconds) == 4 &&
+    const bool preserveState = strncmp(command, "CAPTURE CONTINUE ", 17) == 0;
+    const char* format = preserveState ? "CAPTURE CONTINUE %17s %lu %lu %lu" : "CAPTURE START %17s %lu %lu %lu";
+    if (sscanf(command, format, mac, &base, &slots, &seconds) == 4 &&
         base <= 255 && slots >= 1 && slots <= DMX_UNIVERSE_SIZE && seconds >= 1 && seconds <= 3600) {
         unsigned int octets[6];
         if (sscanf(mac, "%2x:%2x:%2x:%2x:%2x:%2x", &octets[0], &octets[1],
@@ -618,9 +641,9 @@ static void processSilentCommand(char* command) {
             silentPatternSlots = (uint16_t)slots;
             silentCaptureDurationMs = (uint32_t)seconds * 1000UL;
             silentCaptureStartedMs = millis();
-            resetSilentCapture();
+            resetSilentCapture(preserveState);
             silentCaptureActive = true;
-            Serial.println("ACK CAPTURE START");
+            Serial.println(preserveState ? "ACK CAPTURE CONTINUE" : "ACK CAPTURE START");
             return;
         }
     }
@@ -629,7 +652,10 @@ static void processSilentCommand(char* command) {
         return;
     }
     if (!strcmp(command, "CAPTURE STATUS")) {
-        Serial.print("STATUS capture="); Serial.println(silentCaptureActive ? "active" : "idle");
+        Serial.print("STATUS capture="); Serial.print(silentCaptureActive ? "active" : "idle");
+        Serial.print(" active_sequence="); Serial.print(lastActiveSequence);
+        Serial.print(" active_crc="); Serial.print(diagnosticCrc16(activeUniverse, DMX_UNIVERSE_SIZE));
+        Serial.print(" has_active_frame="); Serial.println(hasActiveWirelessFrame ? 1 : 0);
         return;
     }
     Serial.println("ERR CAPTURE COMMAND");
@@ -1223,10 +1249,16 @@ static void promoteActive(uint32_t seq) {
         if (!silentHaveSequence) {
             silentFirstSequence = seq;
             silentHaveSequence = true;
-        } else if (seq > silentLastSequence) {
-            silentSequenceGaps += seq - silentLastSequence - 1U;
         } else {
-            silentSequenceBacktracks++;
+            const uint32_t delta = seq - silentLastSequence;
+            if (delta > 0 && delta < 0x80000000UL) {
+                silentSequenceGaps += delta - 1U;
+                if (seq < silentLastSequence) {
+                    silentSequenceWraps++;
+                    silentSequenceWrapGaps += delta - 1U;
+                }
+            }
+            else silentSequenceBacktracks++;
         }
         silentLastSequence = seq;
         if (silentLastPromotionMs != 0 && now - silentLastPromotionMs > silentMaxPromotionGapMs)
@@ -1335,9 +1367,9 @@ static void acceptFragment(const uint8_t* pkt, uint32_t seq,
  * -------------------------------------------------------------------------- */
 static void processPacket(const uint8_t* pkt, uint8_t len, int8_t rssi,
                           const uint8_t* sourceMac) {
-#if RECEIVER_DIAGNOSTIC_SILENT_CAPTURE
     if (len == sizeof(RetransmitterDiagnosticsPacket) &&
         pkt[3] == RETRANSMITTER_DIAGNOSTICS_PACKET_TYPE) {
+#if RECEIVER_DIAGNOSTIC_SILENT_CAPTURE
         RetransmitterDiagnosticsPacket diagnostics;
         memcpy(&diagnostics, pkt, sizeof(diagnostics));
         if (diagnostics.magic == DMX_PACKET_MAGIC &&
@@ -1353,9 +1385,10 @@ static void processPacket(const uint8_t* pkt, uint8_t len, int8_t rssi,
             silentTxCallbackSuccess = diagnostics.callbackSuccess;
             silentTxCallbackFailure = diagnostics.callbackFailure;
         }
+#endif
+        // Wireless diagnostics are a separate packet type, not malformed DMX.
         return;
     }
-#endif
     /* Telemetry is intended for the transmitter; do not classify it as a
      * malformed DMX fragment when receivers hear one another. */
     if (len >= 4 && (pkt[3] == TELEMETRY_PACKET_TYPE ||

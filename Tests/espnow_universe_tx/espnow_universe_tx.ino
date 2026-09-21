@@ -64,7 +64,7 @@ static volatile uint8_t g_sendConfirmations = 0;
  * -------------------------------------------------------------------------- */
 
 /* Per-frame send slot list: ordered fragment indices to transmit.
- * Default (no hooks) = {0,1,2}, count 3. A duplicate appends a 4th slot. */
+ * Default (no hooks) = {0,1,2}, count 3. A duplicate adds a 4th slot. */
 static uint8_t txSlotList[DMX_FRAGMENTS_PER_UNIVERSE + 1];
 static uint8_t txSlotCount = DMX_FRAGMENTS_PER_UNIVERSE;
 
@@ -77,7 +77,7 @@ void generateTestUniverse(uint32_t seq) {
 
 /* Build the per-frame send slot list from the (compile-time) test hooks.
  * Default (no hooks) = fragments 0,1,2 in order. A drop removes a slot; a
- * duplicate appends a 4th slot; reorder changes the order. */
+ * duplicate immediately repeats its slot; reorder changes the order. */
 static void buildTxSlotList(void) {
     uint8_t order[DMX_FRAGMENTS_PER_UNIVERSE];
     uint8_t n = 0;
@@ -94,10 +94,12 @@ static void buildTxSlotList(void) {
         if (idx == TEST_DROP_FRAGMENT_INDEX) continue;
 #endif
         txSlotList[m++] = idx;
-    }
 #if defined(TEST_DUPLICATE_FRAGMENT_INDEX)
-    txSlotList[m++] = TEST_DUPLICATE_FRAGMENT_INDEX;
+        // Repeat before completion so the receiver exercises duplicate staging
+        // rather than treating an already-promoted fragment as stale.
+        if (idx == TEST_DUPLICATE_FRAGMENT_INDEX) txSlotList[m++] = idx;
 #endif
+    }
     txSlotCount = m;
 }
 
@@ -123,6 +125,9 @@ static void submitFragment(uint32_t seq, uint8_t fragIdx) {
     pkt.fragmentCount   = DMX_FRAGMENTS_PER_UNIVERSE;
     pkt.dataOffset      = offset;
     pkt.payloadLength   = payloadLength;
+#if defined(TEST_MALFORMED_FRAGMENT)
+    if (fragIdx == 1) pkt.dataOffset = DMX_UNIVERSE_SIZE - 1;
+#endif
 
     /* Serialize the packed 14-byte header. */
     memcpy(packetBuffer, &pkt, sizeof(pkt));
@@ -344,7 +349,7 @@ void loop(void) {
                     Serial.println("TX LATE: transmitted delayed fragment of previous frame");
                 }
             } else if (g_sendConfirmations >= 1 ||
-                       (now - stateEnteredTime) >= WIRELESS_TX_DRAIN_TIMEOUT_MS)) {
+                       (now - stateEnteredTime) >= WIRELESS_TX_DRAIN_TIMEOUT_MS) {
                 txState = TX_IDLE;
                 Serial.println("TX LATE: complete, resuming normal frames");
             }

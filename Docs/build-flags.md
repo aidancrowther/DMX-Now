@@ -101,6 +101,10 @@ Relevant definitions are
 `RETRANSMITTER_WIRELESS_REFRESH_HZ`, `RETRANSMITTER_TX_DRAIN_TIMEOUT_MS`,
 `RETRANSMITTER_TX_OVERHEAD_MS`, `RETRANSMITTER_DIAGNOSTICS`, and
 `RETRANSMITTER_DIAGNOSTIC_BROADCAST`.
+The Pico migration's continuous-input scheduler no longer reads the legacy
+`RETRANSMITTER_TX_OVERHEAD_MS` helper option. Its absolute wireless deadline
+controls pacing while input capture continues during RF transmission. Use the
+[Pico bench build commands](pico-retransmitter-testing.md) for qualification.
 The production retransmitter uses an absolute 10 Hz universe deadline. It waits
 for a fresh complete physical-DMX frame, sends when the deadline is due, and
 rebases one period forward after an overrun instead of compressing catch-up
