@@ -93,6 +93,11 @@ def load_config(path: str | None = None) -> DaemonConfig:
             (int(str(receiver_id), 16), str(name))
             for receiver_id, name in names.items()
         )
+        retransmitter_names = data.get("retransmitter_names", {})
+        values["retransmitter_names"] = tuple(
+            (int(str(retransmitter_id), 16), str(name))
+            for retransmitter_id, name in retransmitter_names.items()
+        )
     aliases = {"device": "transmitter_device", "baud": "transmitter_baud",
                "data_bits": "transmitter_data_bits", "parity": "transmitter_parity",
                "stop_bits": "transmitter_stop_bits", "rate": "pacer_rate_hz",
@@ -159,6 +164,12 @@ def save_config(config: DaemonConfig, path: str = DEFAULT_CONFIG_PATH) -> None:
         for receiver_id, name in sorted(config.receiver_names):
             escaped = name.replace('\\', '\\\\').replace('"', '\\"')
             lines.append(f'"{receiver_id:08X}" = "{escaped}"\n')
+        lines.append("\n")
+    if config.retransmitter_names:
+        lines.append("[retransmitter_names]\n")
+        for retransmitter_id, name in sorted(config.retransmitter_names):
+            escaped = name.replace('\\', '\\\\').replace('"', '\\"')
+            lines.append(f'"{retransmitter_id:08X}" = "{escaped}"\n')
         lines.append("\n")
     target = os.path.abspath(path)
     directory = os.path.dirname(target) or "."

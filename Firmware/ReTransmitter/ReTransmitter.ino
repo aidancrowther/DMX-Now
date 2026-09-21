@@ -44,6 +44,27 @@
 #ifndef RETRANSMITTER_DMX_SLOT_STABILITY_FRAMES
 #define RETRANSMITTER_DMX_SLOT_STABILITY_FRAMES 3
 #endif
+#ifndef RETRANSMITTER_DMX_INPUT_ENABLE_PIN
+#define RETRANSMITTER_DMX_INPUT_ENABLE_PIN -1
+#endif
+#ifndef RETRANSMITTER_DMX_INPUT_ENABLE_ACTIVE_HIGH
+#define RETRANSMITTER_DMX_INPUT_ENABLE_ACTIVE_HIGH 1
+#endif
+#ifndef RETRANSMITTER_LOCATE_PIN
+#define RETRANSMITTER_LOCATE_PIN LED_BUILTIN
+#endif
+#ifndef RETRANSMITTER_LOCATE_ACTIVE_LOW
+#define RETRANSMITTER_LOCATE_ACTIVE_LOW 1
+#endif
+#ifndef RETRANSMITTER_TELEMETRY_PERIOD_MS
+#define RETRANSMITTER_TELEMETRY_PERIOD_MS 10000UL
+#endif
+#ifndef RETRANSMITTER_TELEMETRY_JITTER_MS
+#define RETRANSMITTER_TELEMETRY_JITTER_MS 1000UL
+#endif
+#ifndef RETRANSMITTER_TELEMETRY_ONLY
+#define RETRANSMITTER_TELEMETRY_ONLY 0
+#endif
 #if RETRANSMITTER_WIRELESS_REFRESH_HZ == 0
 #error RETRANSMITTER_WIRELESS_REFRESH_HZ must be positive
 #endif
@@ -73,9 +94,25 @@ static uint32_t g_frameSequence = 0;
  * completed. This matters when a 236-slot source changes to 512 slots: the
  * old universe is intentionally zero-filled after slot 236. */
 static bool freshUniverseAvailable = false;
+static bool inputRequestedEnabled = true;
+static uint32_t inputControlGeneration = 0;
+static unsigned long lastInputFrameMs = 0;
+static uint32_t wirelessFramesSent = 0;
+static uint32_t wirelessSendFailures = 0;
+static unsigned long nextTelemetryAt = 0;
+static uint32_t telemetrySequence = 0;
+static volatile bool telemetryPending = false;
+static volatile bool telemetryInFlight = false;
+static bool locateActive = false;
+static bool locateRestoreInputEnabled = true;
+static unsigned long locateEndMs = 0;
+static unsigned long locateNextPulseMs = 0;
+static bool locatePulse = false;
 static volatile uint8_t sendConfirmations = 0;
 static volatile uint32_t txCallbackSuccess = 0;
 static volatile uint32_t txCallbackFailure = 0;
+static uint32_t frameCallbackSuccessStart = 0;
+static uint32_t frameCallbackFailureStart = 0;
 static uint32_t txEnqueueAttempts[DMX_FRAGMENTS_PER_UNIVERSE] = {0};
 static uint32_t txEnqueueSuccess[DMX_FRAGMENTS_PER_UNIVERSE] = {0};
 static uint32_t txEnqueueFailures[DMX_FRAGMENTS_PER_UNIVERSE] = {0};
@@ -121,6 +158,148 @@ static constexpr unsigned long TX_INTERVAL_MS =
 static constexpr unsigned long FRAME_PERIOD_MS =
     1000UL / RETRANSMITTER_WIRELESS_REFRESH_HZ;
 static bool dmxRxPaused = false;
+static bool administrativeInputPause = false;
+
+struct PendingRetransmitterControl {
+    uint8_t data[sizeof(RetransmitterLocatePacket)];
+    uint8_t len;
+};
+static PendingRetransmitterControl pendingControl;
+static volatile bool controlPending = false;
+
+static void setInputEnablePin(bool enabled) {
+#if RETRANSMITTER_DMX_INPUT_ENABLE_PIN >= 0
+    digitalWrite(RETRANSMITTER_DMX_INPUT_ENABLE_PIN,
+                 enabled == (RETRANSMITTER_DMX_INPUT_ENABLE_ACTIVE_HIGH != 0) ? HIGH : LOW);
+#else
+    (void)enabled;
+#endif
+}
+
+static void scheduleRetransmitterTelemetry(unsigned long now, bool initial) {
+    const unsigned long jitter = RETRANSMITTER_TELEMETRY_JITTER_MS
+        ? (initial ? (ESP.getChipId() % (RETRANSMITTER_TELEMETRY_JITTER_MS + 1UL))
+                   : random(RETRANSMITTER_TELEMETRY_JITTER_MS + 1UL)) : 0UL;
+    nextTelemetryAt = now + RETRANSMITTER_TELEMETRY_PERIOD_MS + jitter;
+}
+
+static void serviceLocate(void) {
+    if (!locateActive) return;
+    const unsigned long now = millis();
+    if ((long)(now - locateEndMs) >= 0) {
+        locateActive = false;
+        digitalWrite(RETRANSMITTER_LOCATE_PIN,
+                     RETRANSMITTER_LOCATE_ACTIVE_LOW ? HIGH : LOW);
+        setInputEnablePin(inputRequestedEnabled);
+        administrativeInputPause = !locateRestoreInputEnabled;
+        if (locateRestoreInputEnabled && dmxInput) {
+            dmxInput->resumeRx();
+            captureRequested = true;
+            freshUniverseAvailable = false;
+        }
+        return;
+    }
+    if ((long)(now - locateNextPulseMs) >= 0) {
+        locatePulse = !locatePulse;
+        const bool on = locatePulse;
+        digitalWrite(RETRANSMITTER_LOCATE_PIN,
+                     on == (RETRANSMITTER_LOCATE_ACTIVE_LOW != 0) ? LOW : HIGH);
+        locateNextPulseMs = now + 500UL;
+    }
+}
+
+static void processRetransmitterControl(void) {
+    if (!controlPending) return;
+    uint8_t data[sizeof(pendingControl.data)];
+    uint8_t len;
+    noInterrupts();
+    memcpy(data, pendingControl.data, sizeof(data));
+    len = pendingControl.len;
+    controlPending = false;
+    interrupts();
+    if (len == sizeof(RetransmitterInputControlPacket)) {
+        RetransmitterInputControlPacket packet;
+        memcpy(&packet, data, sizeof(packet));
+        if (packet.magic == DMX_PACKET_MAGIC && packet.protocolVersion == DMX_PROTO_VERSION &&
+            packet.packetType == RETRANSMITTER_INPUT_CONTROL_PACKET_TYPE &&
+            packet.universeId == RETRANSMITTER_UNIVERSE_ID &&
+            (packet.targetRetransmitterId == 0U || packet.targetRetransmitterId == ESP.getChipId()) &&
+            packet.generation >= inputControlGeneration) {
+            inputControlGeneration = packet.generation;
+            inputRequestedEnabled = packet.enabled != 0U;
+            setInputEnablePin(inputRequestedEnabled);
+            if (!inputRequestedEnabled) {
+                captureRequested = false;
+                freshUniverseAvailable = false;
+                administrativeInputPause = true;
+                if (dmxInput && !dmxRxPaused) dmxInput->pauseRx();
+            } else if (dmxInput && administrativeInputPause) {
+                dmxInput->resumeRx();
+                administrativeInputPause = false;
+                captureRequested = true;
+                freshUniverseAvailable = false;
+            }
+        }
+    } else if (len == sizeof(RetransmitterLocatePacket)) {
+        RetransmitterLocatePacket packet;
+        memcpy(&packet, data, sizeof(packet));
+        if (packet.magic == DMX_PACKET_MAGIC && packet.protocolVersion == DMX_PROTO_VERSION &&
+            packet.packetType == RETRANSMITTER_LOCATE_PACKET_TYPE &&
+            packet.universeId == RETRANSMITTER_UNIVERSE_ID &&
+            (packet.targetRetransmitterId == 0U || packet.targetRetransmitterId == ESP.getChipId()) &&
+            packet.durationSeconds >= 1U && packet.durationSeconds <= 15U &&
+            packet.generation >= inputControlGeneration) {
+            inputControlGeneration = packet.generation;
+            locateActive = true;
+            locateRestoreInputEnabled = inputRequestedEnabled;
+            locateEndMs = millis() + (unsigned long)packet.durationSeconds * 1000UL;
+            locateNextPulseMs = millis();
+            locatePulse = false;
+            captureRequested = false;
+            freshUniverseAvailable = false;
+            administrativeInputPause = true;
+            if (dmxInput && !dmxRxPaused) dmxInput->pauseRx();
+            setInputEnablePin(false);
+        }
+    }
+}
+
+static void transmitRetransmitterTelemetry(void) {
+    if (locateActive) return;
+    if (telemetryInFlight || !quickEspNow.readyToSendData()) return;
+    RetransmitterTelemetryPacket packet;
+    memset(&packet, 0, sizeof(packet));
+    packet.magic = DMX_PACKET_MAGIC;
+    packet.protocolVersion = DMX_PROTO_VERSION;
+    packet.packetType = RETRANSMITTER_TELEMETRY_PACKET_TYPE;
+    packet.universeId = RETRANSMITTER_UNIVERSE_ID;
+    packet.retransmitterId = ESP.getChipId();
+    WiFi.macAddress(packet.macAddress);
+    packet.uptimeSeconds = millis() / 1000UL;
+    packet.telemetrySequence = telemetrySequence++;
+    packet.inputEnabled = inputRequestedEnabled ? 1U : 0U;
+    packet.inputSignalActive = lastInputFrameMs && millis() - lastInputFrameMs <= 1500UL;
+    packet.batteryState = RETRANSMITTER_BATTERY_UNKNOWN;
+    packet.locateActive = locateActive ? 1U : 0U;
+    packet.inputHardwareControlAvailable = RETRANSMITTER_DMX_INPUT_ENABLE_PIN >= 0 ? 1U : 0U;
+    packet.learnedInputSlots = learnedInputSlots;
+    packet.timeSinceLastInputMs = lastInputFrameMs ? millis() - lastInputFrameMs : 0xFFFFFFFFUL;
+    packet.inputFramesReceived = inputFramesReceived;
+    packet.inputFramesSkipped = inputFramesSkipped;
+    packet.invalidStartCodes = inputInvalidStartCodes;
+    packet.invalidLengths = inputInvalidLengths;
+    packet.wirelessFrameSequence = g_frameSequence;
+    packet.wirelessFramesSent = wirelessFramesSent;
+    packet.wirelessSendFailures = wirelessSendFailures;
+    packet.missedDeadlines = txMissedDeadlines;
+    packet.controlGeneration = inputControlGeneration;
+    if (quickEspNow.sendBcast(reinterpret_cast<const uint8_t*>(&packet), sizeof(packet)) == COMMS_SEND_OK) {
+        telemetryInFlight = true;
+        scheduleRetransmitterTelemetry(millis(), false);
+    } else {
+        nextTelemetryAt = millis() + 100UL;
+    }
+}
 
 static void pollDmxInput(void) {
     if (dmxInput == nullptr || dmxRxPaused) return;
@@ -170,6 +349,7 @@ static void pollDmxInput(void) {
     memset(g_universe + slots, 0, DMX_UNIVERSE_SIZE - (size_t)slots);
     captureRequested = false;
     inputFramesReceived++;
+    lastInputFrameMs = millis();
     haveUniverse = true;
     freshUniverseAvailable = true;
 }
@@ -232,6 +412,9 @@ void setup(void) {
         RETRANSMITTER_DMX_UART, dmxReadBuffer, -1, -1,
         RETRANSMITTER_DMX_RX_PIN, RETRANSMITTER_DMX_INVERT, false);
     dmxInput = &input;
+    pinMode(RETRANSMITTER_LOCATE_PIN, OUTPUT);
+    digitalWrite(RETRANSMITTER_LOCATE_PIN, RETRANSMITTER_LOCATE_ACTIVE_LOW ? HIGH : LOW);
+    setInputEnablePin(true);
     WiFi.mode(WIFI_STA);
     WiFi.disconnect(false);
     /* Use asynchronous QuickESPNow. Fragment serialization is enforced by
@@ -241,14 +424,41 @@ void setup(void) {
         while (true) delay(10);
     }
     quickEspNow.onDataSent([](uint8_t*, uint8_t status) {
-        if (sendConfirmations < 255) sendConfirmations++;
-        if (status == ESP_NOW_SEND_SUCCESS) txCallbackSuccess++;
-        else txCallbackFailure++;
+        if (telemetryInFlight) {
+            telemetryInFlight = false;
+        } else {
+            if (sendConfirmations < 255) sendConfirmations++;
+            if (status == ESP_NOW_SEND_SUCCESS) txCallbackSuccess++;
+            else txCallbackFailure++;
+        }
     });
+    quickEspNow.onDataRcvd([](uint8_t*, uint8_t* data, uint8_t len, signed int, bool) {
+        if (len == sizeof(RetransmitterInputControlPacket) || len == sizeof(RetransmitterLocatePacket)) {
+            noInterrupts();
+            memcpy(pendingControl.data, data, len);
+            pendingControl.len = len;
+            controlPending = true;
+            interrupts();
+        }
+    });
+    scheduleRetransmitterTelemetry(millis(), true);
 }
 
 void loop(void) {
     const unsigned long now = millis();
+    processRetransmitterControl();
+    serviceLocate();
+    if ((long)(now - nextTelemetryAt) >= 0) telemetryPending = true;
+    if (telemetryPending && !telemetryInFlight && txState != TX_SENDING && txState != TX_DRAIN &&
+        quickEspNow.readyToSendData()) {
+        transmitRetransmitterTelemetry();
+        telemetryPending = false;
+    }
+    if (telemetryInFlight) return;
+#if RETRANSMITTER_TELEMETRY_ONLY
+    return;
+#else
+    if (!inputRequestedEnabled || locateActive || administrativeInputPause) return;
     pollDmxInput();
 #if RETRANSMITTER_DIAGNOSTICS && RETRANSMITTER_DIAGNOSTIC_BROADCAST
     if (txState == TX_IDLE &&
@@ -289,6 +499,8 @@ void loop(void) {
                 }
                 currentFragment = 0;
                 sendConfirmations = 0;
+                frameCallbackSuccessStart = txCallbackSuccess;
+                frameCallbackFailureStart = txCallbackFailure;
                 stateAt = now;
                 nextFrameAt += FRAME_PERIOD_MS;
                 /* A long send/capture stall must not cause an immediate burst
@@ -315,6 +527,13 @@ void loop(void) {
                     dmxRxPaused = false;
                 }
                 captureRequested = true;
+                const uint32_t frameSuccesses = txCallbackSuccess - frameCallbackSuccessStart;
+                const uint32_t frameFailures = txCallbackFailure - frameCallbackFailureStart;
+                if (frameSuccesses >= DMX_FRAGMENTS_PER_UNIVERSE && frameFailures == 0U) {
+                    if (wirelessFramesSent < 0xFFFFFFFFUL) wirelessFramesSent++;
+                } else if (frameFailures > 0U || frameSuccesses < DMX_FRAGMENTS_PER_UNIVERSE) {
+                    if (wirelessSendFailures < 0xFFFFFFFFUL) wirelessSendFailures++;
+                }
                 g_frameSequence++;
                 /* Wait for a complete fresh physical-DMX frame before the
                  * next burst. Elapsed time alone is not a valid boundary for
@@ -325,4 +544,5 @@ void loop(void) {
         case TX_WAIT_INPUT:
             break;
     }
+#endif
 }

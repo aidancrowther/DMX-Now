@@ -37,13 +37,38 @@ class FakeSerial:
 
 def telemetry_part():
     record = RECORD.pack(7, bytes.fromhex("18fe34000007"), 1, 0, -25, -30,
-                         100, 9, 10, 1, 0, 2, 100, 1, 1, 0, 4, 0, 0, 60, 0, 0)
+                         100, 9, 10, 1, 0, 2, 100, 1, 1, 0, 4, 0, 0, 60, 0, 0,
+                         0, 1, 0, 0, 0)
     payload = PART_HEADER.pack(1, 0, 1, 1, 4) + record
     body = bytes((1, MANAGEMENT_RECEIVER_TELEMETRY)) + struct.pack("<H", len(payload)) + payload
     return MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body))
 
 
 class ServiceTests(unittest.TestCase):
+    def test_retransmitter_duplicate_telemetry_does_not_refresh_freshness(self):
+        service = WirelessDmxService(
+            DaemonConfig(mode=DaemonMode.MANAGEMENT_ONLY, virtual_serial_enabled=False,
+                         raw_virtual_serial_enabled=False, artnet_enabled=False, virtual_port_path=""),
+            serial_factory=lambda: FakeSerial())
+        from wireless_dmx.models import RetransmitterTelemetry
+        telemetry = RetransmitterTelemetry(7, "18:fe:34:00:00:07", ReceiverLinkState.ONLINE,
+                                           -40, 10, 3, 5, True, True)
+        service._retransmitters[7] = (telemetry, time.monotonic() - 20)
+        service._on_transmitter_data(b"")
+        service._retransmitters[7] = (telemetry, service._retransmitters[7][1])
+        self.assertGreater(time.monotonic() - service._retransmitters[7][1], 19)
+
+    def test_retransmitter_controls_queue_without_receiver_telemetry(self):
+        fake = FakeSerial()
+        service = WirelessDmxService(
+            DaemonConfig(mode=DaemonMode.MANAGEMENT_ONLY, virtual_serial_enabled=False,
+                         raw_virtual_serial_enabled=False, artnet_enabled=False, virtual_port_path=""),
+            serial_factory=lambda: fake)
+        service.transmitter.connected = True
+        service.set_retransmitter_input(False, 0x00FDA976)
+        service.locate_retransmitter(0x00FDA976, 15)
+        self.assertEqual(len(service.transmitter._priority_management_queue.queue), 2)
+
     def test_observed_universe_preserves_hard_gates_and_does_not_pace(self):
         service = WirelessDmxService(
             DaemonConfig(mode=DaemonMode.MANAGEMENT_ONLY, virtual_serial_enabled=False,

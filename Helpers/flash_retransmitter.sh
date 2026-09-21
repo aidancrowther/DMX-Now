@@ -7,12 +7,15 @@ ARDUINO_CLI="arduino-cli"
 PORT="/dev/ttyUSB0"
 FLASH=false
 MENUCONFIG=false
+PRODUCTION=false
 EXTRA_FLAGS=()
+BOARD="esp8266:esp8266:generic"
+BOARD_BUILD="esp8266.esp8266.generic"
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help)
             cat <<'EOF'
-Usage: flash_retransmitter.sh [-f] [--port PORT] [--channel N] [--universe N]
+Usage: flash_retransmitter.sh [-f] [--production] [--d1] [--port PORT] [--channel N] [--universe N]
                               [--rate HZ] [--menuconfig]
                               [--define DEFINE]
 
@@ -22,6 +25,9 @@ Options:
   --channel N         ESP-NOW channel (default: 1).
   --universe N        Wireless universe ID (default: 1).
   --rate HZ           Wireless refresh rate (default: 10 Hz).
+  --d1                Target a WEMOS D1 Mini/Pro-compatible board.
+  --production        Build the normal DMX retransmitter with telemetry enabled (default).
+  --telemetry-only    Disable DMX input and fragment transmission; send telemetry only.
   --menuconfig        Prompt for all retransmitter build options.
   --define DEFINE     Add an extra compiler definition.
   --port PORT         ESP8266 programming port when -f is used.
@@ -30,6 +36,19 @@ EOF
             exit 0
             ;;
         -f) FLASH=true; shift ;;
+        --d1)
+            BOARD="esp8266:esp8266:d1_mini"
+            BOARD_BUILD="esp8266.esp8266.d1_mini"
+            shift
+            ;;
+        --telemetry-only)
+            EXTRA_FLAGS+=("-DRETRANSMITTER_TELEMETRY_ONLY=1")
+            shift
+            ;;
+        --production)
+            PRODUCTION=true
+            shift
+            ;;
         --port) [[ $# -ge 2 ]] || { echo "--port requires a value" >&2; exit 2; }; PORT="$2"; shift 2 ;;
         --port=*) PORT="${1#--port=}"; shift ;;
         --channel) [[ $# -ge 2 ]] || { echo "--channel requires a value" >&2; exit 2; }; EXTRA_FLAGS+=("-DRETRANSMITTER_ESPNOW_CHANNEL=$2"); shift 2 ;;
@@ -44,6 +63,13 @@ EOF
         --) shift; break ;;
         *) echo "Unknown argument: $1" >&2; exit 2 ;;
     esac
+done
+
+for define in "${EXTRA_FLAGS[@]}"; do
+    if [[ "$define" == "-DRETRANSMITTER_TELEMETRY_ONLY=1" && "$PRODUCTION" == true ]]; then
+        echo "--production and --telemetry-only are mutually exclusive" >&2
+        exit 2
+    fi
 done
 
 if [[ "$MENUCONFIG" == true ]]; then
@@ -62,16 +88,18 @@ BUILD_MODE="partial"
 for define in "${EXTRA_FLAGS[@]}"; do
     case "$define" in
         -DRETRANSMITTER_DIAGNOSTICS=1) BUILD_MODE="partial-diagnostic" ;;
+        -DRETRANSMITTER_TELEMETRY_ONLY=1) BUILD_MODE="telemetry-only" ;;
     esac
 done
-BUILD_DIR="${SKETCH_DIR}/build/${BUILD_MODE}"
-BINARY="${BUILD_DIR}/reTransmitter.ino.bin"
+BUILD_DIR="${SKETCH_DIR}/build/${BOARD_BUILD}/${BUILD_MODE}"
+BINARY="${BUILD_DIR}/ReTransmitter.ino.bin"
 # Rebuild from a clean sketch cache every time so the sole partial-mode image is
 # always derived from the current source and pinned libraries.
-CMD=("$ARDUINO_CLI" compile --clean --build-path "$BUILD_DIR" -b esp8266:esp8266:generic --library "$QESPNOW_LIB" --library "$PROTOCOL_LIB" --library "$INPUT_LIB")
+CMD=("$ARDUINO_CLI" compile --clean --build-path "$BUILD_DIR" -b "$BOARD" --library "$QESPNOW_LIB" --library "$PROTOCOL_LIB" --library "$INPUT_LIB")
 if [[ ${#EXTRA_FLAGS[@]} -gt 0 ]]; then CMD+=(--build-property "build.extra_flags= ${EXTRA_FLAGS[*]}"); fi
 CMD+=("$SKETCH_DIR" -e)
 echo "Retransmitter compile: ${EXTRA_FLAGS[*]:-defaults}"
+echo "Target board: ${BOARD}"
 echo "Build mode: ${BUILD_MODE}"
 echo "Build directory: ${BUILD_DIR}"
 "${CMD[@]}"

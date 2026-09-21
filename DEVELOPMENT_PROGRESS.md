@@ -1329,6 +1329,41 @@ loss must not affect normal receiver output, retransmission, telemetry, or
 priority control. Host tests and ESP8266 compilation pass; live RF/UART
 validation remains follow-up work.
 
+### Feature 18: Retransmitter telemetry and remote controls
+
+Status: IN PROGRESS (host/firmware implementation; hardware validation pending)
+
+The next management-plane extension adds a distinct retransmitter telemetry
+identity and bounded cache rather than treating a retransmitter as a receiver.
+Retransmitters will broadcast best-effort telemetry on the same low-priority
+schedule as receiver telemetry, with a ten-second target cadence. Telemetry is
+always abandoned in favor of physical-DMX capture, normal wireless fragments,
+or priority/control traffic; it must never create a queue or a catch-up burst.
+
+The initial battery field is explicitly `UNKNOWN` until the retransmitter power
+hardware is validated. Retransmitter telemetry reports input enabled/effective
+state, physical-DMX freshness, learned slot count, wireless counters, locate
+state, and the last applied control generation. Receiver telemetry will also
+expose effective output state, locate state, and a Boolean indicating whether
+any hard gate is active, so stale runtime test state is visible to operators.
+
+Retransmitter input enable/disable and locate use dedicated, repeated control
+packets sent through the management transmitter's priority-control path. Input
+disable finishes any in-flight complete wireless burst, stops accepting new
+physical-DMX frames, and prevents stale-universe reuse. Re-enable requires a
+fresh complete physical-DMX frame. Locate is intentionally disruptive, matching
+receiver locate semantics: it may interrupt DMX input and wireless scheduling,
+and is only appropriate with the device disconnected from fixtures. An optional
+future MAX3485 receiver-enable GPIO is supported as a compile-time hardware
+capability; current hardware may report that capability as unavailable.
+
+The management dashboard will show retransmitters in a separate panel only after
+one is discovered. Receiver and retransmitter state remain separate, while
+telemetry-based control generations provide confirmation without requiring a
+separate ACK for every control packet. This feature is compile/test validated
+in software first; a dedicated RF/DMX test harness is required before hardware
+acceptance.
+
 ### Feature 11: Host Status and Management Interface
 
 Status: COMPLETE for the current Linux/20 Hz deployment.

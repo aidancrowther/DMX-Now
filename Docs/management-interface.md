@@ -33,6 +33,7 @@ recovers by searching for the next sync sequence after malformed input.
 | `0x08` | Set transmitter mode | one byte: `0` bridge or `1` management-only | Changes the runtime transmitter role unless the firmware was statically locked. Response `0x88` reports accepted/rejected status and active mode. |
 | `0x09` | Get transmitter mode | empty | Queries the current runtime role without changing it. Response `0x88` reports the active mode. |
 | `0x0A` | Get observed universe | empty | Returns three CRC-protected `0x8A` parts containing the latest complete normal-DMX observation or the transmitter's local fallback. |
+| `0x0B` | Retransmitter control | target ID, enabled or locate operation, generation | Priority-queued input-control or locate packet; state is confirmed by retransmitter telemetry. |
 
 The Python codec is in:
 
@@ -118,6 +119,14 @@ overrides non-locked channels. When a management-only channel is changed to
 `LOCKED`, the current observed value is captured into the local management state;
 subsequent retransmitter observations cannot replace it. Explicit management edits
 remain permitted on locked channels.
+
+Retransmitter telemetry uses response opcode `0x8B` and is exported alongside the
+receiver telemetry poll. Retransmitter entries remain in a separate cache and
+appear in the dashboard only after discovery. Routine retransmitter telemetry is
+best-effort and must yield to DMX fragments and control traffic. Input enable/
+disable and locate controls are sent through the priority management queue;
+telemetry reports the resulting state and control generation rather than relying
+on a separate control ACK.
 
 ## Fail-safe configuration flow
 

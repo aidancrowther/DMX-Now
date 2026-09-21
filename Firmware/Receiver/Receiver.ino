@@ -169,6 +169,7 @@ static bool outputOverrideActive = false;
 static bool outputOverrideEnabled = true;
 static bool locateRestoreEnabled = true;
 static bool dmxOutputEnabled = false;
+static uint32_t outputControlGeneration = 0;
 #ifndef LOCATE_PULSE_HALF_PERIOD_MS
 #define LOCATE_PULSE_HALF_PERIOD_MS 500UL
 #endif
@@ -744,7 +745,8 @@ static void scheduleTelemetry(unsigned long now, bool initial) {
 }
 
 static void transmitTelemetry(void) {
-    ReceiverTelemetryPacket packet;
+    ReceiverTelemetryV2Packet report;
+    ReceiverTelemetryPacket& packet = report.base;
     packet.magic = DMX_PACKET_MAGIC;
     packet.protocolVersion = DMX_PROTO_VERSION;
     packet.packetType = TELEMETRY_PACKET_TYPE;
@@ -770,6 +772,12 @@ static void transmitTelemetry(void) {
     packet.failsafeTimeoutSeconds = failsafeTimeoutSeconds;
     packet.failsafeGeneration = failsafeGeneration;
     packet.failsafeActivations = failsafeActivations;
+    report.base.packetType = RECEIVER_TELEMETRY_V2_PACKET_TYPE;
+    report.outputOverrideActive = outputOverrideActive ? 1U : 0U;
+    report.outputEnabled = dmxOutputEnabled ? 1U : 0U;
+    report.locateActive = locateActive ? 1U : 0U;
+    report.hardGatesActive = hardGatesActive ? 1U : 0U;
+    report.outputControlGeneration = outputControlGeneration;
 
     if (!quickEspNow.readyToSendData()) {
         telemetryRetryCount++;
@@ -778,7 +786,7 @@ static void transmitTelemetry(void) {
     }
 
     const comms_send_error_t result = quickEspNow.sendBcast(
-        reinterpret_cast<const uint8_t*>(&packet), sizeof(packet));
+        reinterpret_cast<const uint8_t*>(&report), sizeof(report));
     if (result == COMMS_SEND_OK) {
         telemetryRetryCount = 0;
         scheduleTelemetry(millis(), false);
@@ -1417,6 +1425,7 @@ static void processPacket(const uint8_t* pkt, uint8_t len, int8_t rssi,
             if (!locateActive) {
                 outputOverrideActive = true;
                 outputOverrideEnabled = control.enabled != 0U;
+                outputControlGeneration = control.generation;
                 setDmxOutputEnabled(outputOverrideEnabled);
             }
         }

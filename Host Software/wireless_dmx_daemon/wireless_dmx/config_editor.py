@@ -76,3 +76,19 @@ def set_receiver_name(config: DaemonConfig, receiver_id: int, name: str) -> Daem
     result = replace(config, receiver_names=tuple(sorted(names.items())))
     result.validate()
     return result
+
+
+def retransmitter_name(config: DaemonConfig, retransmitter_id: int) -> str:
+    return dict(config.retransmitter_names).get(retransmitter_id, "")
+
+
+def set_retransmitter_name(config: DaemonConfig, retransmitter_id: int, name: str) -> DaemonConfig:
+    names = dict(config.retransmitter_names)
+    cleaned = name.strip()
+    if cleaned:
+        names[retransmitter_id] = cleaned
+    else:
+        names.pop(retransmitter_id, None)
+    result = replace(config, retransmitter_names=tuple(sorted(names.items())))
+    result.validate()
+    return result

@@ -11,6 +11,10 @@ SPEC.loader.exec_module(MODULE)
 
 
 class ExtendedValidationTests(unittest.TestCase):
+    def test_retransmitter_rate_gate_matches_ten_hz_firmware(self):
+        self.assertEqual(MODULE.RETRANSMITTER_TARGET_RATE_HZ, 10.0)
+        self.assertEqual(MODULE.RETRANSMITTER_MIN_PROMOTION_RATE_HZ, 9.0)
+
     def test_default_matrix_covers_boundaries(self):
         self.assertEqual(MODULE.DEFAULT_SLOTS, (24, 25, 100, 235, 236, 237,
                                                  255, 256, 257, 471, 472, 473,
