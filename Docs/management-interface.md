@@ -121,12 +121,26 @@ subsequent retransmitter observations cannot replace it. Explicit management edi
 remain permitted on locked channels.
 
 Retransmitter telemetry uses response opcode `0x8B` and is exported alongside the
-receiver telemetry poll. Retransmitter entries remain in a separate cache and
-appear in the dashboard only after discovery. Routine retransmitter telemetry is
-best-effort and must yield to DMX fragments and control traffic. Input enable/
-disable and locate controls are sent through the priority management queue;
-telemetry reports the resulting state and control generation rather than relying
-on a separate control ACK.
+receiver telemetry poll. The host validates retransmitter identity, magic, packet
+length, CRC, and freshness before updating a separate cache; retransmitters are
+never represented as receivers. Entries appear in the dashboard only after
+discovery. Routine telemetry is best-effort, deterministically scheduled, and
+must yield to physical-DMX capture, normal fragments, and control traffic; it
+never creates a catch-up burst.
+
+The fields include source identity, telemetry sequence, physical-DMX freshness,
+learned input slot count, input enabled/effective state, locate state, wireless
+frames sent, wireless send failures, control generation, and battery. Battery is
+currently `UNKNOWN` until power sensing is validated. Production retransmitters
+operate at approximately 10 Hz while retaining the normal three-fragment DMX
+cadence. A telemetry-only firmware variant exists for scheduler testing and does
+not transmit DMX.
+
+Input enable/disable and locate controls use the priority management queue. The
+retransmitter finishes an in-flight burst before disabling input and requires a
+fresh physical-DMX frame after re-enable, preventing stale-universe reuse.
+Telemetry reports the resulting state and control generation; priority ACK
+capture remains available for the associated transaction.
 
 ## Fail-safe configuration flow
 

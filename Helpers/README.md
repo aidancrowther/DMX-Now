@@ -14,8 +14,11 @@ root, although each script derives its own absolute project root.
 
 Helpers compile by default. Add `-f --port <device>` to flash a selected board.
 The transmitter helper supports `--management-only`, `--lock-management-only`,
-`--lock-bridge`, and `--d1`. The retransmitter helper supports channel, universe,
-rate, menu configuration, and extra compiler definitions.
+`--lock-bridge`, and `--d1`. The retransmitter helper supports `--production`,
+`--telemetry-only`, `--d1`, channel, universe, rate, menu configuration, and extra
+compiler definitions. Production retransmitter builds include telemetry; the
+telemetry-only option is for scheduler/control testing and disables DMX input and
+normal retransmission.
 
 ## Bench and diagnostic sketches
 

@@ -32,8 +32,18 @@ management-only mode. The management device is optional and must not become a
 competing normal-DMX authority. The management-only image also provides an
 optional best-effort observed-universe display by listening to retransmitter
 fragments and exporting complete snapshots over its host UART. This display is
-not yet a substitute for dedicated Firmware/Receiver/DMX measurement and should be
-validated separately for radio and UART loss behavior.
+display is not a substitute for dedicated Firmware/Receiver/DMX measurement.
+
+The production retransmitter telemetry/control implementation and extended
+validation were completed on the `feature/retransmitter-telemetry-control`
+branch (commit `e716a05`). Production operation was accepted at approximately
+10 Hz with valid reconstructed content, zero post-sync CRC errors, source
+mismatches, sequence backtracks, or wireless send failures. Boundary, transition,
+and long-soak runs completed with healthy queues and balanced fragments. The
+extended matrix recorded 25/27 passing cases; the two failures were Mega
+source-result/reporting checks, not retransmission-integrity failures. Treat
+those harness results as reporting follow-up if a fully green extended report is
+required.
 
 For wiring, image roles, flash procedures, port safety, deployment, and both
 standalone and monitored deployment procedures, see

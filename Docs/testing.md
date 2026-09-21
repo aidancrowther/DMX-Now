@@ -162,3 +162,16 @@ corrupt == rejected_complete
 Incomplete, malformed, stale, duplicate, and content-invalid universes must
 never replace the active receiver universe. The retransmitter source MAC must
 be operator-confirmed, not inferred from a host USB programmer.
+
+The production retransmitter image is built with telemetry enabled and runs at
+the 10 Hz normal-universe target. For an isolated telemetry scheduler/control
+test, use `./Helpers/flash_retransmitter.sh --telemetry-only`; this test image
+does not read physical DMX or transmit normal fragments and must be replaced with
+`--production` before deployment. The optional management transmitter should be
+flashed with `--lock-management-only` so it cannot become a second normal-DMX
+authority.
+
+The completed extended run reported 25/27 cases passing. The two non-passing
+results were Mega source-result/rate-reporting issues; source reconstruction and
+retransmission integrity passed. If a fully green report is required, repair the
+harness capture checks and rerun the same 10 Hz acceptance matrix.

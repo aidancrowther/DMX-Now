@@ -152,7 +152,7 @@ Initial conservative setup:
 
 ```text
 Management transmitter: TRANSMITTER_LOCK_MANAGEMENT_ONLY
-Re-transmitter:         partial-universe build
+Re-transmitter:         production 10 Hz telemetry build
 Receiver:               production receiver firmware
 Mega:                   retransmitter_end_to_end sketch
 ```
@@ -161,7 +161,7 @@ Compile commands:
 
 ```bash
 ./Helpers/flash_transmitter.sh --lock-management-only
-./Helpers/flash_retransmitter.sh --channel 1 --universe 1 --rate 20
+./Helpers/flash_retransmitter.sh --production --channel 1 --universe 1 --rate 10
 ./Helpers/flash_receiver.sh
 ./Helpers/flash_retransmitter_e2e_mega.sh
 ```
@@ -171,8 +171,14 @@ ESP8266 programming port; the host management transmitter and diagnostic
 receiver use their separate ports.
 
 All ESP-NOW devices must use the same channel and universe settings. The
-re-transmitter is the only normal-DMX authority. The management transmitter is
+The re-transmitter is the only normal-DMX authority. The management transmitter is
 allowed management/control packets and explicit priority traffic only.
+
+The production retransmitter also reports best-effort telemetry: physical-DMX
+freshness and slot count, input/effective state, locate state, wireless frame
+counters, and control generation. Telemetry must never delay a DMX fragment or
+create a catch-up burst. Use `--telemetry-only` only for scheduler/control tests;
+that image disables physical-DMX input and normal retransmission.
 
 ## Test phases
 
@@ -290,7 +296,8 @@ python3 Host Software/wireless_dmx_daemon/tests/run_retransmitter_extended_valid
 Run the phases separately as follows:
 
 ```bash
-# Thirty-second 236-slot preflight, then thirty-second 512-slot preflight.
+# Thirty-second 236-slot preflight, then thirty-second 512-slot preflight at the
+# production 10 Hz retransmission target.
 python3 Host Software/wireless_dmx_daemon/tests/run_retransmitter_extended_validation.py --preflight-only
 
 # 24, 25, 100, 235, 236, 237, 255, 256, 257, 471, 472, 473, 511, 512.
@@ -310,6 +317,12 @@ Use `--mega-port`, `--receiver-port`, and `--receiver-baud` to override the
 documented `/dev/ttyUSB1`, `/dev/ttyUSB2`, and 460800 defaults. Each invocation
 writes per-case JSON plus `summary.json` and `summary.md` under
 `Host Software/wireless_dmx_daemon/runs/retransmitter-extended/<timestamp>/`.
+
+The completed extended validation recorded 25/27 passing cases. Two failures were
+Mega source-result/rate-reporting harness issues; they did not indicate invalid
+reconstruction, and retransmission integrity passed. A fully green rerun requires
+fixing the Mega result-line capture/source-rate checks rather than changing the
+retransmitter acceptance criteria.
 
 ### 6. Priority and gates
 

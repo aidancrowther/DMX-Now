@@ -62,8 +62,9 @@ wireless-dmx run --bridge-mode --config configs/default.conf
 ```
 
 The interactive management dashboard is usually the preferred operator
-interface. It owns one in-process daemon and exposes telemetry, receiver names,
-fail-safe settings, output control, locate, channel gates, manual/priority
+interface. It owns one in-process daemon and exposes receiver and retransmitter
+telemetry, persistent names, fail-safe settings, output/input control, locate,
+channel gates, manual/priority
 operations, and status panels:
 
 ```bash
@@ -80,6 +81,15 @@ observed retransmitter universe when available. It is read-only/best-effort and
 becomes stale when observation reports stop. Locally sent priority values provide
 the fallback until a retransmitter observation arrives. Observed values are never
 submitted to the pacer.
+
+Receiver and retransmitter records are kept in separate caches. Retransmitters are
+discovered from response opcode `0x8B` and show freshness, input state, physical
+DMX source age, learned slot count, wireless counters, locate state, and control
+generation. Battery is intentionally shown as `UNKNOWN` until retransmitter
+power sensing is validated. Multiple retransmitters are presented through a
+carousel when needed. Aliases are persisted under `[receiver_names]` while stable
+hardware IDs remain visible. Input control and locate requests use the priority
+management path and are confirmed by later telemetry, not enqueue success alone.
 
 ### Linux foreground launch
 

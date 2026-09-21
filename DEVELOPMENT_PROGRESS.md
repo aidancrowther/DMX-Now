@@ -1331,12 +1331,17 @@ validation remains follow-up work.
 
 ### Feature 18: Retransmitter telemetry and remote controls
 
-Status: IN PROGRESS (host/firmware implementation; hardware validation pending)
+Status: COMPLETE (host/firmware implementation, hardware acceptance, and extended
+validation completed)
 
 The next management-plane extension adds a distinct retransmitter telemetry
 identity and bounded cache rather than treating a retransmitter as a receiver.
-Retransmitters will broadcast best-effort telemetry on the same low-priority
-schedule as receiver telemetry, with a ten-second target cadence. Telemetry is
+Retransmitters broadcast best-effort telemetry on the same low-priority
+schedule as receiver telemetry. The scheduler is deterministic and abandons a
+report in favor of physical-DMX capture, normal wireless fragments, or
+priority/control traffic; it never creates a queue or catch-up burst. Production
+operation is approximately 10 Hz for the retransmitter's normal universe cadence.
+Telemetry is
 always abandoned in favor of physical-DMX capture, normal wireless fragments,
 or priority/control traffic; it must never create a queue or a catch-up burst.
 
@@ -1357,12 +1362,20 @@ and is only appropriate with the device disconnected from fixtures. An optional
 future MAX3485 receiver-enable GPIO is supported as a compile-time hardware
 capability; current hardware may report that capability as unavailable.
 
-The management dashboard will show retransmitters in a separate panel only after
-one is discovered. Receiver and retransmitter state remain separate, while
+The management dashboard shows retransmitters in a separate panel only after one
+is discovered, with persistent aliases, independent freshness, and a carousel
+for multiple devices. Receiver and retransmitter state remain separate, while
 telemetry-based control generations provide confirmation without requiring a
-separate ACK for every control packet. This feature is compile/test validated
-in software first; a dedicated RF/DMX test harness is required before hardware
-acceptance.
+separate ACK for every control packet. Priority ACKs remain available for
+transaction diagnostics and the priority status panel stays visible long enough
+to inspect ACK timing.
+
+Production acceptance passed with valid reconstruction, zero post-sync CRC
+errors, source mismatches, sequence backtracks, and send failures. Extended
+validation passed 25/27 cases; the two reported failures were Mega source-result
+capture/rate-reporting issues, while retransmission integrity passed. The
+production retransmitter and diagnostic receiver were restored/validated as
+required and the result was committed as `e716a05`.
 
 ### Feature 11: Host Status and Management Interface
 

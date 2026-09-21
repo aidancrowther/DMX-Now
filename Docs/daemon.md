@@ -76,11 +76,12 @@ Because raw DMX has no delimiter or length marker, the raw input stream must
 remain aligned to 512-byte universe boundaries; an extra or missing byte cannot
 be resynchronized automatically.
 
-The dashboard displays daemon health, input/pacer statistics, receiver link and
-fail-safe state, priority state, and events. Its setup editor includes fail-safe
-mode and timeout. The dashboard also displays the active daemon role; ordinary
-manual transmission is disabled in management-only mode while priority
-transmission remains available for locked-value and gate operations.
+The dashboard displays daemon health, input/pacer statistics, receiver and
+retransmitter link state, fail-safe state, priority state, and events. Its setup
+editor includes fail-safe mode and timeout. The dashboard also displays the
+active daemon role; ordinary manual transmission is disabled in management-only
+mode while priority transmission remains available for locked-value, gate, and
+retransmitter-control operations.
 
 In management-only mode, the manual universe view is populated from the latest
 complete universe observed by the management transmitter on the ESP-NOW channel.
@@ -88,6 +89,21 @@ The view is labeled best-effort and reports `LIVE`, `STALE`, or `UNAVAILABLE`
 with source, age, and sequence information. Observation is read-only and never
 feeds the DMX pacer. Before a retransmitter observation is available, the view
 uses the latest local priority universe as a fallback.
+
+Receiver and retransmitter records are kept in separate caches. Retransmitters are
+discovered only from valid retransmitter telemetry, not inferred from receiver
+records. Their panel reports a friendly name, stable hardware ID, input
+enabled/effective state, physical-DMX freshness, learned slot count, wireless
+frame counters, locate state, control generation, and battery as `UNKNOWN` until
+the retransmitter power hardware is validated. Retransmitter freshness is aged
+independently and transitions to stale/offline when reports stop.
+
+When multiple retransmitters do not fit in the terminal, the dashboard rotates
+them in a presentation-only carousel. Press `n` to edit a receiver or
+retransmitter alias; aliases are stored under `[receiver_names]`, while the
+stable `RX-...` or `RT-...` identifier remains visible for targeting. Input
+enable/disable and locate requests use the priority management path and are
+confirmed by subsequent telemetry/control generation, not merely by queueing.
 
 ## Dashboard hotkeys
 
@@ -165,6 +181,12 @@ existing behavior of sending the complete manual universe.
 
 Priority sends report the priority ID, expected receivers, acknowledged
 receivers, retry count, and gate-applied receivers when applicable.
+
+The priority status alert remains visible while a priority or control transaction
+is active and closes automatically ten seconds after completion. It includes ACK
+timing/status, expected and acknowledged receivers, retry count, and gate-applied
+receivers. Press `c` to cancel automatic close; `x`, `Esc`, or Enter closes it
+early.
 
 Channel gates apply by data origin. Ordinary serial, Art-Net, and retransmitter
 observations cannot overwrite `LOCKED` channels. Explicit management edits can
