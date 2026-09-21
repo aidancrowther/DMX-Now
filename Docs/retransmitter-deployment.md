@@ -66,8 +66,9 @@ ESP8266 GPIO1 -> battery-level comparator output
 
 This polarity means GPIO2 `LOW` leaves the transistor off and enables the DMX
 receiver; GPIO2 `HIGH` pulls `/RE` low and disables it. The production helper
-enables this control by default. `--no-receiver-control` restores a build with no
-GPIO2 control if the hardware is not fitted.
+leaves this control disabled by default. Use the explicit `--receiver-control`
+option to enable the GPIO2 path; `--no-receiver-control` can be used to make the
+disabled choice explicit.
 
 Battery monitoring is optional and disabled by default for compatibility. Enable
 it with `--battery-monitor` or through `--menuconfig`; the default comparator
@@ -80,9 +81,9 @@ On ESP8266 this selects `SERIAL_RX_ONLY`, so UART0 TX/GPIO1 is not claimed by
 serial output and can safely be used by the comparator. Do not add serial logging
 or change the DMXUART TX pin while the comparator is connected.
 
-GPIO2 is reserved for `/RE` control in this wiring and is not also used as a
-locate indicator. Retransmitter locate requests are therefore reported through
-telemetry/control state but have no separate local LED output on this hardware.
+GPIO2 is reserved for receiver `/RE` control and is not used for retransmitter
+locate indication. Retransmitter locate requests remain available through the
+management interface, but have no separate local LED output on this hardware.
 
 ### Receiver output
 

@@ -102,9 +102,13 @@ stops, rather than being retained as stale/offline inventory.
 When multiple retransmitters do not fit in the terminal, the dashboard rotates
 them in a presentation-only carousel. Press `n` to edit a receiver or
 retransmitter alias; aliases are stored under `[receiver_names]`, while the
-stable `RX-...` or `RT-...` identifier remains visible for targeting. Input
-enable/disable and locate requests use the priority management path and are
-confirmed by subsequent telemetry/control generation, not merely by queueing.
+stable `RX-...` or `RT-...` identifier remains visible for targeting.
+Retransmitter input enable/disable remains implemented through the priority
+management path, but is disabled by default in the host configuration. Set
+`[retransmitter_control] input_enabled = true` only when the external `/RE`
+hardware is intentionally deployed. Retransmitter locate remains available
+independently. When input control is enabled, requests are confirmed by
+subsequent telemetry/control generation, not merely by queueing.
 
 ## Dashboard hotkeys
 

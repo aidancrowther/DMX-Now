@@ -311,6 +311,8 @@ class WirelessDmxService:
         return online
 
     def set_retransmitter_input(self, enabled: bool, retransmitter_id: int = 0) -> None:
+        if not self.config.retransmitter_input_control_enabled:
+            raise RuntimeError("retransmitter input control is disabled in configuration")
         generation = int(time.time() * 1000) & 0xFFFFFFFF
         if not self.transmitter.connected:
             raise RuntimeError("retransmitter input control: transmitter is disconnected")

@@ -98,6 +98,8 @@ def load_config(path: str | None = None) -> DaemonConfig:
             (int(str(retransmitter_id), 16), str(name))
             for retransmitter_id, name in retransmitter_names.items()
         )
+        values["retransmitter_input_control_enabled"] = data.get("retransmitter_control", {}).get(
+            "input_enabled", False)
     aliases = {"device": "transmitter_device", "baud": "transmitter_baud",
                "data_bits": "transmitter_data_bits", "parity": "transmitter_parity",
                "stop_bits": "transmitter_stop_bits", "rate": "pacer_rate_hz",
@@ -149,6 +151,7 @@ def save_config(config: DaemonConfig, path: str = DEFAULT_CONFIG_PATH) -> None:
                           "locked": list(config.locked_channels)},
         "receiver_failsafe": {"mode": getattr(config.receiver_failsafe_mode, "value", config.receiver_failsafe_mode),
                                "timeout_seconds": config.receiver_failsafe_timeout_seconds},
+        "retransmitter_control": {"input_enabled": config.retransmitter_input_control_enabled},
     }
     lines = ["# Wireless DMX daemon configuration\n"]
     for section, values in sections.items():

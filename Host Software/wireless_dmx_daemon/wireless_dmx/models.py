@@ -289,6 +289,9 @@ class DaemonConfig:
     # Host-side friendly aliases keyed by stable ESP8266 receiver ID.
     receiver_names: tuple[tuple[int, str], ...] = ()
     retransmitter_names: tuple[tuple[int, str], ...] = ()
+    # Retransmitter input-control packets remain implemented but are opt-in
+    # until the external /RE hardware is intentionally deployed.
+    retransmitter_input_control_enabled: bool = False
 
     def validate(self) -> None:
         try:

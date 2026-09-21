@@ -143,7 +143,11 @@ operate at approximately 10 Hz while retaining the normal three-fragment DMX
 cadence. A telemetry-only firmware variant exists for scheduler testing and does
 not transmit DMX.
 
-Input enable/disable and locate controls use the priority management queue. The
+Input enable/disable controls use the priority management queue only when the
+host-side retransmitter input-control feature is explicitly enabled. Input
+control is disabled by default; the codec, service, and firmware packet pathways
+remain available for future opt-in deployment. Retransmitter locate remains
+available independently through the same management interface. The
 retransmitter finishes an in-flight burst before disabling input and requires a
 fresh physical-DMX frame after re-enable, preventing stale-universe reuse.
 Telemetry reports the resulting state and control generation; priority ACK

@@ -109,7 +109,8 @@ class ServiceTests(unittest.TestCase):
         fake = FakeSerial()
         service = WirelessDmxService(
             DaemonConfig(mode=DaemonMode.MANAGEMENT_ONLY, virtual_serial_enabled=False,
-                         raw_virtual_serial_enabled=False, artnet_enabled=False, virtual_port_path=""),
+                         raw_virtual_serial_enabled=False, artnet_enabled=False, virtual_port_path="",
+                         retransmitter_input_control_enabled=True),
             serial_factory=lambda: fake)
         service.transmitter.connected = True
         service.set_retransmitter_input(False, 0x00FDA976)

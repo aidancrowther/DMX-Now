@@ -1046,11 +1046,16 @@ def run_dashboard(stdscr, controller: DashboardController) -> None:
                 targets = tuple(management_selected)
                 try:
                     selected = devices if 0 in targets else [item for item in devices if item[1] in targets]
+                    selected = [item for item in selected
+                                if item[0] == "receiver" or
+                                controller.config.retransmitter_input_control_enabled]
+                    if not selected:
+                        raise RuntimeError("retransmitter input control is disabled in configuration")
                     for kind, device_id, _ in selected:
                         if controller.service:
                             if kind == "receiver":
                                 controller.service.set_receiver_output(enabled, device_id)
-                            else:
+                            elif controller.config.retransmitter_input_control_enabled:
                                 controller.service.set_retransmitter_input(enabled, device_id)
                     management_message = f"{'receiver output' if enabled else 'receiver output disabled'} / retransmitter input {'enabled' if enabled else 'disabled'} for {len(selected)} device(s)"
                     management_targets = [(kind, device_id) for kind, device_id, _ in selected]

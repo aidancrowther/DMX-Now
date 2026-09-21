@@ -46,7 +46,7 @@
 #endif
 #ifndef RETRANSMITTER_DMX_INPUT_ENABLE_PIN
 /* GPIO2 drives the 2N2222 that pulls the receive transceiver /RE low. */
-#define RETRANSMITTER_DMX_INPUT_ENABLE_PIN 2
+#define RETRANSMITTER_DMX_INPUT_ENABLE_PIN -1
 #endif
 #ifndef RETRANSMITTER_DMX_INPUT_ENABLE_ACTIVE_HIGH
 /* GPIO2 LOW keeps the 2N2222 off, so the MAX3485 /RE pull-up enables RX. */

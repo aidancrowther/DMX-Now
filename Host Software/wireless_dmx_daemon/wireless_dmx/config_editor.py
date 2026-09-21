@@ -36,6 +36,7 @@ EDITABLE_FIELDS = (
     ("Priority max consecutive events", "priority_max_consecutive_events", int),
     ("Receiver fail-safe mode", "receiver_failsafe_mode", str),
     ("Receiver fail-safe timeout seconds", "receiver_failsafe_timeout_seconds", int),
+    ("Retransmitter input control enabled", "retransmitter_input_control_enabled", bool),
 )
 
 
