@@ -85,6 +85,15 @@ struct TelemetrySlot {
 static TelemetrySlot telemetryRing[TELEMETRY_RING_SIZE];
 static volatile uint8_t telemetryHead = 0;
 static volatile uint8_t telemetryTail = 0;
+static const uint8_t RETRANSMITTER_TELEMETRY_RING_SIZE = 4;
+struct RetransmitterTelemetrySlot {
+    RetransmitterTelemetryPacket packet;
+    int8_t rssi;
+};
+static RetransmitterTelemetrySlot retransmitterTelemetryRing[RETRANSMITTER_TELEMETRY_RING_SIZE];
+static volatile uint8_t retransmitterTelemetryHead = 0;
+static volatile uint8_t retransmitterTelemetryTail = 0;
+static unsigned long retransmitterTelemetryPacketsDropped = 0;
 static unsigned long telemetryPacketsDropped = 0;
 static unsigned long priorityCompletionsReceived = 0;
 static unsigned long priorityCompletionDuplicates = 0;
@@ -164,9 +173,26 @@ struct ReceiverTelemetryEntry {
     ReceiverTelemetryPacket telemetry;
     int8_t transmitterRssi;
     unsigned long lastSeenMs;
+    uint8_t outputOverrideActive;
+    uint8_t outputEnabled;
+    uint8_t locateActive;
+    uint8_t hardGatesActive;
+    uint32_t outputControlGeneration;
 };
 static ReceiverTelemetryEntry receiverTable[MAX_TELEMETRY_RECEIVERS];
 static uint32_t telemetryReportSequence = 0;
+struct RetransmitterTelemetryEntry {
+    bool valid;
+    uint8_t macAddress[6];
+    RetransmitterTelemetryPacket telemetry;
+    int8_t transmitterRssi;
+    unsigned long lastSeenMs;
+};
+#define MAX_RETRANSMITTERS 4U
+static RetransmitterTelemetryEntry retransmitterTable[MAX_RETRANSMITTERS];
+static bool retransmitterReportPending = false;
+static uint32_t retransmitterReportSequence = 0;
+static unsigned long retransmitterReportLastStartMs = 0;
 
 enum ManagementParserState {
     MGMT_WAIT_SYNC_1,
@@ -232,8 +258,14 @@ static unsigned long telemetryReportLastStartMs = 0;
 
 static void clearReceiverCache(void) {
     memset(receiverTable, 0, sizeof(receiverTable));
+    /* Receiver and retransmitter discovery share one management-cache epoch.
+     * Do not let queued retransmitter telemetry repopulate the host after a
+     * cache clear. */
+    memset(retransmitterTable, 0, sizeof(retransmitterTable));
     telemetryHead = 0;
     telemetryTail = 0;
+    retransmitterTelemetryHead = 0;
+    retransmitterTelemetryTail = 0;
     /* A daemon restart must not receive ACK records belonging to a previous
      * priority-ID namespace. Clear the exported ACK ring together with the
      * receiver telemetry cache so a fresh seeded run cannot see stale IDs. */
@@ -343,6 +375,71 @@ static void cacheTelemetry(const ReceiverTelemetryPacket& packet, int8_t rssi) {
     receiverTable[index].telemetry = packet;
     receiverTable[index].transmitterRssi = rssi;
     receiverTable[index].lastSeenMs = millis();
+}
+
+static void cacheTelemetryV2(const ReceiverTelemetryV2Packet& packet, int8_t rssi) {
+    cacheTelemetry(packet.base, rssi);
+    const int index = findReceiverEntry(packet.base);
+    if (index >= 0) {
+        receiverTable[index].outputOverrideActive = packet.outputOverrideActive;
+        receiverTable[index].outputEnabled = packet.outputEnabled;
+        receiverTable[index].locateActive = packet.locateActive;
+        receiverTable[index].hardGatesActive = packet.hardGatesActive;
+        receiverTable[index].outputControlGeneration = packet.outputControlGeneration;
+    }
+}
+
+static void cacheRetransmitterTelemetry(const RetransmitterTelemetryPacket& packet, int8_t rssi) {
+    int index = -1;
+    for (uint8_t i = 0; i < MAX_RETRANSMITTERS; i++) {
+        if (retransmitterTable[i].valid &&
+            retransmitterTable[i].telemetry.retransmitterId == packet.retransmitterId) {
+            index = i;
+            break;
+        }
+    }
+    if (index < 0) {
+        for (uint8_t i = 0; i < MAX_RETRANSMITTERS; i++) {
+            if (!retransmitterTable[i].valid) { index = i; break; }
+        }
+        if (index < 0) index = 0;
+    } else if (retransmitterTable[index].valid &&
+               !sequenceIsNewer(packet.telemetrySequence,
+                                retransmitterTable[index].telemetry.telemetrySequence) &&
+               packet.uptimeSeconds >= retransmitterTable[index].telemetry.uptimeSeconds) {
+        return;
+    }
+    retransmitterTable[index].valid = true;
+    memcpy(retransmitterTable[index].macAddress, packet.macAddress, 6);
+    retransmitterTable[index].telemetry = packet;
+    retransmitterTable[index].transmitterRssi = rssi;
+    retransmitterTable[index].lastSeenMs = millis();
+}
+
+static void queueRetransmitterTelemetry(const RetransmitterTelemetryPacket& packet, int8_t rssi) {
+    const uint8_t next = (uint8_t)((retransmitterTelemetryHead + 1U) % RETRANSMITTER_TELEMETRY_RING_SIZE);
+    const uint32_t savedPS = xt_rsil(15);
+    if (next != retransmitterTelemetryTail) {
+        retransmitterTelemetryRing[retransmitterTelemetryHead].packet = packet;
+        retransmitterTelemetryRing[retransmitterTelemetryHead].rssi = rssi;
+        retransmitterTelemetryHead = next;
+    } else if (retransmitterTelemetryPacketsDropped < 0xFFFFFFFFUL) {
+        retransmitterTelemetryPacketsDropped++;
+    }
+    xt_wsr_ps(savedPS);
+}
+
+static bool popRetransmitterTelemetry(RetransmitterTelemetryPacket& packet, int8_t& rssi) {
+    const uint32_t savedPS = xt_rsil(15);
+    if (retransmitterTelemetryHead == retransmitterTelemetryTail) {
+        xt_wsr_ps(savedPS);
+        return false;
+    }
+    packet = retransmitterTelemetryRing[retransmitterTelemetryTail].packet;
+    rssi = retransmitterTelemetryRing[retransmitterTelemetryTail].rssi;
+    retransmitterTelemetryTail = (uint8_t)((retransmitterTelemetryTail + 1U) % RETRANSMITTER_TELEMETRY_RING_SIZE);
+    xt_wsr_ps(savedPS);
+    return true;
 }
 
 static bool observedSequenceIsNewer(uint32_t a, uint32_t b) {
@@ -645,6 +742,10 @@ static void serviceEnttecInput(void) {
                         telemetryReportActiveSequence = telemetryReportSequence++;
                         telemetryReportPending = true;
                         telemetryReportLastStartMs = now;
+                        if (!retransmitterReportPending) {
+                            retransmitterReportPending = true;
+                            retransmitterReportLastStartMs = now;
+                        }
                     }
                 }
                 if (managementVersion == MANAGEMENT_PROTO_VERSION &&
@@ -711,6 +812,32 @@ static void serviceEnttecInput(void) {
                     packet.packetType = RECEIVER_LOCATE_PACKET_TYPE;
                     packet.universeId = DMX_UNIVERSE_ID;
                     enqueueControlPacket(reinterpret_cast<const uint8_t*>(&packet), sizeof(packet));
+                }
+                if (managementVersion == MANAGEMENT_PROTO_VERSION &&
+                    managementCrc16(crcInput, (uint16_t)(4 + managementLength)) == managementReceivedCrc &&
+                    managementOpcode == MANAGEMENT_RETRANSMITTER_CONTROL &&
+                    (managementLength == 9U || managementLength == 10U)) {
+                    if (managementLength == 9U) {
+                        RetransmitterInputControlPacket packet;
+                        packet.magic = DMX_PACKET_MAGIC;
+                        packet.protocolVersion = DMX_PROTO_VERSION;
+                        packet.packetType = RETRANSMITTER_INPUT_CONTROL_PACKET_TYPE;
+                        packet.universeId = DMX_UNIVERSE_ID;
+                        memcpy(&packet.targetRetransmitterId, managementPayload, 4);
+                        packet.enabled = managementPayload[4];
+                        memcpy(&packet.generation, managementPayload + 5, 4);
+                        enqueueControlPacket(reinterpret_cast<const uint8_t*>(&packet), sizeof(packet));
+                    } else {
+                        RetransmitterLocatePacket packet;
+                        packet.magic = DMX_PACKET_MAGIC;
+                        packet.protocolVersion = DMX_PROTO_VERSION;
+                        packet.packetType = RETRANSMITTER_LOCATE_PACKET_TYPE;
+                        packet.universeId = DMX_UNIVERSE_ID;
+                        memcpy(&packet.targetRetransmitterId, managementPayload, 4);
+                        memcpy(&packet.durationSeconds, managementPayload + 4, 2);
+                        memcpy(&packet.generation, managementPayload + 6, 4);
+                        enqueueControlPacket(reinterpret_cast<const uint8_t*>(&packet), sizeof(packet));
+                    }
                 }
                 if (managementVersion == MANAGEMENT_PROTO_VERSION &&
                     managementCrc16(crcInput, (uint16_t)(4 + managementLength)) == managementReceivedCrc &&
@@ -804,6 +931,16 @@ static void onTelemetryReceived(uint8_t* address, uint8_t* data, uint8_t len,
             return;
         }
     }
+    if (len == sizeof(ReceiverTelemetryV2Packet)) {
+        ReceiverTelemetryV2Packet report;
+        memcpy(&report, data, sizeof(report));
+        if (report.base.magic == DMX_PACKET_MAGIC && report.base.protocolVersion == DMX_PROTO_VERSION &&
+            report.base.packetType == RECEIVER_TELEMETRY_V2_PACKET_TYPE &&
+            report.base.universeId == DMX_UNIVERSE_ID) {
+            cacheTelemetryV2(report, (int8_t)rssi);
+        }
+        return;
+    }
     if (len == sizeof(PriorityCompletionPacket)) {
         PriorityCompletionPacket completion;
         memcpy(&completion, data, sizeof(completion));
@@ -839,6 +976,17 @@ static void onTelemetryReceived(uint8_t* address, uint8_t* data, uint8_t len,
             priorityAckHead = next;
         }
         (void)rssi;
+        return;
+    }
+    if (len == sizeof(RetransmitterTelemetryPacket)) {
+        RetransmitterTelemetryPacket packet;
+        memcpy(&packet, data, sizeof(packet));
+        if (packet.magic == DMX_PACKET_MAGIC &&
+            packet.protocolVersion == DMX_PROTO_VERSION &&
+            packet.packetType == RETRANSMITTER_TELEMETRY_PACKET_TYPE &&
+            packet.universeId == DMX_UNIVERSE_ID) {
+            queueRetransmitterTelemetry(packet, (int8_t)rssi);
+        }
         return;
     }
     if (len != sizeof(ReceiverTelemetryPacket)) return;
@@ -877,6 +1025,10 @@ static bool popTelemetry(ReceiverTelemetryPacket& packet, int8_t& rssi) {
 }
 
 static void reportTelemetry(void) {
+    RetransmitterTelemetryPacket retransmitterPacket;
+    int8_t retransmitterRssi;
+    while (popRetransmitterTelemetry(retransmitterPacket, retransmitterRssi))
+        cacheRetransmitterTelemetry(retransmitterPacket, retransmitterRssi);
 #if TRANSMITTER_TELEMETRY_LOGGING
     ReceiverTelemetryPacket packet;
     int8_t rssi;
@@ -971,6 +1123,11 @@ static void serviceTelemetryReport(void) {
         record.failsafeTimeoutSeconds = source.telemetry.failsafeTimeoutSeconds;
         record.failsafeGeneration = source.telemetry.failsafeGeneration;
         record.failsafeActivations = source.telemetry.failsafeActivations;
+        record.outputOverrideActive = source.outputOverrideActive;
+        record.outputEnabled = source.outputEnabled;
+        record.locateActive = source.locateActive;
+        record.hardGatesActive = source.hardGatesActive;
+        record.outputControlGeneration = source.outputControlGeneration;
         memcpy(packet + offset, &record, sizeof(record));
         offset += sizeof(record);
     }
@@ -986,6 +1143,44 @@ static void serviceTelemetryReport(void) {
     telemetryReportPart++;
     if (telemetryReportPart >= telemetryReportPartCount || header.recordCount == 0)
         telemetryReportPending = false;
+}
+
+static void serviceRetransmitterReport(void) {
+    if (!retransmitterReportPending) return;
+    uint8_t packet[6 + sizeof(RetransmitterTelemetryPacket) + 1 + 4 + 2];
+    uint16_t offset = 0;
+    packet[offset++] = MANAGEMENT_SYNC_1;
+    packet[offset++] = MANAGEMENT_SYNC_2;
+    packet[offset++] = MANAGEMENT_PROTO_VERSION;
+    packet[offset++] = MANAGEMENT_RETRANSMITTER_TELEMETRY;
+    int index = -1;
+    for (uint8_t i = 0; i < MAX_RETRANSMITTERS; i++) {
+        if (retransmitterTable[i].valid &&
+            millis() - retransmitterTable[i].lastSeenMs <= RECEIVER_OFFLINE_TIMEOUT_MS) {
+            index = i;
+            break;
+        }
+    }
+    const uint16_t payloadLength = (uint16_t)(sizeof(RetransmitterTelemetryPacket) + 1U + 4U);
+    packet[offset++] = (uint8_t)payloadLength;
+    packet[offset++] = (uint8_t)(payloadLength >> 8);
+    if (index >= 0) {
+        memcpy(packet + offset, &retransmitterTable[index].telemetry,
+               sizeof(RetransmitterTelemetryPacket));
+        offset += sizeof(RetransmitterTelemetryPacket);
+        packet[offset++] = (uint8_t)retransmitterTable[index].transmitterRssi;
+        const uint32_t age = millis() - retransmitterTable[index].lastSeenMs;
+        memcpy(packet + offset, &age, sizeof(age));
+        offset += sizeof(age);
+    } else {
+        memset(packet + offset, 0, payloadLength);
+        offset += payloadLength;
+    }
+    const uint16_t crc = managementCrc16(packet + 2, (uint16_t)(4 + payloadLength));
+    packet[offset++] = (uint8_t)crc;
+    packet[offset++] = (uint8_t)(crc >> 8);
+    Serial.write(packet, offset);
+    retransmitterReportPending = false;
 }
 
 static void servicePriorityAckReport(void) {
@@ -1327,6 +1522,7 @@ void loop(void) {
     serviceObservedFragments();
     reportTelemetry();
     serviceTelemetryReport();
+    serviceRetransmitterReport();
     serviceObservedUniverseReport();
     servicePriorityAckReport();
     if (pendingFailsafeConfigRepeats > 0 && quickEspNow.readyToSendData()) {

@@ -57,6 +57,11 @@
 #define RECEIVER_OUTPUT_CONTROL_PACKET_TYPE 9U
 #define RECEIVER_LOCATE_PACKET_TYPE 10U
 #define RETRANSMITTER_DIAGNOSTICS_PACKET_TYPE 11U
+#define RETRANSMITTER_TELEMETRY_PACKET_TYPE 12U
+#define RETRANSMITTER_INPUT_CONTROL_PACKET_TYPE 13U
+#define RETRANSMITTER_LOCATE_PACKET_TYPE 14U
+#define RECEIVER_TELEMETRY_V2_PACKET_TYPE 15U
+#define RETRANSMITTER_BATTERY_UNKNOWN 255U
 #define PRIORITY_COMPLETE_ACCEPTED 1U
 #define PRIORITY_COMPLETE_DUPLICATE 2U
 #define PRIORITY_COMPLETE_INVALID 3U
@@ -87,6 +92,8 @@
 #define MANAGEMENT_CACHE_CLEARED           0x84U
 #define MANAGEMENT_TRANSMITTER_MODE        0x88U
 #define MANAGEMENT_OBSERVED_UNIVERSE       0x8AU
+#define MANAGEMENT_RETRANSMITTER_TELEMETRY 0x8BU
+#define MANAGEMENT_RETRANSMITTER_CONTROL 0x0BU
 #define MANAGEMENT_ERROR                   0xE0U
 #define TRANSMITTER_MODE_BRIDGE             0U
 #define TRANSMITTER_MODE_MANAGEMENT_ONLY    1U
@@ -226,6 +233,38 @@ struct __attribute__((packed)) ReceiverTelemetryPacket {
     uint32_t failsafeActivations;
 };
 
+struct __attribute__((packed)) ReceiverTelemetryV2Packet {
+    ReceiverTelemetryPacket base;
+    uint8_t outputOverrideActive;
+    uint8_t outputEnabled;
+    uint8_t locateActive;
+    uint8_t hardGatesActive;
+    uint32_t outputControlGeneration;
+};
+
+struct __attribute__((packed)) RetransmitterTelemetryPacket {
+    uint16_t magic; uint8_t protocolVersion; uint8_t packetType; uint8_t universeId;
+    uint32_t retransmitterId; uint8_t macAddress[6]; uint32_t uptimeSeconds;
+    uint32_t telemetrySequence; uint8_t inputEnabled; uint8_t inputSignalActive;
+    uint8_t batteryState; uint8_t locateActive; uint8_t inputHardwareControlAvailable;
+    uint16_t learnedInputSlots; uint32_t timeSinceLastInputMs;
+    uint32_t inputFramesReceived; uint32_t inputFramesSkipped;
+    uint32_t invalidStartCodes; uint32_t invalidLengths;
+    uint32_t wirelessFrameSequence; uint32_t wirelessFramesSent;
+    uint32_t wirelessSendFailures; uint32_t missedDeadlines;
+    uint32_t controlGeneration;
+};
+
+struct __attribute__((packed)) RetransmitterInputControlPacket {
+    uint16_t magic; uint8_t protocolVersion; uint8_t packetType; uint8_t universeId;
+    uint32_t targetRetransmitterId; uint8_t enabled; uint32_t generation;
+};
+
+struct __attribute__((packed)) RetransmitterLocatePacket {
+    uint16_t magic; uint8_t protocolVersion; uint8_t packetType; uint8_t universeId;
+    uint32_t targetRetransmitterId; uint16_t durationSeconds; uint32_t generation;
+};
+
 /* Low-rate diagnostic snapshot from a physical-DMX retransmitter. This is
  * deliberately separate from receiver telemetry because the retransmitter's
  * DMX UART owns its serial port. It is broadcast approximately once per
@@ -347,6 +386,11 @@ struct __attribute__((packed)) TelemetryReportRecord {
     uint16_t failsafeTimeoutSeconds;
     uint32_t failsafeGeneration;
     uint32_t failsafeActivations;
+    uint8_t  outputOverrideActive;
+    uint8_t  outputEnabled;
+    uint8_t  locateActive;
+    uint8_t  hardGatesActive;
+    uint32_t outputControlGeneration;
 };
 
 /* --------------------------------------------------------------------------
@@ -369,6 +413,14 @@ static_assert(sizeof(PriorityLivenessPacket) <= ESP_NOW_MAX_DATA_LEN,
               "PriorityLivenessPacket must fit within ESP_NOW_MAX_DATA_LEN");
 static_assert(sizeof(ReceiverTelemetryPacket) <= ESP_NOW_MAX_DATA_LEN,
               "ReceiverTelemetryPacket must fit within ESP_NOW_MAX_DATA_LEN");
+static_assert(sizeof(ReceiverTelemetryV2Packet) <= ESP_NOW_MAX_DATA_LEN,
+              "ReceiverTelemetryV2Packet must fit within ESP_NOW_MAX_DATA_LEN");
+static_assert(sizeof(RetransmitterTelemetryPacket) <= ESP_NOW_MAX_DATA_LEN,
+              "RetransmitterTelemetryPacket must fit within ESP_NOW_MAX_DATA_LEN");
+static_assert(sizeof(RetransmitterInputControlPacket) <= ESP_NOW_MAX_DATA_LEN,
+              "RetransmitterInputControlPacket must fit within ESP_NOW_MAX_DATA_LEN");
+static_assert(sizeof(RetransmitterLocatePacket) <= ESP_NOW_MAX_DATA_LEN,
+              "RetransmitterLocatePacket must fit within ESP_NOW_MAX_DATA_LEN");
 static_assert(sizeof(ReceiverFailsafeConfigPacket) <= ESP_NOW_MAX_DATA_LEN,
               "ReceiverFailsafeConfigPacket must fit within ESP_NOW_MAX_DATA_LEN");
 static_assert(sizeof(ReceiverOutputControlPacket) <= ESP_NOW_MAX_DATA_LEN,
@@ -377,7 +429,7 @@ static_assert(sizeof(ReceiverLocatePacket) <= ESP_NOW_MAX_DATA_LEN,
               "ReceiverLocatePacket must fit within ESP_NOW_MAX_DATA_LEN");
 static_assert(sizeof(TelemetryReportPartHeader) == 8,
               "TelemetryReportPartHeader layout changed unexpectedly");
-static_assert(sizeof(TelemetryReportRecord) == 62,
+static_assert(sizeof(TelemetryReportRecord) == 70,
               "TelemetryReportRecord layout changed unexpectedly");
 static_assert(sizeof(PriorityAckReportHeader) == 22,
               "PriorityAckReportHeader layout changed unexpectedly");

@@ -93,6 +93,13 @@ def load_config(path: str | None = None) -> DaemonConfig:
             (int(str(receiver_id), 16), str(name))
             for receiver_id, name in names.items()
         )
+        retransmitter_names = data.get("retransmitter_names", {})
+        values["retransmitter_names"] = tuple(
+            (int(str(retransmitter_id), 16), str(name))
+            for retransmitter_id, name in retransmitter_names.items()
+        )
+        values["retransmitter_input_control_enabled"] = data.get("retransmitter_control", {}).get(
+            "input_enabled", False)
     aliases = {"device": "transmitter_device", "baud": "transmitter_baud",
                "data_bits": "transmitter_data_bits", "parity": "transmitter_parity",
                "stop_bits": "transmitter_stop_bits", "rate": "pacer_rate_hz",
@@ -144,6 +151,7 @@ def save_config(config: DaemonConfig, path: str = DEFAULT_CONFIG_PATH) -> None:
                           "locked": list(config.locked_channels)},
         "receiver_failsafe": {"mode": getattr(config.receiver_failsafe_mode, "value", config.receiver_failsafe_mode),
                                "timeout_seconds": config.receiver_failsafe_timeout_seconds},
+        "retransmitter_control": {"input_enabled": config.retransmitter_input_control_enabled},
     }
     lines = ["# Wireless DMX daemon configuration\n"]
     for section, values in sections.items():
@@ -159,6 +167,12 @@ def save_config(config: DaemonConfig, path: str = DEFAULT_CONFIG_PATH) -> None:
         for receiver_id, name in sorted(config.receiver_names):
             escaped = name.replace('\\', '\\\\').replace('"', '\\"')
             lines.append(f'"{receiver_id:08X}" = "{escaped}"\n')
+        lines.append("\n")
+    if config.retransmitter_names:
+        lines.append("[retransmitter_names]\n")
+        for retransmitter_id, name in sorted(config.retransmitter_names):
+            escaped = name.replace('\\', '\\\\').replace('"', '\\"')
+            lines.append(f'"{retransmitter_id:08X}" = "{escaped}"\n')
         lines.append("\n")
     target = os.path.abspath(path)
     directory = os.path.dirname(target) or "."

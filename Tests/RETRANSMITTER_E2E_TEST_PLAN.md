@@ -11,7 +11,7 @@ has confirmed the setup.
 /dev/ttyUSB0 -> ESP-01 management transmitter
                     management + priority ESP-NOW only
 
-/dev/ttyUSB1 -> Arduino Mega USB command/result port
+/dev/ttyUSB2 -> Arduino Mega USB command/result port
                     |
                     +-- USART1 TX / pin 18 -> RS-485 driver -> DMX input line
                                                            |
@@ -24,7 +24,7 @@ has confirmed the setup.
                                                            v
                                                    ESP-01 diagnostic receiver
                                                            |
-/dev/ttyUSB2 <- receiver UART0 TX / GPIO1 diagnostic stream
+/dev/ttyUSB1 <- receiver UART0 TX / GPIO1 diagnostic stream
 
 ```
 
@@ -34,8 +34,9 @@ The Mega requires one RS-485 interface:
 
 The diagnostic receiver build completely disables physical DMX output and
 instead emits complete reconstructed universes as binary `RDX1` records over
-`/dev/ttyUSB2` is the logical-universe monitor after the receiver has been
-flashed with this diagnostic build. The default diagnostic baud is 115200; use
+its USB serial port. In the verified setup, `/dev/ttyUSB1` is the
+logical-universe monitor after the receiver has been flashed with this diagnostic
+build. The default diagnostic baud is 115200; use
 the same selected baud in the receiver build and acceptance runner. A 460800
 baud build is recommended for high-rate diagnostic capture:
 
@@ -57,7 +58,8 @@ RDX1 | record type | little-endian frame sequence | source MAC (6 bytes) |
      | 512 channel bytes | CRC16
 ```
 
-The receiver USB serial adapter must be configured for 115200 8N1. This is a
+The receiver USB serial adapter must be configured for the selected diagnostic
+baud (460800 is the verified high-rate setup; 115200 is also supported). This is a
 logical reconstructed-DMX observation path; the receiver's physical MAX3485
 DMX output remains disabled in this image.
 
@@ -122,10 +124,11 @@ The Mega reports finite results such as:
 RESULT seconds=30 generator_slots=512 checked=... pass=... fail=... partial=... max_gap=... no_data=...ms
 ```
 
-The returned-DMX monitor recognizes DMX BREAK through the USART2 framing-error
-bit and publishes only complete frames to the foreground checker. It validates
-all 512 output channels. For partial generated input, expected channels after
-the generated slot count are zero.
+The diagnostic receiver provides the returned-DMX observation stream. The Mega
+source uses USART1 only to generate physical DMX; it does not itself monitor the
+wireless return path in this topology. The diagnostic parser validates complete
+512-channel reconstructed records, and for partial generated input expected
+channels after the generated slot count are zero.
 
 ## Safety and preparation checklist
 
@@ -152,7 +155,7 @@ Initial conservative setup:
 
 ```text
 Management transmitter: TRANSMITTER_LOCK_MANAGEMENT_ONLY
-Re-transmitter:         partial-universe build
+Re-transmitter:         production 10 Hz telemetry build
 Receiver:               production receiver firmware
 Mega:                   retransmitter_end_to_end sketch
 ```
@@ -161,7 +164,7 @@ Compile commands:
 
 ```bash
 ./Helpers/flash_transmitter.sh --lock-management-only
-./Helpers/flash_retransmitter.sh --channel 1 --universe 1 --rate 20
+./Helpers/flash_retransmitter.sh --production --channel 1 --universe 1 --rate 10
 ./Helpers/flash_receiver.sh
 ./Helpers/flash_retransmitter_e2e_mega.sh
 ```
@@ -173,6 +176,20 @@ receiver use their separate ports.
 All ESP-NOW devices must use the same channel and universe settings. The
 re-transmitter is the only normal-DMX authority. The management transmitter is
 allowed management/control packets and explicit priority traffic only.
+
+The production retransmitter also reports best-effort telemetry: physical-DMX
+freshness and slot count, always-enabled input state, locate state, wireless frame
+counters, battery state, and control-generation compatibility fields. GPIO2 is
+the locate indicator; production input is not remotely gated. Telemetry must
+never delay a DMX fragment or create a catch-up burst. Use `--telemetry-only`
+only for scheduler/control tests; that image disables physical-DMX input and
+normal retransmission.
+
+The verified post-reflash smoke test used the corrected live port mapping
+(`/dev/ttyUSB0` management transmitter, `/dev/ttyUSB1` diagnostic receiver at
+460800 baud, `/dev/ttyUSB2` Mega source) and recorded 356 valid normal-DMX
+diagnostic records, advancing sequences, input frames `0 -> 253`, wireless
+frames `0 -> 252`, and zero wireless send failures.
 
 ## Test phases
 
@@ -223,12 +240,12 @@ Representative commands are:
 ```bash
 # Fixed partial image: channels 1..N must match and N+1..512 must be zero.
 python3 Host Software/wireless_dmx_daemon/tests/run_retransmitter_acceptance.py \
-  --tx-port /dev/ttyUSB0 --mega-port /dev/ttyUSB1 --receiver-port /dev/ttyUSB2 \
+  --tx-port /dev/ttyUSB0 --mega-port /dev/ttyUSB2 --receiver-port /dev/ttyUSB1 \
   --pattern short --slots 236 --value 99 --seconds 20
 
 # Frame-unique partial image: detects torn/mixed universes and tail retention.
 python3 Host Software/wireless_dmx_daemon/tests/run_retransmitter_acceptance.py \
-  --tx-port /dev/ttyUSB0 --mega-port /dev/ttyUSB1 --receiver-port /dev/ttyUSB2 \
+  --tx-port /dev/ttyUSB0 --mega-port /dev/ttyUSB2 --receiver-port /dev/ttyUSB1 \
   --pattern dynamic-short --slots 236 --value 99 --change-ms 100 --seconds 20 \
   --expected-rate-hz 20 --rate-tolerance-hz 2
 ```
@@ -261,8 +278,8 @@ The extended dynamic soak uses:
 
 ```bash
 python3 Host Software/wireless_dmx_daemon/tests/run_retransmitter_acceptance.py \
-  --tx-port /dev/ttyUSB0 --mega-port /dev/ttyUSB1 \
-  --receiver-port /dev/ttyUSB2 --receiver-baud 460800 \
+  --tx-port /dev/ttyUSB0 --mega-port /dev/ttyUSB2 \
+  --receiver-port /dev/ttyUSB1 --receiver-baud 460800 \
   --seconds 900 --pattern dynamic --change-ms 1000
 ```
 
@@ -290,7 +307,8 @@ python3 Host Software/wireless_dmx_daemon/tests/run_retransmitter_extended_valid
 Run the phases separately as follows:
 
 ```bash
-# Thirty-second 236-slot preflight, then thirty-second 512-slot preflight.
+# Thirty-second 236-slot preflight, then thirty-second 512-slot preflight at the
+# production 10 Hz retransmission target.
 python3 Host Software/wireless_dmx_daemon/tests/run_retransmitter_extended_validation.py --preflight-only
 
 # 24, 25, 100, 235, 236, 237, 255, 256, 257, 471, 472, 473, 511, 512.
@@ -310,6 +328,12 @@ Use `--mega-port`, `--receiver-port`, and `--receiver-baud` to override the
 documented `/dev/ttyUSB1`, `/dev/ttyUSB2`, and 460800 defaults. Each invocation
 writes per-case JSON plus `summary.json` and `summary.md` under
 `Host Software/wireless_dmx_daemon/runs/retransmitter-extended/<timestamp>/`.
+
+The completed extended validation recorded 25/27 passing cases. Two failures were
+Mega source-result/rate-reporting harness issues; they did not indicate invalid
+reconstruction, and retransmission integrity passed. A fully green rerun requires
+fixing the Mega result-line capture/source-rate checks rather than changing the
+retransmitter acceptance criteria.
 
 ### 6. Priority and gates
 

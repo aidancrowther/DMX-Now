@@ -33,6 +33,7 @@ recovers by searching for the next sync sequence after malformed input.
 | `0x08` | Set transmitter mode | one byte: `0` bridge or `1` management-only | Changes the runtime transmitter role unless the firmware was statically locked. Response `0x88` reports accepted/rejected status and active mode. |
 | `0x09` | Get transmitter mode | empty | Queries the current runtime role without changing it. Response `0x88` reports the active mode. |
 | `0x0A` | Get observed universe | empty | Returns three CRC-protected `0x8A` parts containing the latest complete normal-DMX observation or the transmitter's local fallback. |
+| `0x0B` | Retransmitter locate | target ID, duration, generation | Priority-queued locate packet; locate state is confirmed by retransmitter telemetry. Production retransmitters keep DMX input enabled and use GPIO2 for the locate indicator. |
 
 The Python codec is in:
 
@@ -68,7 +69,7 @@ DMX remains latest-state: a newer unsent universe replaces an obsolete one.
 
 ## Telemetry flow
 
-1. The daemon clears the transmitter receiver cache.
+1. The daemon clears the transmitter receiver and retransmitter caches.
 2. After the cache-cleared response, it periodically requests telemetry.
 3. The transmitter collects receiver broadcasts in a bounded table.
 4. A multipart telemetry report is serialized over the host UART.
@@ -118,6 +119,31 @@ overrides non-locked channels. When a management-only channel is changed to
 `LOCKED`, the current observed value is captured into the local management state;
 subsequent retransmitter observations cannot replace it. Explicit management edits
 remain permitted on locked channels.
+
+Retransmitter telemetry uses response opcode `0x8B` and is exported alongside the
+receiver telemetry poll. The host validates retransmitter identity, magic, packet
+length, CRC, and freshness before updating a separate cache; retransmitters are
+never represented as receivers. Entries appear in the dashboard only after
+discovery. Routine telemetry is best-effort, deterministically scheduled, and
+must yield to physical-DMX capture, normal fragments, and control traffic; it
+never creates a catch-up burst.
+
+The cache-clear management command clears both device classes atomically from the
+operator's perspective. The host drops its receiver and retransmitter references
+when the clear is sent and again when the acknowledgement arrives. The
+transmitter does the same for its embedded tables and pending telemetry rings.
+Retransmitters are reported only while their last telemetry is within the active
+offline threshold; an empty report is not a discoverable retransmitter.
+
+The fields include source identity, telemetry sequence, physical-DMX freshness,
+learned input slot count, always-enabled input state, locate state, wireless
+frames sent, wireless send failures, control generation, and battery. Battery is
+`UNKNOWN` for builds without the optional comparator and reports its monitored
+state when battery support is compiled in. Production retransmitters operate at
+approximately 10 Hz while retaining the normal three-fragment DMX cadence. A
+telemetry-only firmware variant exists for scheduler testing and does not
+transmit DMX. GPIO2 is the retransmitter locate output; production firmware does
+not use it to gate DMX input.
 
 ## Fail-safe configuration flow
 

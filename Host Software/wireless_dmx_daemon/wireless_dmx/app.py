@@ -11,7 +11,8 @@ from threading import Event, Thread, Lock
 from .enttec.parser import EnttecParser
 from .artnet import ArtNetListener, ArtNetParser
 from .models import (DaemonConfig, DaemonHealth, DaemonMode, DaemonSnapshot, DmxStatistics,
-    ChannelGate, ObservedUniverse, PriorityAck, PriorityAckSummary, PriorityStatus, TelemetryStatus)
+    ChannelGate, ObservedUniverse, PriorityAck, PriorityAckSummary, PriorityStatus, TelemetryStatus,
+    RetransmitterTelemetry)
 from .pacer import DmxPacer
 from .telemetry import TelemetryStore
 from .transmitter.connection import TransmitterConnection
@@ -19,7 +20,9 @@ from .transmitter.management import (CacheClearedResponse, ManagementParser, Pri
                                      TransmitterModeResponse,
                                       clear_receiver_cache_request, get_priority_acks_request, get_telemetry_request,
                                       get_transmitter_mode_request,
-                                       get_observed_universe_request, ObservedUniversePart,
+                                      get_observed_universe_request, ObservedUniversePart,
+                                      RetransmitterTelemetryReport,
+                                      set_retransmitter_input_request, locate_retransmitter_request,
                                       mark_next_priority, set_receiver_failsafe_request, set_receiver_output_request,
                                       locate_receiver_request)
 from .protocols import DMX_GATE_MASK_SIZE
@@ -77,6 +80,7 @@ class WirelessDmxService:
         )
         self.manual_universe = bytearray(512)
         self.observed_universe = ObservedUniverse()
+        self._retransmitters: dict[int, tuple[RetransmitterTelemetry, float]] = {}
         self._observed_parts: dict[tuple[int, int], dict[int, ObservedUniversePart]] = {}
         self._observed_part_times: dict[tuple[int, int], float] = {}
         self._last_observed_request = 0.0
@@ -306,6 +310,24 @@ class WirelessDmxService:
             raise RuntimeError(f"locate not sent: {detail}")
         return online
 
+    def set_retransmitter_input(self, enabled: bool, retransmitter_id: int = 0) -> None:
+        if not self.config.retransmitter_input_control_enabled:
+            raise RuntimeError("retransmitter input control is disabled in configuration")
+        generation = int(time.time() * 1000) & 0xFFFFFFFF
+        if not self.transmitter.connected:
+            raise RuntimeError("retransmitter input control: transmitter is disconnected")
+        if not self.transmitter.send_priority_management(
+                set_retransmitter_input_request(retransmitter_id, enabled, generation)):
+            raise RuntimeError(self.transmitter.last_error or "retransmitter control queue rejected the packet")
+
+    def locate_retransmitter(self, retransmitter_id: int = 0, duration_seconds: int = 15) -> None:
+        generation = int(time.time() * 1000) & 0xFFFFFFFF
+        if not self.transmitter.connected:
+            raise RuntimeError("retransmitter locate: transmitter is disconnected")
+        if not self.transmitter.send_priority_management(
+                locate_retransmitter_request(retransmitter_id, duration_seconds, generation)):
+            raise RuntimeError(self.transmitter.last_error or "retransmitter control queue rejected the packet")
+
     def clear_priority(self) -> None:
         self.pacer.clear_priority()
 
@@ -373,6 +395,7 @@ class WirelessDmxService:
                               dmx=stats, receivers=self.telemetry.snapshot(),
                                priority=priority,
                               observed_universe=self.observed_universe,
+                              retransmitters=self._retransmitter_snapshot(),
                               transmitter_mode=mode_name,
                               transmitter_mode_sync=self._transmitter_mode_sync,
                               telemetry=TelemetryStatus(
@@ -392,8 +415,29 @@ class WirelessDmxService:
                                   cache_clear_retries=self._cache_clear_retries),
                               last_error=self._last_error)
 
+    def _retransmitter_snapshot(self) -> tuple[RetransmitterTelemetry, ...]:
+        now = time.monotonic()
+        result = []
+        for telemetry, seen in self._retransmitters.values():
+            age = now - seen
+            state = (type(telemetry.link_state).ONLINE if age <= self.config.telemetry_stale_seconds
+                     else type(telemetry.link_state).STALE if age <= self.config.telemetry_offline_seconds
+                     else type(telemetry.link_state).OFFLINE)
+            # Retransmitters are discovery devices, not a retained inventory.
+            # Only an actively reporting device should populate the dashboard
+            # or be eligible for retransmitter controls.
+            if state != type(telemetry.link_state).ONLINE:
+                continue
+            result.append(replace(telemetry, link_state=state,
+                                  transmitter_rssi=telemetry.transmitter_rssi))
+        return tuple(sorted(result, key=lambda item: item.retransmitter_id))
+
     def _send_cache_clear(self) -> None:
         self._cache_clear_acknowledged = False
+        # Drop host-side discovery immediately; the transmitter clears both
+        # receiver and retransmitter tables when it processes this request.
+        self.telemetry.clear()
+        self._retransmitters.clear()
         self.transmitter.send_immediate(clear_receiver_cache_request())
         self._cache_clear_sent += 1
         self._cache_clear_retries = max(0, self._cache_clear_sent - 1)
@@ -516,6 +560,26 @@ class WirelessDmxService:
 
     def _on_transmitter_data(self, data: bytes) -> None:
         for part in self.management.feed(data):
+            if isinstance(part, RetransmitterTelemetryReport):
+                telemetry = part.telemetry
+                # The transmitter uses an empty record when no active
+                # retransmitter is cached. It must never become a device entry.
+                if (telemetry.retransmitter_id == 0 or
+                        telemetry.transmitter_last_seen_ms > int(self.config.telemetry_offline_seconds * 1000)):
+                    continue
+                previous = self._retransmitters.get(telemetry.retransmitter_id)
+                # A transmitter can republish the same cached retransmitter
+                # record on every management poll. Do not refresh liveness for
+                # an unchanged telemetry sequence; freshness must represent a
+                # newly broadcast retransmitter packet.
+                if (previous is None or
+                        telemetry.telemetry_sequence != previous[0].telemetry_sequence or
+                        telemetry.uptime_seconds < previous[0].uptime_seconds):
+                    self._retransmitters[telemetry.retransmitter_id] = (telemetry, time.monotonic())
+                else:
+                    self._retransmitters[telemetry.retransmitter_id] = (telemetry, previous[1])
+                self._update_management_confirmations()
+                continue
             if isinstance(part, ObservedUniversePart):
                 key = (part.sequence, part.part_count)
                 observed = self._observed_parts.setdefault(key, {})
@@ -539,9 +603,10 @@ class WirelessDmxService:
             if isinstance(part, CacheClearedResponse):
                 self._cache_clear_acknowledged = True
                 self.telemetry.clear()
+                self._retransmitters.clear()
                 self._report_parts.clear()
                 self._report_part_times.clear()
-                self._logger.info("receiver_cache_cleared")
+                self._logger.info("telemetry_cache_cleared")
                 continue
             if isinstance(part, TransmitterModeResponse):
                 requested = 1 if self.config.mode == DaemonMode.MANAGEMENT_ONLY else 0
@@ -582,8 +647,37 @@ class WirelessDmxService:
                     self._telemetry_consecutive_failures = 0
                     self._telemetry_last_report = time.monotonic()
                     self._telemetry_request_started = 0.0
+                    self._update_management_confirmations()
                 del self._report_parts[part.report_sequence]
                 del self._report_part_times[part.report_sequence]
+
+    def _update_management_confirmations(self) -> None:
+        """Complete output/locate management events from fresh telemetry state."""
+        receivers = {item.receiver_id: item for item in self.telemetry.snapshot()}
+        retransmitters = {item.retransmitter_id: item for item in self._retransmitter_snapshot()}
+        for event in self._priority_events.values():
+            if event.get("management_complete") or event.get("terminal"):
+                continue
+            operation = event.get("management_operation")
+            desired = event.get("management_enabled")
+            confirmed = set(event.get("ack_receivers", set()))
+            for kind, device_id in event.get("management_targets", ()):
+                item = receivers.get(device_id) if kind == "receiver" else retransmitters.get(device_id)
+                if item is None or item.link_state.value != "online":
+                    continue
+                if operation == "output":
+                    state = item.output_enabled if kind == "receiver" else item.input_enabled
+                    if state == desired:
+                        confirmed.add(device_id)
+                elif operation == "locate" and item.locate_active:
+                    confirmed.add(device_id)
+            event["ack_receivers"] = confirmed
+            expected = set(event.get("expected_receivers", set()))
+            if expected and expected.issubset(confirmed):
+                event["management_complete"] = True
+                event["terminal"] = True
+                event["transmission_complete"] = True
+                event["terminal_reason"] = "telemetry_confirmed"
 
     def _consume_priority_ack_report(self, report: PriorityAckReport) -> None:
         previous = self._priority_ack_summary

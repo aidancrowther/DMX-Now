@@ -10,9 +10,11 @@ sys.path.insert(0, str(Path(__file__).parents[1]))
 from wireless_dmx.app import WirelessDmxService
 from wireless_dmx.enttec.protocol import encode_dmx
 from wireless_dmx.raw_dmx import RAW_DMX_UNIVERSE_SIZE
-from wireless_dmx.models import ChannelGate, DaemonConfig, DaemonMode, ReceiverLinkState, ReceiverTelemetry
+from wireless_dmx.models import (ChannelGate, DaemonConfig, DaemonMode, ReceiverLinkState,
+                                 ReceiverTelemetry, RetransmitterTelemetry)
 from wireless_dmx.protocols import (MANAGEMENT_CACHE_CLEARED, MANAGEMENT_OBSERVED_UNIVERSE,
                                     MANAGEMENT_PRIORITY_ACKS, MANAGEMENT_RECEIVER_TELEMETRY,
+                                    MANAGEMENT_RETRANSMITTER_TELEMETRY,
                                     MANAGEMENT_SYNC, crc16_ccitt)
 from wireless_dmx.transmitter.management import ACK_HEADER, ACK_RECORD, PART_HEADER, RECORD
 from wireless_dmx.virtual_serial.linux_pty import LinuxPtyBackend
@@ -37,13 +39,84 @@ class FakeSerial:
 
 def telemetry_part():
     record = RECORD.pack(7, bytes.fromhex("18fe34000007"), 1, 0, -25, -30,
-                         100, 9, 10, 1, 0, 2, 100, 1, 1, 0, 4, 0, 0, 60, 0, 0)
+                         100, 9, 10, 1, 0, 2, 100, 1, 1, 0, 4, 0, 0, 60, 0, 0,
+                         0, 1, 0, 0, 0)
     payload = PART_HEADER.pack(1, 0, 1, 1, 4) + record
     body = bytes((1, MANAGEMENT_RECEIVER_TELEMETRY)) + struct.pack("<H", len(payload)) + payload
     return MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body))
 
 
 class ServiceTests(unittest.TestCase):
+    @staticmethod
+    def retransmitter_report(retransmitter_id=7, age_ms=50, sequence=3):
+        packet = struct.Struct("<HBBBI6sII5BH10IbI").pack(
+            0x444D, 1, 12, 1, retransmitter_id, bytes.fromhex("18fe34000007"),
+            10, sequence, 1, 1, 255, 0, 1, 512, age_ms, 10, 0, 0, 0, 1, 2, 3, 4, 5,
+            -40, age_ms)
+        body = bytes((1, MANAGEMENT_RETRANSMITTER_TELEMETRY)) + struct.pack("<H", len(packet)) + packet
+        return MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body))
+
+    @staticmethod
+    def cache_cleared_response():
+        body = bytes((1, MANAGEMENT_CACHE_CLEARED, 0, 0))
+        return MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body))
+
+    def test_cache_clear_removes_receivers_and_retransmitters(self):
+        service = WirelessDmxService(
+            DaemonConfig(mode=DaemonMode.MANAGEMENT_ONLY, virtual_serial_enabled=False,
+                         raw_virtual_serial_enabled=False, artnet_enabled=False, virtual_port_path=""),
+            serial_factory=lambda: FakeSerial())
+        service._on_transmitter_data(self.retransmitter_report())
+        self.assertEqual(len(service._retransmitters), 1)
+        service._send_cache_clear()
+        self.assertEqual(service._retransmitters, {})
+        service._on_transmitter_data(self.cache_cleared_response())
+        self.assertEqual(service._retransmitters, {})
+
+    def test_stale_retransmitter_report_does_not_populate_active_devices(self):
+        service = WirelessDmxService(
+            DaemonConfig(mode=DaemonMode.MANAGEMENT_ONLY, virtual_serial_enabled=False,
+                         raw_virtual_serial_enabled=False, artnet_enabled=False, virtual_port_path=""),
+            serial_factory=lambda: FakeSerial())
+        service._on_transmitter_data(self.retransmitter_report(age_ms=31_000))
+        self.assertEqual(service._retransmitters, {})
+        self.assertEqual(service.snapshot().retransmitters, ())
+
+    def test_active_retransmitter_report_populates_devices(self):
+        service = WirelessDmxService(
+            DaemonConfig(mode=DaemonMode.MANAGEMENT_ONLY, virtual_serial_enabled=False,
+                         raw_virtual_serial_enabled=False, artnet_enabled=False, virtual_port_path=""),
+            serial_factory=lambda: FakeSerial())
+        service._on_transmitter_data(self.retransmitter_report(age_ms=50))
+        retransmitters = service.snapshot().retransmitters
+        self.assertEqual(len(retransmitters), 1)
+        self.assertEqual(retransmitters[0].retransmitter_id, 7)
+        self.assertEqual(retransmitters[0].link_state, ReceiverLinkState.ONLINE)
+
+    def test_retransmitter_duplicate_telemetry_does_not_refresh_freshness(self):
+        service = WirelessDmxService(
+            DaemonConfig(mode=DaemonMode.MANAGEMENT_ONLY, virtual_serial_enabled=False,
+                         raw_virtual_serial_enabled=False, artnet_enabled=False, virtual_port_path=""),
+            serial_factory=lambda: FakeSerial())
+        telemetry = RetransmitterTelemetry(7, "18:fe:34:00:00:07", ReceiverLinkState.ONLINE,
+                                           -40, 10, 3, 5, True, True)
+        service._retransmitters[7] = (telemetry, time.monotonic() - 20)
+        service._on_transmitter_data(b"")
+        service._retransmitters[7] = (telemetry, service._retransmitters[7][1])
+        self.assertGreater(time.monotonic() - service._retransmitters[7][1], 19)
+
+    def test_retransmitter_controls_queue_without_receiver_telemetry(self):
+        fake = FakeSerial()
+        service = WirelessDmxService(
+            DaemonConfig(mode=DaemonMode.MANAGEMENT_ONLY, virtual_serial_enabled=False,
+                         raw_virtual_serial_enabled=False, artnet_enabled=False, virtual_port_path="",
+                         retransmitter_input_control_enabled=True),
+            serial_factory=lambda: fake)
+        service.transmitter.connected = True
+        service.set_retransmitter_input(False, 0x00FDA976)
+        service.locate_retransmitter(0x00FDA976, 15)
+        self.assertEqual(len(service.transmitter._priority_management_queue.queue), 2)
+
     def test_observed_universe_preserves_hard_gates_and_does_not_pace(self):
         service = WirelessDmxService(
             DaemonConfig(mode=DaemonMode.MANAGEMENT_ONLY, virtual_serial_enabled=False,

@@ -195,6 +195,38 @@ class ReceiverTelemetry:
     failsafe_timeout_seconds: int = 60
     failsafe_generation: int = 0
     failsafe_activations: int = 0
+    output_override_active: bool = False
+    output_enabled: bool = True
+    locate_active: bool = False
+    hard_gates_active: bool = False
+    output_control_generation: int = 0
+
+
+@dataclass(frozen=True)
+class RetransmitterTelemetry:
+    retransmitter_id: int
+    mac_address: str
+    link_state: ReceiverLinkState
+    transmitter_rssi: int
+    uptime_seconds: int
+    telemetry_sequence: int
+    transmitter_last_seen_ms: int
+    input_enabled: bool
+    input_signal_active: bool
+    battery_state: str = "unknown"
+    locate_active: bool = False
+    input_hardware_control_available: bool = False
+    learned_input_slots: int = 0
+    time_since_last_input_ms: int = 0xFFFFFFFF
+    input_frames_received: int = 0
+    input_frames_skipped: int = 0
+    invalid_start_codes: int = 0
+    invalid_lengths: int = 0
+    wireless_frame_sequence: int = 0
+    wireless_frames_sent: int = 0
+    wireless_send_failures: int = 0
+    missed_deadlines: int = 0
+    control_generation: int = 0
 
 
 @dataclass(frozen=True)
@@ -256,6 +288,10 @@ class DaemonConfig:
     receiver_failsafe_timeout_seconds: int = 60
     # Host-side friendly aliases keyed by stable ESP8266 receiver ID.
     receiver_names: tuple[tuple[int, str], ...] = ()
+    retransmitter_names: tuple[tuple[int, str], ...] = ()
+    # Retransmitter input-control packets remain implemented but are opt-in
+    # until the external /RE hardware is intentionally deployed.
+    retransmitter_input_control_enabled: bool = False
 
     def validate(self) -> None:
         try:
@@ -324,6 +360,14 @@ class DaemonConfig:
                 raise ValueError("receiver_names IDs must be 32-bit receiver IDs")
             if not isinstance(name, str) or len(name) > 64:
                 raise ValueError("receiver_names values must be strings of at most 64 characters")
+        retransmitter_name_ids = [retransmitter_id for retransmitter_id, _ in self.retransmitter_names]
+        if len(set(retransmitter_name_ids)) != len(retransmitter_name_ids):
+            raise ValueError("retransmitter_names must not contain duplicate IDs")
+        for retransmitter_id, name in self.retransmitter_names:
+            if not 0 <= retransmitter_id <= 0xFFFFFFFF:
+                raise ValueError("retransmitter_names IDs must be 32-bit IDs")
+            if not isinstance(name, str) or len(name) > 64:
+                raise ValueError("retransmitter_names values must be strings of at most 64 characters")
 
         if self.priority_max_queue_depth < 1:
             raise ValueError("priority_max_queue_depth must be positive")
@@ -374,4 +418,5 @@ class DaemonSnapshot:
     transmitter_mode: Optional[str] = None
     transmitter_mode_sync: str = "pending"
     observed_universe: ObservedUniverse = field(default_factory=ObservedUniverse)
+    retransmitters: Tuple[RetransmitterTelemetry, ...] = ()
     last_error: Optional[str] = None

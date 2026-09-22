@@ -19,8 +19,9 @@ import serial
 from .app import WirelessDmxService
 from .config import (CONFIG_DIRECTORY, apply_args, available_config_paths, last_config_path,
                      load_config, remember_config_path)
-from .config_editor import (EDITABLE_FIELDS, field_value, receiver_name, save_edited_config,
-                             set_receiver_name, update_field)
+from .config_editor import (EDITABLE_FIELDS, field_value, receiver_name, retransmitter_name,
+                              save_edited_config, set_receiver_name, set_retransmitter_name,
+                              update_field)
 from .models import ChannelGate, DaemonConfig, DaemonHealth, DaemonMode, DaemonSnapshot
 
 
@@ -99,6 +100,13 @@ def rssi_quality(rssi: int) -> tuple[str, float]:
     return label, quality
 
 
+def format_age_ms(milliseconds: int) -> str:
+    """Use milliseconds through 99,999ms, then compact seconds."""
+    if milliseconds == 0xFFFFFFFF:
+        return "never"
+    return f"{milliseconds / 1000.0:.1f}s" if milliseconds > 99999 else f"{milliseconds}ms"
+
+
 def receiver_display_segments(receiver, names: dict[int, str] | None = None,
                               now: float | None = None) -> tuple[str, str, str, str, str]:
     """Return non-overlapping receiver display fields.
@@ -125,9 +133,88 @@ def receiver_display_segments(receiver, names: dict[int, str] | None = None,
         receiver.link_state.value,
         "LOW" if receiver.battery_low else "OK",
         f"{receiver.transmitter_rssi:>3}dBm {quality:<4}{bar(quality_value, 1, 8)}",
-        f"{receiver.transmitter_last_seen_ms:>7}ms {receiver.complete_universes:>9} {receiver.incomplete_universes:>9} "
+        f"{format_age_ms(receiver.transmitter_last_seen_ms):>7} {receiver.complete_universes:>9} {receiver.incomplete_universes:>9} "
         f"FS:{receiver.failsafe_mode}{'*' if receiver.failsafe_active else ''}/{receiver.failsafe_timeout_seconds}s",
     )
+
+
+RETRANSMITTER_PRIMARY_COLUMNS = (
+    ("ID", 12), ("LINK", 6), ("RSSI", 8), ("AGE", 7),
+    ("IN", 5), ("SIG", 6), ("SLOT", 5), ("BAT", 7), ("LOC", 5),
+)
+RETRANSMITTER_COUNTER_COLUMNS = (
+    ("UP", 7), ("TQ", 7), ("IAGE", 9), ("RX", 7), ("SK", 6),
+    ("SC", 6), ("SL", 6), ("WS", 7), ("TX", 7), ("TF", 7), ("MS", 5),
+)
+
+
+def _fixed_columns(columns: tuple[tuple[str, int], ...], values: tuple[str, ...]) -> str:
+    return " ".join(f"{value:<{width}}" for (_, width), value in zip(columns, values))
+
+
+def retransmitter_display_headers(view: int = 0) -> str:
+    """Return the compact one-line header for the selected telemetry view."""
+    if view == 1:
+        columns = (("NAME/ID", 16), ("UPTIME", 9), ("TELEM SEQ", 10),
+                   ("INPUT AGE", 11), ("RX FRAMES", 10), ("SKIPPED", 8),
+                   ("BAD START", 10), ("BAD LENGTH", 11))
+    elif view == 2:
+        columns = (("NAME/ID", 16), ("WIRE SEQ", 10), ("FRAMES SENT", 12),
+                   ("SEND FAIL", 10), ("MISSED", 8), ("CONTROL GEN", 13),
+                   ("RSSI", 8), ("REPORT AGE", 11))
+    else:
+        columns = (("NAME/ID", 16), ("LINK", 8), ("RSSI", 9), ("REPORT AGE", 11),
+                   ("INPUT", 7), ("SIGNAL", 8), ("SLOTS", 7), ("BATTERY", 9),
+                   ("LOCATE", 8))
+    return _fixed_columns(columns, tuple(label for label, _ in columns))
+
+
+def retransmitter_display_lines(retransmitter, name: str = "", view: int = 0) -> str:
+    """Return one compact, fixed-width telemetry row for a retransmitter."""
+    input_age = format_age_ms(retransmitter.time_since_last_input_ms)
+    identity = name[:15] if name else f"RTX-{retransmitter.retransmitter_id:08X}"
+    if view == 1:
+        columns = (("NAME/ID", 16), ("UPTIME", 9), ("TELEM SEQ", 10),
+                   ("INPUT AGE", 11), ("RX FRAMES", 10), ("SKIPPED", 8),
+                   ("BAD START", 10), ("BAD LENGTH", 11))
+        return _fixed_columns(columns, (identity, f"{retransmitter.uptime_seconds}s",
+            str(retransmitter.telemetry_sequence), input_age, str(retransmitter.input_frames_received),
+            str(retransmitter.input_frames_skipped), str(retransmitter.invalid_start_codes),
+            str(retransmitter.invalid_lengths)))
+    if view == 2:
+        columns = (("NAME/ID", 16), ("WIRE SEQ", 10), ("FRAMES SENT", 12),
+                   ("SEND FAIL", 10), ("MISSED", 8), ("CONTROL GEN", 13),
+                   ("RSSI", 8), ("REPORT AGE", 11))
+        return _fixed_columns(columns, (identity, str(retransmitter.wireless_frame_sequence),
+            str(retransmitter.wireless_frames_sent), str(retransmitter.wireless_send_failures),
+            str(retransmitter.missed_deadlines), str(retransmitter.control_generation),
+            f"{retransmitter.transmitter_rssi}dBm", format_age_ms(retransmitter.transmitter_last_seen_ms)))
+    columns = (("NAME/ID", 16), ("LINK", 8), ("RSSI", 9), ("REPORT AGE", 11),
+               ("INPUT", 7), ("SIGNAL", 8), ("SLOTS", 7), ("BATTERY", 9),
+               ("LOCATE", 8))
+    return _fixed_columns(columns, (identity, retransmitter.link_state.value,
+        f"{retransmitter.transmitter_rssi}dBm", format_age_ms(retransmitter.transmitter_last_seen_ms),
+        "ON" if retransmitter.input_enabled else "OFF",
+        "ACT" if retransmitter.input_signal_active else "QUIET",
+        str(retransmitter.learned_input_slots), retransmitter.battery_state.upper(),
+        "YES" if retransmitter.locate_active else "NO"))
+
+
+def receiver_table_header() -> str:
+    return (f"{'NAME/ID':<27} {'LINK':<8} {'BATTERY':<8} {'RSSI':<20} "
+            f"{'LAST SEEN':>7} {'COMPLETE':>9} {'INCOMPLETE':>9} "
+            f"{'FAILSAFE':<18} {'OUTPUT':<12} {'GATES':<5}")
+
+
+def receiver_table_line(receiver, names: dict[int, str] | None = None) -> str:
+    identity, link, battery, rssi, _ = receiver_display_segments(receiver, names)
+    failsafe = f"{receiver.failsafe_mode}{'*' if receiver.failsafe_active else ''}/{receiver.failsafe_timeout_seconds}s"
+    output = "ON" if receiver.output_enabled else "OFF"
+    gates = "YES" if receiver.hard_gates_active else "NO"
+    return (f"{identity:<27} {link:<8} {battery:<8} {rssi:<20} "
+            f"{receiver.transmitter_last_seen_ms:>7}ms {receiver.complete_universes:>9} "
+            f"{receiver.incomplete_universes:>9} {failsafe:<18} "
+            f"OUTPUT:{output:<8} GATES:{gates}")
 
 
 def priority_feedback(event: dict | None) -> str:
@@ -149,7 +236,7 @@ def priority_feedback(event: dict | None) -> str:
         text += f" GATE {gate_text}"
     return text
 
-MAIN_COMMANDS = "[d] daemon  [r] telemetry  [s] SETTINGS  [u] MANUAL DMX  [n] names  [c] configs  [o] output  [i] locate  [p] priority  [x] advanced  [l] logs  [q] quit"
+MAIN_COMMANDS = "[d] daemon  [r] telemetry  [s] SETTINGS  [u] MANUAL DMX  [n] names  [< >] RTX view  [v] auto  [c] configs  [o] RX/TX control  [i] locate  [p] priority  [x] advanced  [l] logs  [q] quit"
 ADVANCED_COMMANDS = "[m] Mega  [a] acceptance  [b] abort Mega  [x] main  [q] quit"
 SETUP_COMMANDS = "[↑/↓/j/k] select  [e] edit  [w] save  [a] Save As  [x] discard  [q] quit"
 MANUAL_COMMANDS = "[↑/↓/j/k] select  [←/→] grid  [0-9] type value  [Enter] apply/send  [a] jump  [e] value  [+/-] nudge  [l] gate  [n/p] priority  [r] repeats  [t] TTL  [c] clear  [z] reset zero  [u] full  [g] grid  [x] main  [q] quit"
@@ -409,39 +496,54 @@ def _online_receiver_ids(controller: DashboardController) -> list[int]:
             if receiver.link_state.value == "online"]
 
 
+def _online_management_devices(controller: DashboardController):
+    snapshot = controller.snapshot()
+    return ([('receiver', item.receiver_id, item) for item in snapshot.receivers
+             if item.link_state.value == "online"] +
+            [('retransmitter', item.retransmitter_id, item) for item in snapshot.retransmitters
+             if item.link_state.value == "online"])
+
+
 def _known_receivers(controller: DashboardController):
     """Return all discovered receivers, including stale/offline aliases."""
     return list(controller.snapshot().receivers)
 
 
+def _known_nameable_devices(controller: DashboardController):
+    return ([('receiver', item) for item in controller.snapshot().receivers] +
+            [('retransmitter', item) for item in controller.snapshot().retransmitters])
+
+
 def render_names_modal(stdscr, controller: DashboardController, selected_index: int,
                        message: str = "") -> None:
-    """Render the persistent receiver-friendly-name editor."""
+    """Render the persistent receiver/retransmitter-friendly-name editor."""
     height, width = stdscr.getmaxyx()
-    receivers = _known_receivers(controller)
-    selected_index = max(0, min(selected_index, max(0, len(receivers) - 1)))
+    devices = _known_nameable_devices(controller)
+    selected_index = max(0, min(selected_index, max(0, len(devices) - 1)))
     box_width = min(max(60, width - 8), 88)
-    box_height = min(max(10, len(receivers) + 6), max(10, height - 4))
+    box_height = min(max(10, len(devices) + 6), max(10, height - 4))
     top = max(1, (height - box_height) // 2)
     left = max(1, (width - box_width) // 2)
     bottom = min(height - 2, top + box_height - 1)
     right = min(width - 2, left + box_width - 1)
-    _box(stdscr, top, left, bottom, right, "RECEIVER NAMES")
+    _box(stdscr, top, left, bottom, right, "DEVICE NAMES")
     _safe_add(stdscr, top + 1, left + 3,
               "Select a receiver and press e to edit; blank input clears the name",
               color_attr("accent", True), right - left - 5)
     _safe_add(stdscr, top + 2, left + 3, "Names are saved immediately to the active TOML configuration",
               curses.A_DIM, right - left - 5)
-    if not receivers:
-        _safe_add(stdscr, top + 4, left + 3, "No receivers discovered yet.", color_attr("warning", True))
+    if not devices:
+        _safe_add(stdscr, top + 4, left + 3, "No receivers or retransmitters discovered yet.", color_attr("warning", True))
     else:
         visible = max(1, bottom - top - 5)
-        first = max(0, min(selected_index - visible // 2, len(receivers) - visible))
-        names = dict(controller.config.receiver_names)
-        for offset, receiver in enumerate(receivers[first:first + visible]):
+        first = max(0, min(selected_index - visible // 2, len(devices) - visible))
+        for offset, (kind, device) in enumerate(devices[first:first + visible]):
             index = first + offset
-            alias = names.get(receiver.receiver_id, "") or "(unnamed)"
-            label = f"{alias}  [RX-{receiver.receiver_id:08X}]  {receiver.link_state.value}"
+            alias = (receiver_name(controller.config, device.receiver_id) if kind == "receiver" else
+                     retransmitter_name(controller.config, device.retransmitter_id)) or "(unnamed)"
+            prefix = "RX" if kind == "receiver" else "RTX"
+            device_id = device.receiver_id if kind == "receiver" else device.retransmitter_id
+            label = f"{alias}  [{prefix}-{device_id:08X}]  {device.link_state.value}"
             attr = color_attr("gate_open_selected", True) if index == selected_index else 0
             _safe_add(stdscr, top + 4 + offset, left + 3, label, attr, right - left - 5)
     if message:
@@ -486,8 +588,8 @@ def render_receiver_modal(stdscr, controller: DashboardController, action: str,
                           selected_index: int, selected_ids: set[int], message: str = "") -> None:
     """Render a centered multi-select receiver management menu."""
     height, width = stdscr.getmaxyx()
-    ids = _online_receiver_ids(controller)
-    entries = [0] + ids
+    devices = _online_management_devices(controller)
+    entries = [('all', 0, None)] + devices
     selected_index = max(0, min(selected_index, len(entries) - 1))
     box_width = min(max(48, width - 8), 76)
     box_height = min(max(9, len(entries) + 7), max(9, height - 4))
@@ -495,21 +597,29 @@ def render_receiver_modal(stdscr, controller: DashboardController, action: str,
     left = max(1, (width - box_width) // 2)
     bottom = min(height - 2, top + box_height - 1)
     right = min(width - 2, left + box_width - 1)
-    _box(stdscr, top, left, bottom, right, "RECEIVER MANAGEMENT")
-    verb = "MAX3485 OUTPUT" if action == "output" else "LOCATE RECEIVERS"
-    _safe_add(stdscr, top + 1, left + 3, f"{verb} - select one or more online receivers", color_attr("accent", True))
-    _safe_add(stdscr, top + 2, left + 3, "Space: toggle   Enter: continue   x/Esc: cancel", curses.A_DIM)
+    _box(stdscr, top, left, bottom, right, "DEVICE MANAGEMENT")
+    verb = ("DMX OUTPUT CONTROL / RETRANSMITTER INPUT CONTROL" if action == "output"
+            else "LOCATE RECEIVER / LOCATE RETRANSMITTER")
+    _safe_add(stdscr, top + 1, left + 3, f"{verb} - select one or more online devices", color_attr("accent", True))
+    _safe_add(stdscr, top + 2, left + 3,
+              "Space: toggle   Enter: continue   output=receiver only; input=retransmitter only   x/Esc: cancel",
+              curses.A_DIM, right - left - 5)
     visible = max(1, bottom - top - 5)
     first = max(0, min(selected_index - visible // 2, len(entries) - visible))
-    names = dict(controller.config.receiver_names)
-    for offset, receiver_id in enumerate(entries[first:first + visible]):
+    receiver_names = dict(controller.config.receiver_names)
+    retransmitter_names = dict(controller.config.retransmitter_names)
+    for offset, (kind, device_id, device) in enumerate(entries[first:first + visible]):
         index = first + offset
-        marker = "[x]" if receiver_id in selected_ids else "[ ]"
-        if receiver_id == 0:
-            label = "ALL ONLINE RECEIVERS"
+        marker = "[x]" if device_id in selected_ids else "[ ]"
+        if kind == "all":
+            label = "ALL ONLINE DEVICES"
+        elif kind == "receiver":
+            alias = receiver_names.get(device_id, "")
+            actual = "ON" if device.output_enabled else "OFF"
+            label = f"{alias} [RX-{device_id:08X}] DMX OUTPUT:{actual} GATES:{'YES' if device.hard_gates_active else 'NO'}" if alias else f"RX-{device_id:08X} DMX OUTPUT:{actual} GATES:{'YES' if device.hard_gates_active else 'NO'}"
         else:
-            alias = names.get(receiver_id, "")
-            label = f"{alias} [RX-{receiver_id:08X}]" if alias else f"Receiver {receiver_id:08X}"
+            alias = retransmitter_names.get(device_id, "")
+            label = f"{alias} [RTX-{device_id:08X}] INPUT:{'ON' if device.input_enabled else 'OFF'}" if alias else f"RTX-{device_id:08X} INPUT:{'ON' if device.input_enabled else 'OFF'}"
         attr = color_attr("gate_open_selected", True) if index == selected_index else 0
         _safe_add(stdscr, top + 4 + offset, left + 3, f"{marker} {label}", attr)
     if message:
@@ -537,7 +647,32 @@ def priority_event_finished(event: dict | None) -> bool:
                            event.get("management_complete")))
 
 
-def render(stdscr, controller: DashboardController, show_logs: bool) -> None:
+def update_management_event(controller: DashboardController, event: dict | None) -> None:
+    if not event or event.get("management_complete") or event.get("terminal"):
+        return
+    snapshots = {item.receiver_id: item for item in controller.snapshot().receivers}
+    snapshots.update({item.retransmitter_id: item for item in controller.snapshot().retransmitters})
+    confirmed = set(event.get("ack_receivers", set()))
+    for kind, device_id in event.get("management_targets", ()):
+        item = snapshots.get(device_id)
+        if item is None or item.link_state.value != "online":
+            continue
+        if event.get("management_operation") == "output":
+            state = item.output_enabled if kind == "receiver" else item.input_enabled
+            if state == event.get("management_enabled"):
+                confirmed.add(device_id)
+        elif event.get("management_operation") == "locate" and item.locate_active:
+            confirmed.add(device_id)
+    event["ack_receivers"] = confirmed
+    if set(event.get("expected_receivers", set())).issubset(confirmed):
+        event["management_complete"] = True
+        event["terminal"] = True
+        event["transmission_complete"] = True
+        event["terminal_reason"] = "telemetry_confirmed"
+
+
+def render(stdscr, controller: DashboardController, show_logs: bool,
+           carousel_view: int = 0, carousel_auto: bool = True) -> None:
     stdscr.erase()
     height, width = stdscr.getmaxyx()
     snapshot = controller.snapshot()
@@ -578,21 +713,31 @@ def render(stdscr, controller: DashboardController, show_logs: bool) -> None:
     if snapshot.last_error:
         _safe_add(stdscr, 10, 3, f"ERROR: {snapshot.last_error}", color_attr("critical", True))
     receiver_top = top_panel_bottom + 1
-    _box(stdscr, receiver_top, 1, max(receiver_top + 2, receiver_top + 3 + len(snapshot.receivers)), width - 2, "RECEIVERS")
+    receiver_panel_bottom = max(receiver_top + 2, receiver_top + 3 + len(snapshot.receivers))
+    _box(stdscr, receiver_top, 1, receiver_panel_bottom, width - 2, "RECEIVERS")
     row = receiver_top + 1
-    _safe_add(stdscr, row, 3, "NAME/ID                        LINK     BATTERY  RSSI             LAST SEEN  COMPLETE  INCOMPLETE", color_attr("accent", True))
+    _safe_add(stdscr, row, 3, receiver_table_header(), color_attr("accent", True))
     for receiver in snapshot.receivers:
         row += 1
         link_color = "healthy" if receiver.link_state.value == "online" else "warning" if receiver.link_state.value == "stale" else "critical"
         battery_color = "warning" if receiver.battery_low else "healthy"
-        receiver_id, link, battery, rssi, counters = receiver_display_segments(
-            receiver, dict(controller.config.receiver_names))
-        _safe_add(stdscr, row, 3, receiver_id, color_attr("accent", True), 27)
-        _safe_add(stdscr, row, 32, f"{link:<8}", color_attr(link_color, True))
-        _safe_add(stdscr, row, 41, f"{battery:<8}", color_attr(battery_color, True))
-        _safe_add(stdscr, row, 50, rssi, color_attr("healthy" if receiver.transmitter_rssi >= -55 else "warning"))
-        _safe_add(stdscr, row, 71, counters)
-    log_top = max(12 + len(snapshot.receivers), height - 8) if show_logs else height - 3
+        _safe_add(stdscr, row, 3, receiver_table_line(receiver, dict(controller.config.receiver_names)),
+                  color_attr(link_color, True))
+    retransmitter_top = receiver_panel_bottom + 1
+    retransmitter_panel_bottom = retransmitter_top + 3 + len(snapshot.retransmitters)
+    if snapshot.retransmitters:
+        _box(stdscr, retransmitter_top, 1, retransmitter_panel_bottom, width - 2, "RETRANSMITTERS")
+        row = retransmitter_top + 1
+        if carousel_auto:
+            carousel_view = int(time.monotonic() / 4.0) % 3
+        _safe_add(stdscr, row, 3, retransmitter_display_headers(carousel_view), color_attr("accent", True))
+        for retransmitter in snapshot.retransmitters:
+            row += 1
+            link_color = "healthy" if retransmitter.link_state.value == "online" else "warning" if retransmitter.link_state.value == "stale" else "critical"
+            name = retransmitter_name(controller.config, retransmitter.retransmitter_id)
+            _safe_add(stdscr, row, 3, retransmitter_display_lines(retransmitter, name, carousel_view), color_attr(link_color, True))
+    log_top = max((retransmitter_panel_bottom if snapshot.retransmitters else receiver_panel_bottom) + 1,
+                  height - 8) if show_logs else height - 3
     if show_logs and log_top < height - 2:
         _box(stdscr, log_top, 1, height - 3, width - 2, "EVENTS")
         for index, event in enumerate(list(controller.events)[:max(0, height - log_top - 4)]):
@@ -721,6 +866,8 @@ def run_dashboard(stdscr, controller: DashboardController) -> None:
     stdscr.nodelay(True)
     stdscr.timeout(250)
     show_logs = True
+    carousel_auto = True
+    carousel_view = 0
     advanced = False
     setup = False
     setup_selected = 0
@@ -764,8 +911,11 @@ def run_dashboard(stdscr, controller: DashboardController) -> None:
         if priority_alert:
             stdscr.erase()
             event = priority_alert_event or latest_priority_event(controller)
+            update_management_event(controller, event)
             if not priority_alert_manual and priority_event_finished(event):
                 if not priority_alert_close_at:
+                    # Start the countdown only after the event is complete or
+                    # terminal. Pending ACKs keep the modal open indefinitely.
                     priority_alert_close_at = time.monotonic() + 10.0
                 else:
                     priority_alert_close_at = min(priority_alert_close_at, time.monotonic() + 10.0)
@@ -798,13 +948,25 @@ def run_dashboard(stdscr, controller: DashboardController) -> None:
         elif advanced:
             render_advanced(stdscr, controller)
         else:
-            render(stdscr, controller, show_logs)
+            render(stdscr, controller, show_logs, carousel_view, carousel_auto)
         key = stdscr.getch()
         if key < 0:
             continue
         height, width = stdscr.getmaxyx()
         if key in (ord("q"), ord("Q")):
             return
+        if not (priority_alert or names or configs or management or manual or setup or advanced):
+            if key in (ord("v"), ord("V")):
+                carousel_auto = not carousel_auto
+                continue
+            if key in (ord("<"), curses.KEY_LEFT):
+                carousel_auto = False
+                carousel_view = (carousel_view - 1) % 3
+                continue
+            if key in (ord(">"), curses.KEY_RIGHT):
+                carousel_auto = False
+                carousel_view = (carousel_view + 1) % 3
+                continue
         if key in (ord("x"), ord("X"), 27):
             if priority_alert:
                 priority_alert = False
@@ -836,22 +998,26 @@ def run_dashboard(stdscr, controller: DashboardController) -> None:
                 priority_alert_event = None
             continue
         if names:
-            receivers = _known_receivers(controller)
+            devices = _known_nameable_devices(controller)
             if key in (curses.KEY_UP, ord("k")):
                 names_index = max(0, names_index - 1)
             elif key in (curses.KEY_DOWN, ord("j")):
-                names_index = min(max(0, len(receivers) - 1), names_index + 1)
-            elif key in (ord("e"), ord("E")) and receivers:
-                receiver = receivers[names_index]
-                current = receiver_name(controller.config, receiver.receiver_id)
+                names_index = min(max(0, len(devices) - 1), names_index + 1)
+            elif key in (ord("e"), ord("E")) and devices:
+                kind, device = devices[names_index]
+                device_id = device.receiver_id if kind == "receiver" else device.retransmitter_id
+                prefix = "RX" if kind == "receiver" else "RTX"
+                current = (receiver_name(controller.config, device_id) if kind == "receiver" else
+                           retransmitter_name(controller.config, device_id))
                 try:
-                    prompt = f"Name for RX-{receiver.receiver_id:08X} [{current}]: "
+                    prompt = f"Name for {prefix}-{device_id:08X} [{current}]: "
                     _safe_add(stdscr, height - 2, 2, prompt, color_attr("accent", True), width - 4)
                     stdscr.refresh()
                     text = _read_line_blocking(stdscr, height - 2, 2 + len(prompt), 64)
-                    controller.config = set_receiver_name(controller.config, receiver.receiver_id, text)
+                    controller.config = (set_receiver_name(controller.config, device_id, text) if kind == "receiver" else
+                                         set_retransmitter_name(controller.config, device_id, text))
                     controller.save_configuration()
-                    names_message = f"saved name for RX-{receiver.receiver_id:08X}"
+                    names_message = f"saved name for {prefix}-{device_id:08X}"
                 except (ValueError, curses.error, OSError) as exc:
                     names_message = f"name update failed: {exc}"
             continue
@@ -869,7 +1035,8 @@ def run_dashboard(stdscr, controller: DashboardController) -> None:
                     config_message = f"config selection failed: {exc}"
             continue
         if management:
-            ids = [0] + _online_receiver_ids(controller)
+            devices = _online_management_devices(controller)
+            ids = [0] + [device_id for _, device_id, _ in devices]
             if key in (curses.KEY_UP, ord("k")):
                 management_index = max(0, management_index - 1)
             elif key in (curses.KEY_DOWN, ord("j")):
@@ -878,55 +1045,68 @@ def run_dashboard(stdscr, controller: DashboardController) -> None:
                 enabled = key in (ord("o"), ord("O"))
                 targets = tuple(management_selected)
                 try:
-                    if 0 in targets:
-                        targets = controller.service.set_receiver_output(enabled, 0) if controller.service else ()
-                    else:
-                        for receiver_id in targets:
-                            if controller.service:
-                                controller.service.set_receiver_output(enabled, receiver_id)
-                    management_message = f"output {'on' if enabled else 'off'} requested for {len(targets)} receiver(s)"
-                    priority_alert_event = {"priority_id": "OUTPUT", "expected_receivers": set(targets),
-                                            "ack_receivers": set(targets), "retry_count": 0,
-                                            "management_complete": True, "terminal": True,
-                                            "terminal_reason": "management packet sent"}
+                    selected = devices if 0 in targets else [item for item in devices if item[1] in targets]
+                    selected = [item for item in selected
+                                if item[0] == "receiver" or
+                                controller.config.retransmitter_input_control_enabled]
+                    if not selected:
+                        raise RuntimeError("retransmitter input control is disabled in configuration")
+                    for kind, device_id, _ in selected:
+                        if controller.service:
+                            if kind == "receiver":
+                                controller.service.set_receiver_output(enabled, device_id)
+                            elif controller.config.retransmitter_input_control_enabled:
+                                controller.service.set_retransmitter_input(enabled, device_id)
+                    management_message = f"{'receiver output' if enabled else 'receiver output disabled'} / retransmitter input {'enabled' if enabled else 'disabled'} for {len(selected)} device(s)"
+                    management_targets = [(kind, device_id) for kind, device_id, _ in selected]
+                    priority_alert_event = {"priority_id": "OUTPUT", "expected_receivers": {device_id for _, device_id in management_targets},
+                                            "ack_receivers": set(), "retry_count": 0,
+                                            "management_targets": management_targets,
+                                            "management_operation": "output", "management_enabled": enabled,
+                                            "management_complete": False, "terminal": False}
                     priority_alert = True
                     priority_alert_manual = False
-                    priority_alert_close_at = time.monotonic() + 10.0
+                    priority_alert_close_at = 0.0
                     management = False
                 except (ValueError, RuntimeError) as exc:
                     management_action = "output"
                     management_message = str(exc)
             elif key == ord(" ") and ids:
-                receiver_id = ids[management_index]
-                if receiver_id == 0:
+                device_id = ids[management_index]
+                if device_id == 0:
                     management_selected = {0}
                 elif 0 in management_selected:
                     management_selected.clear()
-                    management_selected.add(receiver_id)
-                elif receiver_id in management_selected:
-                    management_selected.remove(receiver_id)
+                    management_selected.add(device_id)
+                elif device_id in management_selected:
+                    management_selected.remove(device_id)
                 else:
-                    management_selected.add(receiver_id)
+                    management_selected.add(device_id)
             elif key in (curses.KEY_ENTER, 10, 13) and management_selected:
                 if management_action == "output":
                     management_action = "output_state"
                 else:
                     try:
                         targets = tuple(management_selected)
-                        if 0 in targets:
-                            targets = controller.service.locate_receiver(0, 15) if controller.service else ()
-                        else:
-                            for receiver_id in targets:
-                                if controller.service:
-                                    controller.service.locate_receiver(receiver_id, 15)
-                        management_message = f"locate requested for {len(targets)} receiver(s); DMX interrupted for 15 seconds"
-                        priority_alert_event = {"priority_id": "LOCATE", "expected_receivers": set(targets),
-                                                "ack_receivers": set(targets), "retry_count": 0,
-                                                "management_complete": True, "terminal": True,
-                                                "terminal_reason": "management packet sent"}
+                        selected = devices if 0 in targets else [item for item in devices if item[1] in targets]
+                        for kind, device_id, _ in selected:
+                            if controller.service:
+                                if kind == "receiver":
+                                    controller.service.locate_receiver(device_id, 15)
+                                else:
+                                    controller.service.locate_retransmitter(device_id, 15)
+                        management_message = f"locate requested for {len(selected)} device(s); output/input may be interrupted for 15 seconds"
+                        management_targets = [(kind, device_id) for kind, device_id, _ in selected]
+                        priority_alert_event = {"priority_id": "LOCATE", "expected_receivers": {device_id for _, device_id in management_targets},
+                                                "ack_receivers": set(), "retry_count": 0,
+                                                "management_targets": management_targets,
+                                                "management_operation": "locate", "management_complete": False,
+                                                "terminal": False}
                         priority_alert = True
                         priority_alert_manual = False
-                        priority_alert_close_at = time.monotonic() + 10.0
+                        # Start auto-close only after all locate confirmations
+                        # arrive or the event becomes terminal.
+                        priority_alert_close_at = 0.0
                         management = False
                     except (ValueError, RuntimeError) as exc:
                         management_message = str(exc)
@@ -940,6 +1120,11 @@ def run_dashboard(stdscr, controller: DashboardController) -> None:
             manual = True
             manual_priority = manual_priority_locked(controller.config)
             manual_message = ""
+            continue
+        if key in (ord("n"), ord("N")) and not advanced and not setup and not manual:
+            names = True
+            names_index = 0
+            names_message = ""
             continue
         if manual:
             if key in (curses.KEY_UP, ord("k")):

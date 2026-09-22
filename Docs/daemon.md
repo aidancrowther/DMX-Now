@@ -20,8 +20,8 @@ is rejected at the service and transmitter boundaries. Telemetry, fail-safe,
 output, locate, and explicit priority/gate transactions remain available. Use
 `--bridge-mode` to override a management-only configuration for one invocation.
 
-The daemon clears the transmitter receiver cache on startup, reconnects a lost
-transmitter, rejects stale telemetry, and reapplies runtime receiver fail-safe
+The daemon clears the transmitter receiver and retransmitter caches on startup,
+reconnects a lost transmitter, rejects stale telemetry, and reapplies runtime receiver fail-safe
 configuration after startup, receiver discovery, transmitter reconnect, or
 receiver reboot.
 
@@ -76,11 +76,12 @@ Because raw DMX has no delimiter or length marker, the raw input stream must
 remain aligned to 512-byte universe boundaries; an extra or missing byte cannot
 be resynchronized automatically.
 
-The dashboard displays daemon health, input/pacer statistics, receiver link and
-fail-safe state, priority state, and events. Its setup editor includes fail-safe
-mode and timeout. The dashboard also displays the active daemon role; ordinary
-manual transmission is disabled in management-only mode while priority
-transmission remains available for locked-value and gate operations.
+The dashboard displays daemon health, input/pacer statistics, receiver and
+retransmitter link state, fail-safe state, priority state, and events. Its setup
+editor includes fail-safe mode and timeout. The dashboard also displays the
+active daemon role; ordinary manual transmission is disabled in management-only
+mode while priority transmission remains available for locked-value, gate, and
+retransmitter-control operations.
 
 In management-only mode, the manual universe view is populated from the latest
 complete universe observed by the management transmitter on the ESP-NOW channel.
@@ -88,6 +89,24 @@ The view is labeled best-effort and reports `LIVE`, `STALE`, or `UNAVAILABLE`
 with source, age, and sequence information. Observation is read-only and never
 feeds the DMX pacer. Before a retransmitter observation is available, the view
 uses the latest local priority universe as a fallback.
+
+Receiver and retransmitter records are kept in separate caches. Retransmitters are
+discovered only from valid retransmitter telemetry, not inferred from receiver
+Their panel reports a friendly name, stable hardware ID, always-enabled input
+state, physical-DMX freshness, learned slot count, wireless frame counters,
+locate state, control generation, and battery state. Battery is `UNKNOWN` unless
+the optional comparator is compiled in. Retransmitters are active-only:
+they are removed from the dashboard and control target set when fresh telemetry
+stops, rather than being retained as stale/offline inventory.
+
+When multiple retransmitters do not fit in the terminal, the dashboard rotates
+them in a presentation-only carousel. Press `n` to edit a receiver or
+retransmitter alias; aliases are stored under `[receiver_names]`, while the
+stable `RX-...` or `RT-...` identifier remains visible for targeting. Locate
+requests use the priority management path and are confirmed by subsequent
+telemetry, not merely by queueing. Retransmitter input enable/disable is not
+available in the production GPIO allocation because GPIO2 is reserved for
+locate indication.
 
 ## Dashboard hotkeys
 
@@ -165,6 +184,12 @@ existing behavior of sending the complete manual universe.
 
 Priority sends report the priority ID, expected receivers, acknowledged
 receivers, retry count, and gate-applied receivers when applicable.
+
+The priority status alert remains visible while a priority or control transaction
+is active and closes automatically ten seconds after completion. It includes ACK
+timing/status, expected and acknowledged receivers, retry count, and gate-applied
+receivers. Press `c` to cancel automatic close; `x`, `Esc`, or Enter closes it
+early.
 
 Channel gates apply by data origin. Ordinary serial, Art-Net, and retransmitter
 observations cannot overwrite `LOCKED` channels. Explicit management edits can

@@ -63,6 +63,16 @@ class ConfigTelemetryTests(unittest.TestCase):
             self.assertEqual(dict(loaded.receiver_names)[0x00DB07D7], "Front Truss")
             self.assertEqual(dict(loaded.receiver_names)[0x12345678], 'Stage "Left"')
 
+    def test_retransmitter_names_round_trip(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.toml"
+            config = load_config()
+            config = config.__class__(**{**config.__dict__,
+                "retransmitter_names": ((0x00FDA976, "FOH RTX"),)})
+            save_config(config, str(path))
+            loaded = load_config(str(path))
+            self.assertEqual(dict(loaded.retransmitter_names)[0x00FDA976], "FOH RTX")
+
     def test_channel_gate_lists_must_not_overlap(self):
         config = load_config()
         with self.assertRaises(ValueError):

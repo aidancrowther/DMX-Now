@@ -18,6 +18,8 @@ from wireless_dmx.receiver_diagnostic import parse_summary_line
 DEFAULT_SLOTS = (24, 25, 100, 235, 236, 237, 255, 256, 257, 471, 472, 473, 511, 512)
 TRANSITIONS = ((512, 24), (24, 512), (512, 236), (236, 512),
                (473, 471), (471, 473), (257, 255), (255, 257))
+RETRANSMITTER_TARGET_RATE_HZ = 10.0
+RETRANSMITTER_MIN_PROMOTION_RATE_HZ = 9.0
 
 
 def reset_receiver(port: serial.Serial) -> None:
@@ -131,7 +133,9 @@ def run_case(mega: serial.Serial, receiver: serial.Serial, slots: int,
         "has_rds1": rds_line is not None,
         "has_data": promotions > 0,
         "source_rate_ok": float(result.get("source_rate_hz", 0)) >= (39.5 if slots == 512 else 43.0),
-        "promotion_rate_ok": rate >= (18.0 if seconds >= 20 else 15.0),
+        # The standalone retransmitter is intentionally a 10 Hz source. The
+        # 20 Hz bridge target does not apply to this runner.
+        "promotion_rate_ok": rate >= RETRANSMITTER_MIN_PROMOTION_RATE_HZ,
         "matching_ok": matching >= int(promotions * 0.98),
         "corrupt_zero": int(rds.get("corrupt", 0)) == 0,
         "source_mismatches_zero": int(rds.get("source_mismatches", 0)) == 0,

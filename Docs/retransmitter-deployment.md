@@ -1,13 +1,19 @@
 # Physical DMX retransmitter deployment
 
 This guide describes deploying the standalone physical-DMX retransmitter with
-one or more Wireless DMX receivers. It covers both supported operating modes:
+one or more Wireless DMX receivers. It covers both supported operating modes and
+the verified production hardware state:
 
 1. **Standalone mode:** the retransmitter is the only normal-DMX authority and
    no management transmitter is required.
 2. **Monitored mode:** a separate management-only transmitter provides receiver
-   telemetry and control while the physical retransmitter continues to own
-   normal DMX.
+   and retransmitter telemetry/control while the physical retransmitter
+   continues to own normal DMX.
+
+The production retransmitter receives DMX continuously; GPIO2 is assigned to the
+locate indicator and is not used to enable or disable the DMX input. Locate was
+verified after the production reflashing work, and the subsequent DMX smoke test
+confirmed live retransmission.
 
 The production retransmitter target is 10 Hz. It supports complete and partial
 physical DMX universes from the DMXUART callback threshold (currently 24 slots)
@@ -47,11 +53,24 @@ Connect a receive-only RS-485 transceiver:
 DMX source RS-485 A/B -> retransmitter RS-485 receiver A/B
 RS-485 receiver RO    -> ESP8266 GPIO3 / UART0 RX
 RS-485 driver DE/RE   -> disabled
+ESP8266 GPIO2         -> locate indicator (`LED_BUILTIN`)
 ```
 
 The retransmitter must not drive the physical DMX line. Verify A/B polarity,
 signal reference, termination, and transceiver voltage levels before powering
 the system.
+
+Battery monitoring is optional and disabled by default for compatibility. Enable
+it with `--battery-monitor` or through `--menuconfig`; the default comparator
+polarity treats LOW as battery-low. Use `--battery-low-active-high` when the
+comparator output polarity is reversed. Disabled monitoring reports battery
+`UNKNOWN` in retransmitter telemetry; an enabled comparator reports `OK` or
+`LOW`.
+
+The retransmitter DMXUART instance passes `tx_pin = -1` and `rx_pin = GPIO3`.
+On ESP8266 this selects `SERIAL_RX_ONLY`, so UART0 TX/GPIO1 is not claimed by
+serial output and can safely be used by the comparator. Do not add serial logging
+or change the DMXUART TX pin while the comparator is connected.
 
 ### Receiver output
 
@@ -120,6 +139,14 @@ cd "/home/aidancrowther/Documents/Projects/Cline Testing" && \
   --port <RETRANSMITTER_PROGRAMMER_PORT>
 ```
 
+For the production image with battery monitoring enabled:
+
+```bash
+cd "/home/aidancrowther/Documents/Projects/Cline Testing" && \
+./Helpers/flash_retransmitter.sh --production --battery-monitor -f \
+  --port <RETRANSMITTER_PROGRAMMER_PORT>
+```
+
 With no extra options, the helper builds the production 10 Hz image with
 diagnostics and diagnostic broadcasts disabled. Do not add diagnostic defines
 to a production image. Diagnostic builds are lab-only and add an extra
@@ -138,7 +165,7 @@ cd "/home/aidancrowther/Documents/Projects/Cline Testing" && \
 ```
 
 The menu defaults are channel `1`, universe `1`, rate `10` Hz, TX drain timeout
-`100` ms, and TX overhead `27` ms. `--menuconfig` can be combined with `-f`
+`100` ms, TX overhead `27` ms, and battery monitoring disabled. `--menuconfig` can be combined with `-f`
 and `--port <RETRANSMITTER_PROGRAMMER_PORT>` when the resulting custom image
 is ready to flash.
 
@@ -185,6 +212,10 @@ transmitter is absent.
 No `/dev/ttyUSB0` management device, host daemon, or management transmitter is
 required for normal retransmission. The physical retransmitter owns the normal
 DMX authority and broadcasts the latest complete physical-DMX universe.
+
+The retransmitter's GPIO2 locate indicator can be exercised from the monitored
+management dashboard or management API, but it is not required for standalone
+DMX operation.
 
 ## Monitored deployment: management-only transmitter present
 

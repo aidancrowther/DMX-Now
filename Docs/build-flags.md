@@ -64,6 +64,18 @@ it does not make the image a normal-DMX source. The host polls at approximately
 4 Hz, so the feature is intended for operator feedback rather than precise
 monitoring.
 
+The transmitter helper also supports the Wemos D1 Mini/Pro target, which is useful
+for bench or enclosure builds that do not use an ESP-01:
+
+```bash
+./Helpers/flash_transmitter.sh --d1
+./Helpers/flash_transmitter.sh --d1 --lock-management-only -f --port <port>
+```
+
+The management-only image is the recommended image for a monitored standalone
+retransmitter. It may send management and priority traffic, but it cannot become
+the ordinary-DMX authority when statically locked.
+
 The integrated transmitter helper defaults to the normal bridge role. Select
 the optional management role with:
 
@@ -79,6 +91,9 @@ The re-transmitter owns UART0/GPIO3 for physical DMX input and must not call
 `Serial.begin()` or write diagnostics to that UART. The DMXUART experiment uses
 foreground-polled `DMXUART::read()`, sends only normal three-fragment DMX
 packets, and waits for its first complete physical universe before transmitting.
+It is constructed with no TX pin, which makes the ESP8266 implementation select
+`SERIAL_RX_ONLY`; UART0 RX/GPIO3 remains the DMX input and UART0 TX/GPIO1 remains
+available for the optional battery comparator.
 The retransmitter pauses DMX UART RX while it queues and drains one complete
 three-fragment wireless universe, then resumes RX before waiting the configured
 wireless interval. This intentionally permits physical-DMX frames to be lost
@@ -99,8 +114,14 @@ builds; use `--menuconfig` when selecting options interactively.
 Relevant definitions are
 `RETRANSMITTER_ESPNOW_CHANNEL`, `RETRANSMITTER_UNIVERSE_ID`,
 `RETRANSMITTER_WIRELESS_REFRESH_HZ`, `RETRANSMITTER_TX_DRAIN_TIMEOUT_MS`,
-`RETRANSMITTER_TX_OVERHEAD_MS`, `RETRANSMITTER_DIAGNOSTICS`, and
-`RETRANSMITTER_DIAGNOSTIC_BROADCAST`.
+`RETRANSMITTER_DIAGNOSTICS`, `RETRANSMITTER_DIAGNOSTIC_BROADCAST`, and
+`RETRANSMITTER_TELEMETRY_ONLY`.
+
+Battery-monitoring definitions are `RETRANSMITTER_BATTERY_MONITOR`,
+`RETRANSMITTER_BATTERY_PIN`, and `RETRANSMITTER_BATTERY_LOW_ACTIVE_LOW`.
+The helper provides `--battery-monitor`, `--no-battery-monitor`, and
+`--battery-low-active-high`; `--menuconfig` exposes battery monitoring and
+comparator polarity in addition to the timing/radio settings.
 The production retransmitter uses an absolute 10 Hz universe deadline. It waits
 for a fresh complete physical-DMX frame, sends when the deadline is due, and
 rebases one period forward after an overrun instead of compressing catch-up
@@ -115,8 +136,13 @@ The generic `--define DEFINE` option remains available for test-only or future
 compile definitions that are not part of the retransmitter's normal menu.
 
 With no extra flags, the retransmitter helper builds the production 10 Hz image
-with diagnostics and diagnostic broadcasts disabled. The `--menuconfig` rate
-default is also 10 Hz. The re-transmitter accepts valid physical DMX frames from
+with retransmitter telemetry enabled and diagnostics/diagnostic broadcasts
+disabled. `--production` explicitly selects this mode and is mutually exclusive
+with `--telemetry-only`. The telemetry-only image is a test variant: it disables
+physical-DMX input and normal fragment transmission while retaining the telemetry
+scheduler and management reporting. It must never be deployed as a normal
+retransmitter. The `--menuconfig` rate default is also 10 Hz. The retransmitter
+accepts valid physical DMX frames from
 the pinned library's
 minimum callback threshold through 512 slots and zero-fills channels after the
 received slot count through channel 512. The helper is:

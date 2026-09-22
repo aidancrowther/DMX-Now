@@ -6,8 +6,10 @@ import unittest
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
 from wireless_dmx.models import ReceiverLinkState, ReceiverTelemetry
+from wireless_dmx.models import RetransmitterTelemetry
 from wireless_dmx.models import PriorityAck
 from wireless_dmx.protocols import (MANAGEMENT_PRIORITY_ACKS, MANAGEMENT_RECEIVER_TELEMETRY,
+                                    MANAGEMENT_RETRANSMITTER_TELEMETRY,
                                     MANAGEMENT_OBSERVED_UNIVERSE, MANAGEMENT_SYNC, crc16_ccitt)
 from wireless_dmx.transmitter.management import (ACK_HEADER, ACK_RECORD, ManagementParser,
                                                  PART_HEADER, RECORD, get_priority_acks_request,
@@ -35,12 +37,42 @@ def make_part(sequence, index, count, records):
                                record.telemetry_sequence, {"hold": 0, "blackout": 1,
                                "disable_line": 2}[record.failsafe_mode],
                                int(record.failsafe_active), record.failsafe_timeout_seconds,
-                               record.failsafe_generation, record.failsafe_activations)
+                               record.failsafe_generation, record.failsafe_activations,
+                               int(record.output_override_active), int(record.output_enabled),
+                               int(record.locate_active), int(record.hard_gates_active),
+                               record.output_control_generation)
     body = bytes((1, MANAGEMENT_RECEIVER_TELEMETRY)) + struct.pack("<H", len(payload)) + payload
     return MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body))
 
 
 class ManagementTests(unittest.TestCase):
+    def test_retransmitter_telemetry_report_round_trip(self):
+        packet = struct.Struct("<HBBBI6sII5BH10IbI")
+        payload = packet.pack(
+            0x444D, 1, 12, 1, 0x12345678, bytes.fromhex("18fe34000001"),
+            100, 7, 1, 1, 255, 0, 0, 512, 12, 20, 2, 3, 4, 5, 6, 7, 8, 9,
+            -42, 50,
+        )
+        body = bytes((1, MANAGEMENT_RETRANSMITTER_TELEMETRY)) + struct.pack("<H", len(payload)) + payload
+        frame = MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body))
+        report = ManagementParser().feed(frame)[0]
+        self.assertEqual(report.telemetry.retransmitter_id, 0x12345678)
+        self.assertEqual(report.telemetry.mac_address, "18:fe:34:00:00:01")
+        self.assertEqual(report.telemetry.battery_state, "unknown")
+        self.assertTrue(report.telemetry.input_enabled)
+        self.assertEqual(report.telemetry.learned_input_slots, 512)
+        self.assertEqual(report.telemetry.transmitter_last_seen_ms, 50)
+
+    def test_retransmitter_telemetry_rejects_wrong_magic(self):
+        packet = struct.Struct("<HBBBI6sII5BH10IbI")
+        payload = packet.pack(
+            0x5844, 1, 12, 1, 0x12345678, bytes.fromhex("18fe34000001"),
+            100, 7, 1, 1, 255, 0, 0, 512, 12, 20, 2, 3, 4, 5, 6, 7, 8, 9,
+            -42, 50,
+        )
+        body = bytes((1, MANAGEMENT_RETRANSMITTER_TELEMETRY)) + struct.pack("<H", len(payload)) + payload
+        frame = MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body))
+        self.assertEqual(ManagementParser().feed(frame), [])
     def test_observed_universe_request_has_management_crc(self):
         request = get_observed_universe_request()
         self.assertEqual(request[:2], MANAGEMENT_SYNC)

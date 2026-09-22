@@ -11,12 +11,48 @@ from wireless_dmx.dashboard import (ADVANCED_COMMANDS, MAIN_COMMANDS, MANUAL_COM
                                     DashboardController, bar, build_parser, channel_gate_color,
                                     channel_gate_selected_color,
                                       manual_priority_locked, priority_feedback, receiver_display_segments,
-                                      rssi_quality, _read_line_blocking)
-from wireless_dmx.models import ChannelGate, DaemonConfig, DaemonMode, ReceiverLinkState, ReceiverTelemetry
+                                       retransmitter_display_headers, retransmitter_display_lines,
+                                       format_age_ms, rssi_quality, _read_line_blocking)
+from wireless_dmx.models import (ChannelGate, DaemonConfig, DaemonMode, ReceiverLinkState,
+                                 ReceiverTelemetry, RetransmitterTelemetry)
 from wireless_dmx.config import apply_args
 
 
 class DashboardTests(unittest.TestCase):
+    def test_format_age_switches_to_seconds_after_99999ms(self):
+        self.assertEqual(format_age_ms(99999), "99999ms")
+        self.assertEqual(format_age_ms(100000), "100.0s")
+        self.assertEqual(format_age_ms(0xFFFFFFFF), "never")
+
+    def test_retransmitter_display_exposes_input_and_wireless_counters(self):
+        retransmitter = RetransmitterTelemetry(
+            7, "18:fe:34:00:00:07", ReceiverLinkState.ONLINE, -42, 100, 8, 12,
+            True, True, "unknown", False, False, 512, 25, 1000, 2, 3, 4,
+            19, 1000, 1, 2, 0,
+        )
+        first = retransmitter_display_lines(retransmitter)
+        self.assertIn("-42dBm", first)
+        self.assertIn("12ms", first)
+        self.assertIn("512", first)
+        self.assertIn("RTX-00000007", first)
+        self.assertIn("1000", retransmitter_display_lines(retransmitter, view=1))
+        self.assertIn("19", retransmitter_display_lines(retransmitter, view=2))
+
+    def test_retransmitter_headers_align_with_both_data_lines(self):
+        retransmitter = RetransmitterTelemetry(
+            7, "18:fe:34:00:00:07", ReceiverLinkState.ONLINE, -42, 100, 8, 12,
+            True, True, "unknown", False, False, 512, 25, 1000, 2, 3, 4,
+            19, 1000, 1, 2, 0,
+        )
+        for view in range(3):
+            header = retransmitter_display_headers(view)
+            data = retransmitter_display_lines(retransmitter, view=view)
+            self.assertEqual(len(header), len(data))
+        for label in ("NAME/ID", "LINK", "RSSI", "REPORT AGE", "INPUT", "SIGNAL", "SLOTS", "BATTERY", "LOCATE"):
+            self.assertIn(label, retransmitter_display_headers(0))
+        for label in ("UPTIME", "TELEM SEQ", "INPUT AGE", "RX FRAMES", "SKIPPED", "BAD START", "BAD LENGTH"):
+            self.assertIn(label, retransmitter_display_headers(1))
+
     def test_settings_input_uses_blocking_read_mode(self):
         class FakeWindow:
             def __init__(self):
@@ -130,8 +166,18 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("-39dBm", rssi)
         self.assertIn("GOOD", rssi)
         self.assertNotIn("LOW", rssi)
-        self.assertTrue(counters.startswith("      6ms"))
+        self.assertIn("6ms", counters)
         self.assertIn("FS:hold/60s", counters)
+
+    def test_receiver_output_display_is_only_on_or_off(self):
+        receiver = ReceiverTelemetry(
+            7, "18:fe:34:00:00:07", ReceiverLinkState.ONLINE, False,
+            -39, -40, 1, 2, 3, 4, 0, 5, 6, 1, 1, 0,
+            "hold", False, 60, 0, 0, True, False, False, True, 1,
+        )
+        line = dashboard_module.receiver_table_line(receiver)
+        self.assertIn("OUTPUT:OFF", line)
+        self.assertNotIn("OVERRIDE", line)
 
     def test_receiver_display_includes_friendly_name_and_id(self):
         receiver = ReceiverTelemetry(
@@ -159,8 +205,9 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("[u]", MAIN_COMMANDS)
         self.assertIn("MANUAL DMX", MAIN_COMMANDS)
         self.assertIn("[n] names", MAIN_COMMANDS)
-        self.assertIn("[o] output", MAIN_COMMANDS)
+        self.assertIn("[o] RX/TX control", MAIN_COMMANDS)
         self.assertIn("[i] locate", MAIN_COMMANDS)
+        self.assertIn("DMX", MAIN_COMMANDS)
         self.assertIn("[p] priority", MAIN_COMMANDS)
         self.assertIn("[a]", MANUAL_COMMANDS)
         self.assertIn("[z] reset zero", MANUAL_COMMANDS)
@@ -207,6 +254,12 @@ class DashboardTests(unittest.TestCase):
             })
             self.assertIn(f"PRIORITY {action} COMPLETE", text)
             self.assertNotIn("FAILED", text)
+
+    def test_pending_priority_feedback_does_not_report_completion(self):
+        event = {"priority_id": "OUTPUT", "expected_receivers": {7, 9},
+                 "ack_receivers": {7}, "management_complete": False,
+                 "terminal": False, "retry_count": 0}
+        self.assertIn("WAITING", priority_feedback(event))
 
 
 if __name__ == "__main__":

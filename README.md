@@ -94,6 +94,17 @@ Physical DMX source -> receive-only RS-485 -> ESP8266 retransmitter
 See [`Docs/retransmitter-deployment.md`](Docs/retransmitter-deployment.md) for
 wiring, production flashing, radio configuration, recovery, and validation.
 
+The retransmitter's production GPIO allocation keeps GPIO2 assigned to the
+locate indicator (`LED_BUILTIN`). DMX input is receive-only and is not remotely
+gated through GPIO2. Optional battery monitoring uses GPIO1 while DMXUART runs
+in `SERIAL_RX_ONLY` mode. The production image with battery monitoring enabled
+is built and flashed with:
+
+```bash
+./Helpers/flash_retransmitter.sh --production --battery-monitor -f \
+  --port <RETRANSMITTER_PROGRAMMER_PORT>
+```
+
 ### 4. Monitored retransmitter deployment
 
 The retransmitter can be paired with a separate locked management-only ESP8266
@@ -256,6 +267,12 @@ or receiver define enabled in a production image.
 For physical retransmitter wiring, deployment roles, optional management-only
 monitoring, and production/test image recovery, see
 [`Docs/retransmitter-deployment.md`](Docs/retransmitter-deployment.md).
+
+The reflashed production retransmitter was smoke-tested with a live Mega DMX
+source and diagnostic receiver: 356 valid normal-DMX records were observed,
+sequences advanced from 12 through 370, retransmitter input frames increased
+from 0 to 253, wireless frames increased from 0 to 252, and wireless send
+failures remained at 0.
 
 ## Host daemon
 

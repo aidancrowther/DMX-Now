@@ -36,6 +36,7 @@ EDITABLE_FIELDS = (
     ("Priority max consecutive events", "priority_max_consecutive_events", int),
     ("Receiver fail-safe mode", "receiver_failsafe_mode", str),
     ("Receiver fail-safe timeout seconds", "receiver_failsafe_timeout_seconds", int),
+    ("Retransmitter input control enabled", "retransmitter_input_control_enabled", bool),
 )
 
 
@@ -74,5 +75,21 @@ def set_receiver_name(config: DaemonConfig, receiver_id: int, name: str) -> Daem
     else:
         names.pop(receiver_id, None)
     result = replace(config, receiver_names=tuple(sorted(names.items())))
+    result.validate()
+    return result
+
+
+def retransmitter_name(config: DaemonConfig, retransmitter_id: int) -> str:
+    return dict(config.retransmitter_names).get(retransmitter_id, "")
+
+
+def set_retransmitter_name(config: DaemonConfig, retransmitter_id: int, name: str) -> DaemonConfig:
+    names = dict(config.retransmitter_names)
+    cleaned = name.strip()
+    if cleaned:
+        names[retransmitter_id] = cleaned
+    else:
+        names.pop(retransmitter_id, None)
+    result = replace(config, retransmitter_names=tuple(sorted(names.items())))
     result.validate()
     return result

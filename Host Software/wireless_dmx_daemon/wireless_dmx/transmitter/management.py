@@ -5,7 +5,7 @@ from __future__ import annotations
 import struct
 from dataclasses import dataclass
 
-from ..models import PriorityAck, ReceiverLinkState, ReceiverTelemetry
+from ..models import PriorityAck, ReceiverLinkState, ReceiverTelemetry, RetransmitterTelemetry
 from ..protocols import (
     MANAGEMENT_GET_RECEIVER_TELEMETRY, MANAGEMENT_PROTO_VERSION,
     MANAGEMENT_MARK_NEXT_PRIORITY,
@@ -16,12 +16,13 @@ from ..protocols import (
     MANAGEMENT_SET_TRANSMITTER_MODE, MANAGEMENT_TRANSMITTER_MODE,
     MANAGEMENT_GET_TRANSMITTER_MODE,
     MANAGEMENT_GET_OBSERVED_UNIVERSE, MANAGEMENT_OBSERVED_UNIVERSE,
+    MANAGEMENT_RETRANSMITTER_TELEMETRY, MANAGEMENT_RETRANSMITTER_CONTROL,
     MANAGEMENT_RECEIVER_TELEMETRY, MANAGEMENT_SYNC, ProtocolError, crc16_ccitt,
 )
 from ..protocols import DMX_GATE_MASK_SIZE
 
 PART_HEADER = struct.Struct("<BBBBI")
-RECORD = struct.Struct("<I6sBBbb7I HBBIBB HII".replace(" ", ""))
+RECORD = struct.Struct("<I6sBBbb7I HBBIBB HII BBBBI".replace(" ", ""))
 ACK_HEADER = struct.Struct("<BBIIIII")
 ACK_RECORD = struct.Struct("<I I I BBBb I H".replace(" ", ""))
 
@@ -71,6 +72,11 @@ class ObservedUniversePart:
     data: bytes
 
 
+@dataclass(frozen=True)
+class RetransmitterTelemetryReport:
+    telemetry: RetransmitterTelemetry
+
+
 def get_telemetry_request() -> bytes:
     body = bytes((MANAGEMENT_PROTO_VERSION, MANAGEMENT_GET_RECEIVER_TELEMETRY, 0, 0))
     return MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body))
@@ -101,6 +107,22 @@ def get_transmitter_mode_request() -> bytes:
 
 def get_observed_universe_request() -> bytes:
     body = bytes((MANAGEMENT_PROTO_VERSION, MANAGEMENT_GET_OBSERVED_UNIVERSE, 0, 0))
+    return MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body))
+
+
+def set_retransmitter_input_request(target_id: int, enabled: bool, generation: int) -> bytes:
+    payload = struct.pack("<IBI", target_id & 0xFFFFFFFF, int(enabled), generation & 0xFFFFFFFF)
+    body = bytes((MANAGEMENT_PROTO_VERSION, MANAGEMENT_RETRANSMITTER_CONTROL)) + struct.pack("<H", len(payload)) + payload
+    return MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body))
+
+
+def locate_retransmitter_request(target_id: int, duration_seconds: int = 15,
+                                 generation: int = 0) -> bytes:
+    if not 1 <= duration_seconds <= 15:
+        raise ValueError("locate duration must be between 1 and 15 seconds")
+    payload = struct.pack("<IHI", target_id & 0xFFFFFFFF, duration_seconds,
+                          generation & 0xFFFFFFFF)
+    body = bytes((MANAGEMENT_PROTO_VERSION, MANAGEMENT_RETRANSMITTER_CONTROL)) + struct.pack("<H", len(payload)) + payload
     return MANAGEMENT_SYNC + body + struct.pack("<H", crc16_ccitt(body))
 
 
@@ -191,6 +213,32 @@ def parse_management_frame(frame: bytes):
         if version != 1 or count == 0 or index >= count or offset + len(data) > 512:
             raise ProtocolError("invalid observed universe part")
         return ObservedUniversePart(index, count, sequence, age_ms, offset, source_mac, data)
+    if opcode == MANAGEMENT_RETRANSMITTER_TELEMETRY:
+        # The transmitter forwards the complete packed
+        # RetransmitterTelemetryPacket, including its DMX protocol header,
+        # followed by the transmitter RSSI and cache age.  Keep the header in
+        # this layout; otherwise valid firmware reports are silently rejected
+        # by the length check below.
+        record = struct.Struct("<HBBBI6sII5BH10IbI")
+        if length != record.size:
+            raise ProtocolError("invalid retransmitter telemetry report")
+        f = record.unpack_from(frame, 6)
+        if f[0] != 0x444D or f[1] != 1 or f[2] != 12 or f[3] != 1:
+            raise ProtocolError("invalid retransmitter telemetry packet")
+        battery = {0: "ok", 1: "low", 255: "unknown"}.get(f[10], "unknown")
+        telemetry = RetransmitterTelemetry(
+            retransmitter_id=f[4], mac_address=f[5].hex(":"),
+            link_state=ReceiverLinkState.ONLINE, transmitter_rssi=f[24],
+            uptime_seconds=f[6], telemetry_sequence=f[7], transmitter_last_seen_ms=f[25], input_enabled=bool(f[8]),
+            input_signal_active=bool(f[9]), battery_state=battery,
+            locate_active=bool(f[11]), input_hardware_control_available=bool(f[12]),
+            learned_input_slots=f[13], time_since_last_input_ms=f[14],
+            input_frames_received=f[15], input_frames_skipped=f[16],
+            invalid_start_codes=f[17], invalid_lengths=f[18],
+            wireless_frame_sequence=f[19], wireless_frames_sent=f[20],
+            wireless_send_failures=f[21], missed_deadlines=f[22],
+            control_generation=f[23])
+        return RetransmitterTelemetryReport(telemetry)
     if opcode != MANAGEMENT_RECEIVER_TELEMETRY:
         raise ProtocolError("unexpected management response")
     if length < PART_HEADER.size:
@@ -217,6 +265,9 @@ def parse_management_frame(frame: bytes):
             telemetry_sequence=f[16], failsafe_mode={0: "hold", 1: "blackout", 2: "disable_line"}.get(f[17], "hold"),
             failsafe_active=bool(f[18]), failsafe_timeout_seconds=f[19],
             failsafe_generation=f[20], failsafe_activations=f[21],
+            output_override_active=bool(f[22]), output_enabled=bool(f[23]),
+            locate_active=bool(f[24]), hard_gates_active=bool(f[25]),
+            output_control_generation=f[26],
         ))
     return TelemetryReportPart(report_version, index, count, sequence, tuple(records))
 

@@ -32,9 +32,37 @@ management-only mode. The management device is optional and must not become a
 competing normal-DMX authority. The management-only image also provides an
 optional best-effort observed-universe display by listening to retransmitter
 fragments and exporting complete snapshots over its host UART. This display is
-not yet a substitute for dedicated Firmware/Receiver/DMX measurement and should be
-validated separately for radio and UART loss behavior.
+not a substitute for dedicated Firmware/Receiver/DMX measurement.
 
+The production retransmitter telemetry/control implementation and extended
+validation were completed on the `feature/retransmitter-telemetry-control`
+branch (commit `e716a05`). Production operation was accepted at approximately
+10 Hz with valid reconstructed content, zero post-sync CRC errors, source
+mismatches, sequence backtracks, or wireless send failures. Boundary, transition,
+and long-soak runs completed with healthy queues and balanced fragments. The
+extended matrix recorded 25/27 passing cases; the two failures were Mega
+source-result/reporting checks, not retransmission-integrity failures. Treat
+those harness results as reporting follow-up if a fully green extended report is
+required.
+
+
+### Post-reflash locate and DMX smoke evidence
+
+The retransmitter was subsequently restored to the pre-input-gating GPIO
+allocation: GPIO2 is the locate indicator, while DMX input remains continuously
+available. Locate functionality was verified after flashing. A follow-up 30-second
+production smoke test then used the Mega source on `/dev/ttyUSB2`, the diagnostic
+receiver on `/dev/ttyUSB1` at 460800 baud, and the management transmitter on
+`/dev/ttyUSB0`.
+
+The diagnostic receiver captured 356 valid normal-DMX records with zero CRC or
+unknown-record errors. Sequences advanced from 12 through 370 and all records
+identified source MAC `cc:50:e3:fd:a9:76`. Retransmitter telemetry increased
+input frames from 0 to 253 and wireless frames from 0 to 252, while wireless
+send failures remained 0. This confirms physical DMX reception and wireless
+retransmission after the locate restoration. Battery-monitor support is available
+in production builds through `--battery-monitor`; the smoke test did not assert a
+battery level.
 For wiring, image roles, flash procedures, port safety, deployment, and both
 standalone and monitored deployment procedures, see
 [`retransmitter-deployment.md`](retransmitter-deployment.md).
