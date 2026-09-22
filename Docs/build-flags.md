@@ -117,21 +117,11 @@ Relevant definitions are
 `RETRANSMITTER_DIAGNOSTICS`, `RETRANSMITTER_DIAGNOSTIC_BROADCAST`, and
 `RETRANSMITTER_TELEMETRY_ONLY`.
 
-Hardware-control definitions are:
-
-| Definition | Default | Purpose |
-|---|---:|---|
-| `RETRANSMITTER_DMX_INPUT_ENABLE_PIN` | `-1` | GPIO driving the 2N2222 receiver `/RE` control. Set to `2` to explicitly enable the installed hardware path. |
-| `RETRANSMITTER_DMX_INPUT_ENABLE_ACTIVE_HIGH` | `0` | GPIO polarity for logical input enabled. The installed 2N2222 circuit is active-low: GPIO2 `LOW` enables the receiver and `HIGH` disables it. |
-| `RETRANSMITTER_BATTERY_MONITOR` | `0` | Enables the GPIO1 comparator input and reports `ok`/`low` telemetry. Disabled builds report `UNKNOWN`. |
-| `RETRANSMITTER_BATTERY_PIN` | `1` | Comparator input pin; GPIO1 is available because DMXUART uses `SERIAL_RX_ONLY`. |
-| `RETRANSMITTER_BATTERY_LOW_ACTIVE_LOW` | `1` | Comparator polarity. Set to `0` when HIGH means battery-low. |
-
-The helper provides opt-in `--receiver-control`, `--no-receiver-control`,
-`--battery-monitor`, `--no-battery-monitor`, and
-`--battery-low-active-high`. `--menuconfig` exposes receiver-control enablement,
-battery monitoring and comparator polarity in addition to the timing/radio
-settings. The menu defaults receiver `/RE` control to disabled.
+Battery-monitoring definitions are `RETRANSMITTER_BATTERY_MONITOR`,
+`RETRANSMITTER_BATTERY_PIN`, and `RETRANSMITTER_BATTERY_LOW_ACTIVE_LOW`.
+The helper provides `--battery-monitor`, `--no-battery-monitor`, and
+`--battery-low-active-high`; `--menuconfig` exposes battery monitoring and
+comparator polarity in addition to the timing/radio settings.
 The production retransmitter uses an absolute 10 Hz universe deadline. It waits
 for a fresh complete physical-DMX frame, sends when the deadline is due, and
 rebases one period forward after an overrun instead of compressing catch-up

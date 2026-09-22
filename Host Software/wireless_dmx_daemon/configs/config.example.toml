@@ -45,10 +45,6 @@ locked = []
 mode = "hold"
 timeout_seconds = 60
 
-[retransmitter_control]
-# Input enable/disable and retransmitter locate packet generation are opt-in.
-input_enabled = false
-
 [artnet]
 enabled = true
 bind_host = "0.0.0.0"

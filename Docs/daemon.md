@@ -92,23 +92,21 @@ uses the latest local priority universe as a fallback.
 
 Receiver and retransmitter records are kept in separate caches. Retransmitters are
 discovered only from valid retransmitter telemetry, not inferred from receiver
-records. Their panel reports a friendly name, stable hardware ID, input
-enabled/effective state, physical-DMX freshness, learned slot count, wireless
-frame counters, locate state, control generation, and battery as `UNKNOWN` until
-the retransmitter power hardware is validated. Retransmitters are active-only:
+Their panel reports a friendly name, stable hardware ID, always-enabled input
+state, physical-DMX freshness, learned slot count, wireless frame counters,
+locate state, control generation, and battery state. Battery is `UNKNOWN` unless
+the optional comparator is compiled in. Retransmitters are active-only:
 they are removed from the dashboard and control target set when fresh telemetry
 stops, rather than being retained as stale/offline inventory.
 
 When multiple retransmitters do not fit in the terminal, the dashboard rotates
 them in a presentation-only carousel. Press `n` to edit a receiver or
 retransmitter alias; aliases are stored under `[receiver_names]`, while the
-stable `RX-...` or `RT-...` identifier remains visible for targeting.
-Retransmitter input enable/disable remains implemented through the priority
-management path, but is disabled by default in the host configuration. Set
-`[retransmitter_control] input_enabled = true` only when the external `/RE`
-hardware is intentionally deployed. Retransmitter locate remains available
-independently. When input control is enabled, requests are confirmed by
-subsequent telemetry/control generation, not merely by queueing.
+stable `RX-...` or `RT-...` identifier remains visible for targeting. Locate
+requests use the priority management path and are confirmed by subsequent
+telemetry, not merely by queueing. Retransmitter input enable/disable is not
+available in the production GPIO allocation because GPIO2 is reserved for
+locate indication.
 
 ## Dashboard hotkeys
 

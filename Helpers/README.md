@@ -16,9 +16,11 @@ Helpers compile by default. Add `-f --port <device>` to flash a selected board.
 The transmitter helper supports `--management-only`, `--lock-management-only`,
 `--lock-bridge`, and `--d1`. The retransmitter helper supports `--production`,
 `--telemetry-only`, `--d1`, channel, universe, rate, menu configuration, and extra
-compiler definitions. Production retransmitter builds include telemetry; the
-telemetry-only option is for scheduler/control testing and disables DMX input and
-normal retransmission.
+compiler definitions. It also supports optional battery monitoring with
+`--battery-monitor` and `--battery-low-active-high`. Production retransmitter
+builds include telemetry; the telemetry-only option is for scheduler/control
+testing and disables DMX input and normal retransmission. GPIO2 remains the
+retransmitter locate indicator; there is no production GPIO2 DMX input gate.
 
 ## Bench and diagnostic sketches
 

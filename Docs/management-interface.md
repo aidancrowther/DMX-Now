@@ -33,7 +33,7 @@ recovers by searching for the next sync sequence after malformed input.
 | `0x08` | Set transmitter mode | one byte: `0` bridge or `1` management-only | Changes the runtime transmitter role unless the firmware was statically locked. Response `0x88` reports accepted/rejected status and active mode. |
 | `0x09` | Get transmitter mode | empty | Queries the current runtime role without changing it. Response `0x88` reports the active mode. |
 | `0x0A` | Get observed universe | empty | Returns three CRC-protected `0x8A` parts containing the latest complete normal-DMX observation or the transmitter's local fallback. |
-| `0x0B` | Retransmitter control | target ID, enabled or locate operation, generation | Priority-queued input-control or locate packet; state is confirmed by retransmitter telemetry. |
+| `0x0B` | Retransmitter locate | target ID, duration, generation | Priority-queued locate packet; locate state is confirmed by retransmitter telemetry. Production retransmitters keep DMX input enabled and use GPIO2 for the locate indicator. |
 
 The Python codec is in:
 
@@ -136,22 +136,14 @@ Retransmitters are reported only while their last telemetry is within the active
 offline threshold; an empty report is not a discoverable retransmitter.
 
 The fields include source identity, telemetry sequence, physical-DMX freshness,
-learned input slot count, input enabled/effective state, locate state, wireless
+learned input slot count, always-enabled input state, locate state, wireless
 frames sent, wireless send failures, control generation, and battery. Battery is
-currently `UNKNOWN` until power sensing is validated. Production retransmitters
-operate at approximately 10 Hz while retaining the normal three-fragment DMX
-cadence. A telemetry-only firmware variant exists for scheduler testing and does
-not transmit DMX.
-
-Input enable/disable controls use the priority management queue only when the
-host-side retransmitter input-control feature is explicitly enabled. Input
-control is disabled by default; the codec, service, and firmware packet pathways
-remain available for future opt-in deployment. Retransmitter locate remains
-available independently through the same management interface. The
-retransmitter finishes an in-flight burst before disabling input and requires a
-fresh physical-DMX frame after re-enable, preventing stale-universe reuse.
-Telemetry reports the resulting state and control generation; priority ACK
-capture remains available for the associated transaction.
+`UNKNOWN` for builds without the optional comparator and reports its monitored
+state when battery support is compiled in. Production retransmitters operate at
+approximately 10 Hz while retaining the normal three-fragment DMX cadence. A
+telemetry-only firmware variant exists for scheduler testing and does not
+transmit DMX. GPIO2 is the retransmitter locate output; production firmware does
+not use it to gate DMX input.
 
 ## Fail-safe configuration flow
 

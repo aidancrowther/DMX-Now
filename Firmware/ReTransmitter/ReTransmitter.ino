@@ -44,17 +44,8 @@
 #ifndef RETRANSMITTER_DMX_SLOT_STABILITY_FRAMES
 #define RETRANSMITTER_DMX_SLOT_STABILITY_FRAMES 3
 #endif
-#ifndef RETRANSMITTER_DMX_INPUT_ENABLE_PIN
-/* GPIO2 drives the 2N2222 that pulls the receive transceiver /RE low. */
-#define RETRANSMITTER_DMX_INPUT_ENABLE_PIN -1
-#endif
-#ifndef RETRANSMITTER_DMX_INPUT_ENABLE_ACTIVE_HIGH
-/* GPIO2 LOW keeps the 2N2222 off, so the MAX3485 /RE pull-up enables RX. */
-#define RETRANSMITTER_DMX_INPUT_ENABLE_ACTIVE_HIGH 0
-#endif
 #ifndef RETRANSMITTER_LOCATE_PIN
-/* GPIO2 is reserved for the external receiver /RE control transistor. */
-#define RETRANSMITTER_LOCATE_PIN -1
+#define RETRANSMITTER_LOCATE_PIN LED_BUILTIN
 #endif
 #ifndef RETRANSMITTER_LOCATE_ACTIVE_LOW
 #define RETRANSMITTER_LOCATE_ACTIVE_LOW 1
@@ -106,8 +97,6 @@ static uint32_t g_frameSequence = 0;
  * completed. This matters when a 236-slot source changes to 512 slots: the
  * old universe is intentionally zero-filled after slot 236. */
 static bool freshUniverseAvailable = false;
-static bool inputRequestedEnabled = true;
-static uint32_t inputControlGeneration = 0;
 static unsigned long lastInputFrameMs = 0;
 static uint32_t wirelessFramesSent = 0;
 static uint32_t wirelessSendFailures = 0;
@@ -116,7 +105,6 @@ static uint32_t telemetrySequence = 0;
 static volatile bool telemetryPending = false;
 static volatile bool telemetryInFlight = false;
 static bool locateActive = false;
-static bool locateRestoreInputEnabled = true;
 static unsigned long locateEndMs = 0;
 static unsigned long locateNextPulseMs = 0;
 static bool locatePulse = false;
@@ -170,23 +158,12 @@ static constexpr unsigned long TX_INTERVAL_MS =
 static constexpr unsigned long FRAME_PERIOD_MS =
     1000UL / RETRANSMITTER_WIRELESS_REFRESH_HZ;
 static bool dmxRxPaused = false;
-static bool administrativeInputPause = false;
-
 struct PendingRetransmitterControl {
     uint8_t data[sizeof(RetransmitterLocatePacket)];
     uint8_t len;
 };
 static PendingRetransmitterControl pendingControl;
 static volatile bool controlPending = false;
-
-static void setInputEnablePin(bool enabled) {
-#if RETRANSMITTER_DMX_INPUT_ENABLE_PIN >= 0
-    digitalWrite(RETRANSMITTER_DMX_INPUT_ENABLE_PIN,
-                 enabled == (RETRANSMITTER_DMX_INPUT_ENABLE_ACTIVE_HIGH != 0) ? HIGH : LOW);
-#else
-    (void)enabled;
-#endif
-}
 
 static uint8_t readBatteryState(void) {
 #if RETRANSMITTER_BATTERY_MONITOR
@@ -207,18 +184,12 @@ static void scheduleRetransmitterTelemetry(unsigned long now, bool initial) {
 
 static void serviceLocate(void) {
     if (!locateActive) return;
-#if RETRANSMITTER_LOCATE_PIN < 0
-    locateActive = false;
-    return;
-#else
     const unsigned long now = millis();
     if ((long)(now - locateEndMs) >= 0) {
         locateActive = false;
         digitalWrite(RETRANSMITTER_LOCATE_PIN,
                      RETRANSMITTER_LOCATE_ACTIVE_LOW ? HIGH : LOW);
-        setInputEnablePin(inputRequestedEnabled);
-        administrativeInputPause = !locateRestoreInputEnabled;
-        if (locateRestoreInputEnabled && dmxInput) {
+        if (dmxInput) {
             dmxInput->resumeRx();
             captureRequested = true;
             freshUniverseAvailable = false;
@@ -232,7 +203,6 @@ static void serviceLocate(void) {
                      on == (RETRANSMITTER_LOCATE_ACTIVE_LOW != 0) ? LOW : HIGH);
         locateNextPulseMs = now + 500UL;
     }
-#endif
 }
 
 static void processRetransmitterControl(void) {
@@ -244,55 +214,21 @@ static void processRetransmitterControl(void) {
     len = pendingControl.len;
     controlPending = false;
     interrupts();
-    if (len == sizeof(RetransmitterInputControlPacket)) {
-        RetransmitterInputControlPacket packet;
-        memcpy(&packet, data, sizeof(packet));
-        if (packet.magic == DMX_PACKET_MAGIC && packet.protocolVersion == DMX_PROTO_VERSION &&
-            packet.packetType == RETRANSMITTER_INPUT_CONTROL_PACKET_TYPE &&
-            packet.universeId == RETRANSMITTER_UNIVERSE_ID &&
-            (packet.targetRetransmitterId == 0U || packet.targetRetransmitterId == ESP.getChipId()) &&
-            packet.generation >= inputControlGeneration) {
-            inputControlGeneration = packet.generation;
-            inputRequestedEnabled = packet.enabled != 0U;
-            setInputEnablePin(inputRequestedEnabled);
-            if (!inputRequestedEnabled) {
-                captureRequested = false;
-                freshUniverseAvailable = false;
-                administrativeInputPause = true;
-                if (dmxInput && !dmxRxPaused) dmxInput->pauseRx();
-            } else if (dmxInput && administrativeInputPause) {
-                dmxInput->resumeRx();
-                administrativeInputPause = false;
-                captureRequested = true;
-                freshUniverseAvailable = false;
-            }
-        }
-    } else if (len == sizeof(RetransmitterLocatePacket)) {
+    if (len == sizeof(RetransmitterLocatePacket)) {
         RetransmitterLocatePacket packet;
         memcpy(&packet, data, sizeof(packet));
         if (packet.magic == DMX_PACKET_MAGIC && packet.protocolVersion == DMX_PROTO_VERSION &&
             packet.packetType == RETRANSMITTER_LOCATE_PACKET_TYPE &&
             packet.universeId == RETRANSMITTER_UNIVERSE_ID &&
             (packet.targetRetransmitterId == 0U || packet.targetRetransmitterId == ESP.getChipId()) &&
-            packet.durationSeconds >= 1U && packet.durationSeconds <= 15U &&
-            packet.generation >= inputControlGeneration) {
-#if RETRANSMITTER_LOCATE_PIN < 0
-            /* GPIO2 is reserved for receiver /RE control on this hardware.
-             * Do not pause DMX or alter input state when no locate output exists. */
-            return;
-#else
-            inputControlGeneration = packet.generation;
+            packet.durationSeconds >= 1U && packet.durationSeconds <= 15U) {
             locateActive = true;
-            locateRestoreInputEnabled = inputRequestedEnabled;
             locateEndMs = millis() + (unsigned long)packet.durationSeconds * 1000UL;
             locateNextPulseMs = millis();
             locatePulse = false;
             captureRequested = false;
             freshUniverseAvailable = false;
-            administrativeInputPause = true;
             if (dmxInput && !dmxRxPaused) dmxInput->pauseRx();
-            setInputEnablePin(false);
-#endif
         }
     }
 }
@@ -310,11 +246,11 @@ static void transmitRetransmitterTelemetry(void) {
     WiFi.macAddress(packet.macAddress);
     packet.uptimeSeconds = millis() / 1000UL;
     packet.telemetrySequence = telemetrySequence++;
-    packet.inputEnabled = inputRequestedEnabled ? 1U : 0U;
+    packet.inputEnabled = 1U;
     packet.inputSignalActive = lastInputFrameMs && millis() - lastInputFrameMs <= 1500UL;
     packet.batteryState = readBatteryState();
     packet.locateActive = locateActive ? 1U : 0U;
-    packet.inputHardwareControlAvailable = RETRANSMITTER_DMX_INPUT_ENABLE_PIN >= 0 ? 1U : 0U;
+    packet.inputHardwareControlAvailable = 0U;
     packet.learnedInputSlots = learnedInputSlots;
     packet.timeSinceLastInputMs = lastInputFrameMs ? millis() - lastInputFrameMs : 0xFFFFFFFFUL;
     packet.inputFramesReceived = inputFramesReceived;
@@ -325,7 +261,7 @@ static void transmitRetransmitterTelemetry(void) {
     packet.wirelessFramesSent = wirelessFramesSent;
     packet.wirelessSendFailures = wirelessSendFailures;
     packet.missedDeadlines = txMissedDeadlines;
-    packet.controlGeneration = inputControlGeneration;
+    packet.controlGeneration = 0U;
     if (quickEspNow.sendBcast(reinterpret_cast<const uint8_t*>(&packet), sizeof(packet)) == COMMS_SEND_OK) {
         telemetryInFlight = true;
         scheduleRetransmitterTelemetry(millis(), false);
@@ -448,17 +384,11 @@ void setup(void) {
         RETRANSMITTER_DMX_UART, dmxReadBuffer, -1, -1,
         RETRANSMITTER_DMX_RX_PIN, RETRANSMITTER_DMX_INVERT, false);
     dmxInput = &input;
-#if RETRANSMITTER_DMX_INPUT_ENABLE_PIN >= 0
-    pinMode(RETRANSMITTER_DMX_INPUT_ENABLE_PIN, OUTPUT);
-#endif
 #if RETRANSMITTER_BATTERY_MONITOR
     pinMode(RETRANSMITTER_BATTERY_PIN, INPUT);
 #endif
-#if RETRANSMITTER_LOCATE_PIN >= 0
     pinMode(RETRANSMITTER_LOCATE_PIN, OUTPUT);
     digitalWrite(RETRANSMITTER_LOCATE_PIN, RETRANSMITTER_LOCATE_ACTIVE_LOW ? HIGH : LOW);
-#endif
-    setInputEnablePin(true);
     WiFi.mode(WIFI_STA);
     WiFi.disconnect(false);
     /* Use asynchronous QuickESPNow. Fragment serialization is enforced by
@@ -477,7 +407,7 @@ void setup(void) {
         }
     });
     quickEspNow.onDataRcvd([](uint8_t*, uint8_t* data, uint8_t len, signed int, bool) {
-        if (len == sizeof(RetransmitterInputControlPacket) || len == sizeof(RetransmitterLocatePacket)) {
+        if (len == sizeof(RetransmitterLocatePacket)) {
             noInterrupts();
             memcpy(pendingControl.data, data, len);
             pendingControl.len = len;
@@ -502,7 +432,7 @@ void loop(void) {
 #if RETRANSMITTER_TELEMETRY_ONLY
     return;
 #else
-    if (!inputRequestedEnabled || locateActive || administrativeInputPause) return;
+    if (locateActive) return;
     pollDmxInput();
 #if RETRANSMITTER_DIAGNOSTICS && RETRANSMITTER_DIAGNOSTIC_BROADCAST
     if (txState == TX_IDLE &&

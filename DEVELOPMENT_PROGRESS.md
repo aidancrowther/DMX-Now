@@ -1345,22 +1345,22 @@ Telemetry is
 always abandoned in favor of physical-DMX capture, normal wireless fragments,
 or priority/control traffic; it must never create a queue or a catch-up burst.
 
-The initial battery field is explicitly `UNKNOWN` until the retransmitter power
-hardware is validated. Retransmitter telemetry reports input enabled/effective
+The battery field reports `UNKNOWN` for builds without the optional comparator and
+reports the comparator state for production builds compiled with
+`--battery-monitor`. Retransmitter telemetry reports the always-enabled input
 state, physical-DMX freshness, learned slot count, wireless counters, locate
-state, and the last applied control generation. Receiver telemetry will also
-expose effective output state, locate state, and a Boolean indicating whether
-any hard gate is active, so stale runtime test state is visible to operators.
+state, battery state, and the last applied control-generation compatibility
+field. Receiver telemetry also exposes effective output state, locate state, and
+whether any hard gate is active, so stale runtime test state is visible to
+operators.
 
-Retransmitter input enable/disable and locate use dedicated, repeated control
-packets sent through the management transmitter's priority-control path. Input
-disable finishes any in-flight complete wireless burst, stops accepting new
-physical-DMX frames, and prevents stale-universe reuse. Re-enable requires a
-fresh complete physical-DMX frame. Locate is intentionally disruptive, matching
-receiver locate semantics: it may interrupt DMX input and wireless scheduling,
-and is only appropriate with the device disconnected from fixtures. An optional
-future MAX3485 receiver-enable GPIO is supported as a compile-time hardware
-capability; current hardware may report that capability as unavailable.
+Retransmitter locate uses a dedicated repeated control packet through the
+management transmitter's priority-control path. Locate is intentionally
+disruptive: it pauses DMX input and wireless scheduling while GPIO2 pulses the
+locate indicator, then resumes reception. The attempted GPIO2 DMX input-gating
+experiment was reverted because it disabled the previously functional locate
+output; production firmware does not remotely enable or disable retransmitter
+DMX input.
 
 The management dashboard shows retransmitters in a separate panel only after one
 is discovered, with persistent aliases, independent freshness, and a carousel
@@ -1376,6 +1376,14 @@ validation passed 25/27 cases; the two reported failures were Mega source-result
 capture/rate-reporting issues, while retransmission integrity passed. The
 production retransmitter and diagnostic receiver were restored/validated as
 required and the result was committed as `e716a05`.
+
+After that historical validation, the production retransmitter was reflashed with
+the restored GPIO2 locate design and locate operation was verified. A 30-second
+post-reflash smoke test captured 356 valid diagnostic normal-DMX records, source
+sequences 12 through 370, input frames `0 -> 253`, wireless frames `0 -> 252`,
+and zero wireless send failures. The verified live mapping was `/dev/ttyUSB0`
+management transmitter, `/dev/ttyUSB1` diagnostic receiver at 460800 baud, and
+`/dev/ttyUSB2` Mega source.
 
 ### Feature 11: Host Status and Management Interface
 

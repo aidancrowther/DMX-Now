@@ -63,7 +63,7 @@ wireless-dmx run --bridge-mode --config configs/default.conf
 
 The interactive management dashboard is usually the preferred operator
 interface. It owns one in-process daemon and exposes receiver and retransmitter
-telemetry, persistent names, fail-safe settings, output/input control, locate,
+telemetry, persistent names, fail-safe settings, receiver output control, locate,
 channel gates, manual/priority
 operations, and status panels:
 
@@ -83,15 +83,16 @@ the fallback until a retransmitter observation arrives. Observed values are neve
 submitted to the pacer.
 
 Receiver and retransmitter records are kept in separate caches. Retransmitters are
-discovered from response opcode `0x8B` and show freshness, input state, physical
-DMX source age, learned slot count, wireless counters, locate state, and control
-generation. Only actively reporting retransmitters populate this cache and
-dashboard; inactive entries are removed rather than retained as stale inventory.
-Battery is intentionally shown as `UNKNOWN` until retransmitter power sensing is
-validated. Multiple retransmitters are presented through a carousel when needed.
-Aliases are persisted under `[receiver_names]` while stable hardware IDs remain
-visible. Input control and locate requests use the priority management path and
-are confirmed by later telemetry, not enqueue success alone.
+discovered from response opcode `0x8B` and show freshness, always-enabled DMX
+input state, physical-DMX source age, learned slot count, wireless counters,
+locate state, and battery state. Only actively reporting retransmitters populate
+this cache and dashboard; inactive entries are removed rather than retained as
+stale inventory. Battery reports `UNKNOWN` when monitoring is not compiled in,
+or `OK`/`LOW` when the optional comparator support is enabled. Aliases are
+persisted under `[receiver_names]` while stable hardware IDs remain visible.
+Retransmitter locate requests use the priority management path and are confirmed
+by later telemetry, not enqueue success alone. Retransmitter input
+enable/disable is not part of the production hardware contract.
 
 ### Linux foreground launch
 

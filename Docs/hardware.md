@@ -47,25 +47,3 @@ distinguish the intended physical retransmitter from another normal-DMX source
 within radio range.
 The diagnostic image is a test role and must be replaced with the production
 receiver image before normal fixture output is used.
-
-## Standalone retransmitter pin allocation
-
-The physical-DMX retransmitter uses a different GPIO role from the receiver:
-
-```text
-GPIO3 / UART0 RX <- receive-only physical-DMX transceiver RO
-GPIO2            -> 2N2222 -> receive transceiver /RE
-GPIO1 / UART0 TX <- optional battery comparator output
-```
-
-The retransmitter passes no TX pin to `DMXUART`, selecting ESP8266
-`SERIAL_RX_ONLY`; it must not call `Serial.begin()` or write text to UART0.
-GPIO2 is active-low at the firmware logical-enable interface for the installed
-transistor circuit: LOW leaves the transistor off and enables `/RE` through its
-10 kΩ pull-up, while HIGH disables the receive transceiver. GPIO1 battery
-monitoring is compile-time optional and reports `UNKNOWN` when disabled.
-
-GPIO2 is reserved for receiver `/RE` control and is not used for retransmitter
-locate indication. With the default hardware configuration, retransmitter locate
-requests are safely ignored rather than interrupting DMX input without a physical
-locator output.
